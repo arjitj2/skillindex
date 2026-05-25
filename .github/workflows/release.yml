@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS Universal DMG
+    runs-on: macos-15
+
+    env:
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+      SKILL_INDEX_BUILD_FLAVOR: standard
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20.19.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run ESLint
+        run: pnpm lint
+
+      - name: Run TypeScript typecheck
+        run: pnpm typecheck
+
+      - name: Run Vitest
+        run: pnpm test -- --maxWorkers=4
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Import Developer ID certificate
+        env:
+          MAC_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          echo "$MAC_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "$HOME/Library/Keychains/login.keychain-db"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Package signed and notarized macOS app
+        run: pnpm exec electron-builder --mac --universal --config electron-builder.yml --publish=never
+
+      - name: Verify macOS signing and notarization
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(find release/mac -type d -name 'Skill Index.app' -print -quit)"
+          DMG_PATH="$(find release/mac -name 'Skill-Index-*.dmg' -type f | head -n 1)"
+
+          test -n "$APP_PATH"
+          test -n "$DMG_PATH"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          lipo -archs "$APP_PATH/Contents/MacOS/Skill Index" | grep -q 'x86_64'
+          lipo -archs "$APP_PATH/Contents/MacOS/Skill Index" | grep -q 'arm64'
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+          spctl --assess --type open --verbose=4 "$DMG_PATH"
+
+      - name: Smoke launch packaged app
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(find release/mac -type d -name 'Skill Index.app' -print -quit)"
+          DATA_DIR="$RUNNER_TEMP/skillindex-smoke-data"
+          LOG_FILE="$RUNNER_TEMP/skillindex-smoke.log"
+
+          SKILL_INDEX_DATA_DIR="$DATA_DIR" \
+          SKILL_INDEX_DISABLE_AUTO_UPDATE=1 \
+          "$APP_PATH/Contents/MacOS/Skill Index" > "$LOG_FILE" 2>&1 &
+          APP_PID=$!
+
+          sleep 10
+
+          if ! kill -0 "$APP_PID" 2>/dev/null; then
+            cat "$LOG_FILE"
+            exit 1
+          fi
+
+          kill "$APP_PID"
+          wait "$APP_PID" || true
+          test -d "$DATA_DIR"
+
+      - name: Publish GitHub release assets
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+
+          DMG_ASSET="$(find release/mac -type f -name 'Skill-Index-*.dmg' -print -quit)"
+          ZIP_ASSET="$(find release/mac -type f -name 'Skill-Index-*.zip' -print -quit)"
+          ZIP_BLOCKMAP="$(find release/mac -type f -name 'Skill-Index-*.zip.blockmap' -print -quit)"
+          UPDATE_METADATA="release/mac/latest-mac.yml"
+
+          test -n "$DMG_ASSET"
+          test -n "$ZIP_ASSET"
+          test -n "$ZIP_BLOCKMAP"
+          test -f "$UPDATE_METADATA"
+
+          ASSETS=("$DMG_ASSET" "$ZIP_ASSET" "$ZIP_BLOCKMAP" "$UPDATE_METADATA")
+          while IFS= read -r blockmap; do
+            ASSETS+=("$blockmap")
+          done < <(find release/mac -type f -name 'Skill-Index-*.dmg.blockmap')
+
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Skill Index $GITHUB_REF_NAME" \
+            --generate-notes \
+            "${ASSETS[@]}"

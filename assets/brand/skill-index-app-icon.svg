@@ -1,0 +1,32 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Skill Index app icon">
+  <defs>
+    <linearGradient id="skill-index-icon-bg" x1="172" y1="118" x2="876" y2="916" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9EF"/>
+      <stop offset="0.62" stop-color="#F7ECDB"/>
+      <stop offset="1" stop-color="#E8D8C2"/>
+    </linearGradient>
+    <filter id="skill-index-icon-shadow" x="-32" y="-20" width="1088" height="1112" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="28" stdDeviation="28" flood-color="#7B6B57" flood-opacity="0.25"/>
+    </filter>
+    <filter id="skill-index-mark-shadow" x="173" y="253" width="688" height="486" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="5" flood-color="#7B6B57" flood-opacity="0.23"/>
+    </filter>
+  </defs>
+  <g filter="url(#skill-index-icon-shadow)">
+    <rect x="72" y="72" width="880" height="880" rx="188" fill="url(#skill-index-icon-bg)"/>
+    <rect x="84" y="84" width="856" height="856" rx="176" stroke="#FFFFFF" stroke-opacity="0.38" stroke-width="12"/>
+    <rect x="76" y="76" width="872" height="872" rx="184" stroke="#BEAA8F" stroke-opacity="0.18" stroke-width="8"/>
+  </g>
+  <g filter="url(#skill-index-mark-shadow)">
+    <g transform="translate(185 276) scale(2.72)" color="#20211D">
+      <path d="M55 42H187" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M126 42V122" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M55 90H108C120 90 126 84 126 72" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M55 138H108C120 138 126 132 126 120" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="38" cy="42" r="11" fill="currentColor"/>
+      <circle cx="38" cy="90" r="11" fill="currentColor"/>
+      <circle cx="38" cy="138" r="11" fill="currentColor"/>
+      <circle cx="204" cy="42" r="11" fill="currentColor"/>
+    </g>
+  </g>
+</svg>
