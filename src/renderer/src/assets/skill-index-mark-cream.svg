@@ -1,0 +1,12 @@
+<svg width="240" height="180" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Skill Index mark">
+  <g color="#F7ECDB">
+    <path d="M55 42H187" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M126 42V122" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M55 90H108C120 90 126 84 126 72" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M55 138H108C120 138 126 132 126 120" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="38" cy="42" r="11" fill="currentColor"/>
+    <circle cx="38" cy="90" r="11" fill="currentColor"/>
+    <circle cx="38" cy="138" r="11" fill="currentColor"/>
+    <circle cx="204" cy="42" r="11" fill="currentColor"/>
+  </g>
+</svg>

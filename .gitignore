@@ -1,0 +1,15 @@
+node_modules
+out
+dist
+coverage
+release/
+.DS_Store
+.claude/
+.playwright-cli/
+output/
+.codex/
+.factory/
+.superpowers/
+.impeccable.md
+.skillindex/
+docs/local/

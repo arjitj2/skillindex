@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="580" height="360" viewBox="0 0 580 360">
+  <rect width="580" height="360" fill="#f7f5ef"/>
+  <path
+    id="dmg-drag-arrow-outline"
+    d="M246 199 L302 199 L302 191 L336 208 L302 225 L302 217 L246 217 Z"
+    fill="none"
+    stroke="#686660"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-dasharray="6 5"
+  />
+</svg>

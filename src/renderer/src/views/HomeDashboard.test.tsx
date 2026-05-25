@@ -1,0 +1,281 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { ComponentProps } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot } from '@shared/contracts';
+
+import { getHomeSummary } from '../inventory-view-model';
+import { representativeInventorySnapshot } from '../representative-preview-data';
+import { HomeDashboard } from './HomeDashboard';
+
+const safeRepairRequest: ResolveIssueRequest = {
+  entity: 'skill',
+  issue: 'identical-copies',
+  skillName: 'identical-drift-skill',
+};
+
+describe('HomeDashboard', () => {
+  it('uses MCP connectivity loading copy for the global rescan action', () => {
+    renderDashboard({ isRescanning: true });
+
+    expect(screen.getByRole('button', { name: 'Testing MCP connectivity…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rescanning…' })).not.toBeInTheDocument();
+  });
+
+  it('renders the Home header without a home directory subtitle', () => {
+    renderDashboard();
+
+    const heading = screen.getByRole('heading', { name: /^Home$/i, level: 2 });
+    expect(heading.parentElement).toHaveTextContent(/^Home$/);
+  });
+
+  it('renders MCP attention rows without a subtitle under the title', () => {
+    renderDashboard();
+
+    const brokenMcpRow = screen.getByRole('button', { name: /broken-mcp/i });
+    expect(brokenMcpRow.querySelector('p')).toBeNull();
+    expect(brokenMcpRow).toHaveTextContent('Definition Mismatch');
+    expect(brokenMcpRow).toHaveTextContent('Invalid Definition');
+  });
+
+  it('renders the healthy repair state and keeps errors visible', () => {
+    renderDashboard({
+      errorMessage: 'Rescan failed',
+      inventorySnapshot: createNoAttentionSnapshot(),
+    });
+
+    expect(screen.getByText('Everything looks good')).toBeInTheDocument();
+    expect(screen.getByText('Rescan failed')).toBeInTheDocument();
+  });
+
+  it('renders clean attention table states when skills and MCPs are healthy', () => {
+    const inventorySnapshot = createNoAttentionSnapshot();
+    inventorySnapshot.scannedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    inventorySnapshot.counts = {
+      ...inventorySnapshot.counts,
+      totalSkills: 53,
+      healthySkills: 53,
+      driftedSkills: 0,
+      dismissedDriftSkills: 0,
+    };
+    inventorySnapshot.mcpCounts = {
+      totalMcps: 5,
+      healthyMcps: 5,
+      attentionMcps: 0,
+      dismissedAttentionMcps: 0,
+    };
+
+    renderDashboard({
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+    });
+
+    expect(screen.getByText('All 53 skills are in their expected state')).toBeInTheDocument();
+    expect(screen.getByText('Canonical sources present, symlinks resolved, no version drift. Last checked 2m ago.')).toBeInTheDocument();
+    expect(screen.getByText('All 5 MCP servers are healthy')).toBeInTheDocument();
+    expect(screen.getByText('Configs match across all agents, versions aligned, no args drift. Last checked 2m ago.')).toBeInTheDocument();
+  });
+
+  it('renders the no-safe-fixes state and routes users to skills', () => {
+    const onNavigateToSkills = vi.fn();
+    renderDashboard({
+      autoResolvableRequests: [],
+      errorMessage: 'Repair failed',
+      onNavigateToSkills,
+    });
+
+    expect(screen.getByText(/No safe auto-fixes available/i)).toBeInTheDocument();
+    expect(screen.getByText('Repair failed')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Skills tab$/i }));
+    expect(onNavigateToSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it('expands, collapses, and applies safe repair requests accessibly', () => {
+    const onAutoResolve = vi.fn();
+    renderDashboard({
+      autoResolvableRequests: [safeRepairRequest],
+      onAutoResolve,
+    });
+
+    const toggle = screen.getByRole('button', { name: /Review 1 safe repair/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Review planned fixes')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Review planned fixes')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 repair/i }));
+    expect(onAutoResolve).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Review planned fixes')).not.toBeInTheDocument();
+  });
+
+  it('describes mixed skill and MCP safe repairs as items', () => {
+    renderDashboard({
+      autoResolvableRequests: [
+        safeRepairRequest,
+        {
+          entity: 'mcp',
+          issue: 'missing-from-agents',
+          mcpName: 'missing-from-agents-mcp',
+        },
+      ],
+    });
+
+    const toggle = screen.getByRole('button', { name: /Review 2 safe repairs for 2 items/i });
+    fireEvent.click(toggle);
+
+    expect(screen.getAllByText('Missing From Agents').length).toBeGreaterThan(0);
+    expect(screen.getByText('Add to missing agents')).toBeInTheDocument();
+    expect(screen.getByText(/2 repairs · 2 items affected/i)).toBeInTheDocument();
+  });
+
+  it('shows busy auto-resolve controls as disabled', () => {
+    const { rerender } = renderDashboard({
+      autoResolvableRequests: [safeRepairRequest],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Review 1 safe repair/i }));
+
+    rerenderDashboard(rerender, {
+      autoResolvableRequests: [safeRepairRequest],
+      isAutoResolving: true,
+    });
+
+    expect(screen.getByRole('button', { name: /^Applying…$/i })).toBeDisabled();
+  });
+
+  it('uses the skill display name in the attention list', () => {
+    const inventorySnapshot = structuredClone(representativeInventorySnapshot);
+    const targetSkill = inventorySnapshot.skills.find((skill) => skill.name === 'diverged-drift-skill');
+    expect(targetSkill).toBeDefined();
+    targetSkill!.displayName = 'PowerPoint';
+
+    renderDashboard({
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+    });
+
+    expect(screen.getByRole('button', { name: /PowerPoint/i })).toBeInTheDocument();
+  });
+
+  it('shows plugin indicators on Home attention rows for skills and MCPs', () => {
+    const inventorySnapshot = structuredClone(representativeInventorySnapshot);
+    const sourceMcp = inventorySnapshot.mcps?.find((mcp) => mcp.name === 'missing-from-agents-mcp');
+    if (!sourceMcp) {
+      throw new Error('Missing representative MCP fixture: missing-from-agents-mcp');
+    }
+
+    const pluginMcp: McpRecord = {
+      ...structuredClone(sourceMcp),
+      name: 'signal-tools:signalMap',
+      locations: [
+        {
+          agentId: 'plugin:sandbox:codex:signal-tools@sandbox-curated:2.0.0',
+          agentLabel: 'Codex Plugin signal-tools',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.codex/plugins/cache/sandbox-curated/signal-tools/2.0.0/.mcp.json',
+          command: 'node',
+          args: ['signal-map.js'],
+          provenance: {
+            kind: 'plugin',
+            plugin: {
+              host: 'codex',
+              pluginId: 'signal-tools@sandbox-curated',
+              version: '2.0.0',
+            },
+            sourcePath: '~/.skillindex/sandbox/.codex/plugins/cache/sandbox-curated/signal-tools/2.0.0/.mcp.json',
+            discoveredAt: '2026-05-15T12:00:00.000Z',
+          },
+          mutability: 'read-only-managed',
+        },
+      ],
+    };
+    inventorySnapshot.mcps = [pluginMcp];
+    delete inventorySnapshot.homeSummary;
+
+    renderDashboard({
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+    });
+
+    const pluginSkillRow = screen.getByRole('button', { name: /mixed-plugin-skill/i });
+    expect(pluginSkillRow).toHaveTextContent('mixed-plugin-skill');
+    expect(pluginSkillRow).toHaveAccessibleName(/This skill was installed via one or more plugins/i);
+
+    const pluginMcpRow = screen.getByRole('button', { name: /signalMap/i });
+    expect(pluginMcpRow).not.toHaveTextContent('signal-tools:');
+    expect(pluginMcpRow).toHaveAccessibleName(/This skill was installed via one or more plugins/i);
+  });
+});
+
+function renderDashboard(overrides: Partial<ComponentProps<typeof HomeDashboard>> = {}) {
+  const props: ComponentProps<typeof HomeDashboard> = {
+    autoResolvableRequests: [],
+    errorMessage: null,
+    homeSummary: getHomeSummary(overrides.inventorySnapshot ?? representativeInventorySnapshot),
+    inventorySnapshot: representativeInventorySnapshot,
+    isAutoResolving: false,
+    isRescanning: false,
+    onAutoResolve: vi.fn(),
+    onNavigateToSkills: vi.fn(),
+    onRescan: vi.fn(() => Promise.resolve()),
+    onSelectMcp: vi.fn(),
+    onSelectSkill: vi.fn(),
+    ...overrides,
+  };
+
+  return render(<HomeDashboard {...props} />);
+}
+
+function rerenderDashboard(
+  rerender: ReturnType<typeof render>['rerender'],
+  overrides: Partial<ComponentProps<typeof HomeDashboard>>,
+) {
+  const props: ComponentProps<typeof HomeDashboard> = {
+    autoResolvableRequests: [],
+    errorMessage: null,
+    homeSummary: getHomeSummary(overrides.inventorySnapshot ?? representativeInventorySnapshot),
+    inventorySnapshot: representativeInventorySnapshot,
+    isAutoResolving: false,
+    isRescanning: false,
+    onAutoResolve: vi.fn(),
+    onNavigateToSkills: vi.fn(),
+    onRescan: vi.fn(() => Promise.resolve()),
+    onSelectMcp: vi.fn(),
+    onSelectSkill: vi.fn(),
+    ...overrides,
+  };
+
+  rerender(<HomeDashboard {...props} />);
+}
+
+function createNoAttentionSnapshot(): SkillInventorySnapshot {
+  const snapshot = structuredClone(representativeInventorySnapshot);
+  snapshot.skills = snapshot.skills.map((skill) => ({
+    ...skill,
+    driftPresentation: 'none',
+    isDrifted: false,
+  }));
+  snapshot.mcps = [];
+  snapshot.counts = {
+    ...snapshot.counts,
+    driftedSkills: 0,
+    dismissedDriftSkills: 0,
+    healthySkills: snapshot.counts.totalSkills,
+  };
+  snapshot.mcpCounts = {
+    totalMcps: 0,
+    healthyMcps: 0,
+    attentionMcps: 0,
+    dismissedAttentionMcps: 0,
+  };
+  delete snapshot.homeSummary;
+  snapshot.homeSummary = getHomeSummary(snapshot);
+
+  return snapshot;
+}

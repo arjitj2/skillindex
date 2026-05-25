@@ -1,0 +1,15 @@
+appId: dev.skillindex.alpha
+productName: Skill Index Dev
+directories:
+  output: release/dev
+files:
+  - out/**
+  - package.json
+mac:
+  icon: assets/brand/skill-index-app-icon.icns
+  target:
+    - zip
+  category: public.app-category.developer-tools
+  identity: null
+asar: true
+npmRebuild: false

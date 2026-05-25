@@ -1,0 +1,49 @@
+appId: app.skillindex.desktop
+productName: Skill Index
+directories:
+  output: release/mac
+files:
+  - out/**
+  - package.json
+mac:
+  icon: assets/brand/skill-index-app-icon.icns
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  notarize: true
+  forceCodeSigning: true
+  artifactName: Skill-Index-${version}-${arch}.${ext}
+dmg:
+  sign: true
+  artifactName: Skill-Index-${version}-${arch}.${ext}
+  title: Skill Index ${version}
+  background: assets/dmg-background.png
+  icon: null
+  iconSize: 92
+  iconTextSize: 14
+  window:
+    width: 580
+    height: 360
+  contents:
+    - x: 165
+      y: 195
+      type: file
+      name: Skill Index.app
+    - x: 415
+      y: 195
+      type: link
+      path: /Applications
+publish:
+  provider: github
+  owner: arjitj2
+  repo: skillindex
+  releaseType: release
+asar: true
+npmRebuild: false
