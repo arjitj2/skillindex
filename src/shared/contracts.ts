@@ -761,6 +761,11 @@ export interface AuditActionDiagnostics {
   };
 }
 
+export interface AuditFailureDiagnostic {
+  message: string;
+  trace: string;
+}
+
 export interface AuditOperation {
   id: string;
   kind: AuditOperationKind;
@@ -772,6 +777,7 @@ export interface AuditOperation {
   actor: 'app';
   sourceMode: InventorySourceMode;
   entity?: { type: 'skill' | 'mcp' | 'settings' | 'sandbox'; name?: string };
+  failure?: AuditFailureDiagnostic;
   undoState: AuditUndoState;
   actionCount: number;
   actions: AuditAction[];

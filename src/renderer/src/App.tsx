@@ -150,6 +150,7 @@ export default function App() {
   const [appToast, setAppToast] = useState<{
     description: string;
     id: number;
+    tone: 'error' | 'success';
     title: string;
     undoOperationId?: string;
   } | null>(null);
@@ -207,10 +208,16 @@ export default function App() {
     return nextAuditOperations;
   }, [desktopApi]);
 
-  const showAppToast = useCallback((title: string, description: string, undoOperation?: AuditOperation | null) => {
+  const showAppToast = useCallback((
+    title: string,
+    description: string,
+    undoOperation?: AuditOperation | null,
+    tone: 'error' | 'success' = 'success',
+  ) => {
     appToastIdRef.current += 1;
     setAppToast({
       id: appToastIdRef.current,
+      tone,
       title,
       description,
       undoOperationId: undoOperation?.undoState === 'available' ? undoOperation.id : undefined,
@@ -862,13 +869,15 @@ export default function App() {
         }
       } catch (error) {
         setPendingDriftTransitionSkillName(null);
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        const message = error instanceof Error ? error.message : 'Unknown preload error';
+        setErrorMessage(message);
+        showAppToast('Resolution failed', message, null, 'error');
       } finally {
         await waitForResolvePendingPaintWindow();
         setIsResolvingIssue(false);
       }
     },
-    [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo],
+    [applyInventorySnapshot, desktopApi, showAppToast, showAppToastWithLatestUndo],
   );
 
   const handleCapabilityAction = useCallback(async (request: CapabilityActionRequest) => {
@@ -947,11 +956,13 @@ export default function App() {
         { includeUndo: plannedRepairCount === 1 },
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      const message = error instanceof Error ? error.message : 'Unknown preload error';
+      setErrorMessage(message);
+      showAppToast('Repairs failed', message, null, 'error');
     } finally {
       setIsAutoResolving(false);
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo]);
+  }, [applyInventorySnapshot, desktopApi, showAppToast, showAppToastWithLatestUndo]);
 
   const resetSkillSelection = useCallback(() => {
     setSelectedSkillName(null);
@@ -1536,9 +1547,9 @@ export default function App() {
 
       {appToast ? (
         <div aria-live="polite" className="app-toast-region" role="status">
-          <section className="app-toast app-toast--success" aria-label={appToast.title}>
+          <section className={`app-toast app-toast--${appToast.tone}`} aria-label={appToast.title}>
             <div className="app-toast-icon" aria-hidden="true">
-              <span>✓</span>
+              <span>{appToast.tone === 'error' ? '!' : '✓'}</span>
             </div>
             <div className="app-toast-copy">
               <strong>{appToast.title}</strong>

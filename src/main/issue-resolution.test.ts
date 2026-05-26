@@ -15,6 +15,38 @@ import type { McpConnectivityRecord } from '@shared/contracts';
 import { readSkillIndexConfig, resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 describe('resolveInventoryIssue', () => {
+  it('rejects stale skill and MCP resolution requests instead of silently no-oping', async () => {
+    const paths = await createPaths('skillindex-resolve-stale-request-');
+    const skillDir = path.join(paths.sandboxAgentsSkillsDir, 'healthy-skill');
+    await writeSkillFile(path.join(skillDir, 'SKILL.md'), '# Healthy skill\n');
+
+    await expect(resolveInventoryIssue(
+      {
+        entity: 'skill',
+        issue: 'missing-symlinks',
+        skillName: 'healthy-skill',
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+      },
+    )).rejects.toThrow('Skill "healthy-skill" no longer has Missing Symlinks.');
+
+    await expect(resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-from-agents',
+        mcpName: 'missing-mcp',
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+      },
+    )).rejects.toThrow('MCP "missing-mcp" was not found in the current inventory.');
+  });
+
   it('writes missing MCP definitions into Codex config.toml while preserving existing settings', async () => {
     const paths = await createPaths('skillindex-resolve-codex-mcp-');
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
@@ -1156,7 +1188,7 @@ describe('resolveInventoryIssue', () => {
     await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
     const beforeManual = await readFile(path.join(manualSkillPath, 'SKILL.md'), 'utf8');
 
-    await applyCapabilityAction({
+    const resolvedSnapshot = await applyCapabilityAction({
       entity: 'skill',
       action: 'choose-universal-version',
       skillName: 'tools:foo',
@@ -1167,20 +1199,6 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
     });
-
-    const resolvedSnapshot = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'tools:foo',
-      },
-      {
-        paths,
-        homeDir,
-        includeSandboxSources: false,
-        includeLiveSources: true,
-      },
-    );
 
     expect(await readlink(agentsPath)).toBe(pluginSkillPath);
     expect(await readlink(factoryPath)).toBe(pluginSkillPath);
@@ -1234,7 +1252,7 @@ describe('resolveInventoryIssue', () => {
     await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
     const beforePlugin = await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8');
 
-    await applyCapabilityAction({
+    const resolvedSnapshot = await applyCapabilityAction({
       entity: 'skill',
       action: 'choose-universal-version',
       skillName: 'foo',
@@ -1245,20 +1263,6 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
     });
-
-    const resolvedSnapshot = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'foo',
-      },
-      {
-        paths,
-        homeDir,
-        includeSandboxSources: false,
-        includeLiveSources: true,
-      },
-    );
 
     expect(await readlink(factoryPath)).toBe(manualSkillPath);
     expect(await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
@@ -1713,7 +1717,7 @@ describe('resolveInventoryIssue', () => {
     expect(resolvedSkill?.detailDiagnostics.universalDecision?.acceptedAlternates).toEqual([]);
   });
 
-  it('treats stale skill issue resolution requests as a no-op rescan', async () => {
+  it('rejects stale skill issue resolution requests after the issue is already resolved', async () => {
     const paths = await createPaths('skillindex-resolve-stale-skill-');
     await seedRepresentativeFixtures({ paths });
 
@@ -1731,14 +1735,11 @@ describe('resolveInventoryIssue', () => {
     expect(firstSnapshot.skills.find((skill) => skill.name === request.skillName)?.issueReasons)
       .not.toContain(request.issue);
 
-    const staleSnapshot = await resolveInventoryIssue(request, {
+    await expect(resolveInventoryIssue(request, {
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
-    });
-
-    expect(staleSnapshot.skills.find((skill) => skill.name === request.skillName)?.issueReasons)
-      .not.toContain(request.issue);
+    })).rejects.toThrow('Skill "missing-symlink-skill" no longer has Missing Symlinks.');
   });
 
   it('uses plugin A as Universal while keeping plugin B as a healthy separate version', async () => {
@@ -1790,7 +1791,7 @@ describe('resolveInventoryIssue', () => {
     await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
     const beforeClaude = await readFile(path.join(claudeSkillPath, 'SKILL.md'), 'utf8');
 
-    await applyCapabilityAction({
+    const resolvedSnapshot = await applyCapabilityAction({
       entity: 'skill',
       action: 'choose-universal-version',
       skillName: 'tools:foo',
@@ -1801,20 +1802,6 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
     });
-
-    const resolvedSnapshot = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'tools:foo',
-      },
-      {
-        paths,
-        homeDir,
-        includeSandboxSources: false,
-        includeLiveSources: true,
-      },
-    );
 
     expect(await readlink(agentsPath)).toBe(codexSkillPath);
     expect(await readlink(factoryPath)).toBe(codexSkillPath);

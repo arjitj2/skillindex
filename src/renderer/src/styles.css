@@ -5143,6 +5143,11 @@ body {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), var(--healthy-bg));
 }
 
+.app-toast--error {
+  border-color: #f3d4cf;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), #fbecea);
+}
+
 .app-toast-icon {
   display: inline-flex;
   align-items: center;
@@ -5152,6 +5157,11 @@ body {
   border-radius: 999px;
   background: #dfeeda;
   color: #456b38;
+}
+
+.app-toast--error .app-toast-icon {
+  background: #f8d8d3;
+  color: #ba1a1a;
 }
 
 .app-toast-icon span {
@@ -9821,13 +9831,27 @@ body {
   grid-column: 1 / -1;
 }
 
-.audit-detail-item span {
+.audit-detail-item__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audit-detail-item__label {
+  flex: 0 0 auto;
   color: var(--text-tertiary);
   font-size: 9.5px;
   font-weight: 650;
   letter-spacing: 0.05em;
   line-height: 12px;
   text-transform: uppercase;
+}
+
+.audit-detail-item__action {
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .audit-detail-item code {
@@ -9837,6 +9861,97 @@ body {
   line-height: 15px;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.audit-copy-trace-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel-muted-bg) 80%, white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: none;
+  transition:
+    background-color 160ms cubic-bezier(0.25, 1, 0.5, 1),
+    border-color 160ms cubic-bezier(0.25, 1, 0.5, 1),
+    color 160ms cubic-bezier(0.25, 1, 0.5, 1),
+    transform 120ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.audit-copy-trace-button:hover {
+  border-color: var(--border-strong);
+  background: var(--panel-bg);
+  color: var(--text-primary);
+}
+
+.audit-copy-trace-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--action) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.audit-copy-trace-button:active {
+  transform: translateY(1px);
+}
+
+.audit-copy-trace-button--copied {
+  border-color: color-mix(in srgb, var(--success) 24%, var(--panel-border));
+  color: var(--success);
+}
+
+.audit-copy-trace-button--failed {
+  border-color: color-mix(in srgb, var(--attention) 24%, var(--panel-border));
+  color: var(--attention);
+}
+
+.audit-copy-trace-button__icon {
+  position: relative;
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  color: currentColor;
+}
+
+.audit-copy-trace-button__glyph {
+  position: absolute;
+  inset: 0;
+  width: 13px;
+  height: 13px;
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+  transition:
+    opacity 260ms cubic-bezier(0.25, 1, 0.5, 1),
+    transform 260ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.audit-copy-trace-button__glyph--check {
+  opacity: 0;
+  transform: scale(0.7) rotate(-8deg);
+}
+
+.audit-copy-trace-button--copied .audit-copy-trace-button__glyph--copy {
+  opacity: 0;
+  transform: scale(0.72) rotate(8deg);
+}
+
+.audit-copy-trace-button--copied .audit-copy-trace-button__glyph--check {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .audit-copy-trace-button,
+  .audit-copy-trace-button__glyph {
+    transition: none;
+  }
 }
 
 .audit-undo-panel {

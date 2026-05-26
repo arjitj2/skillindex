@@ -7,6 +7,7 @@ import type {
   AuditActionDiagnostics,
   AuditDismissedDriftSignatureDiagnostic,
   AuditDriftSignatureSummary,
+  AuditFailureDiagnostic,
   AuditActionKind,
   AuditOperation,
   AuditOperationKind,
@@ -62,6 +63,7 @@ interface OperationCompletedRecord {
 interface OperationFailedRecord {
   completedAt: string;
   error: string;
+  trace?: string;
   operationId: string;
   recordKind: 'operation-failed';
 }
@@ -105,6 +107,7 @@ interface UndoBlockedRecord {
 interface UndoFailedRecord {
   completedAt: string;
   error: string;
+  trace?: string;
   operationId: string;
   recordKind: 'undo-failed';
 }
@@ -177,6 +180,7 @@ interface GroupedOperation {
   actionRecords: ActionCompletedRecord[];
   blockedPath?: string;
   completedAt?: string;
+  failure?: AuditFailureDiagnostic;
   failedAt?: string;
   operation: OperationStartedRecord['operation'];
   status: AuditOperation['status'];
@@ -261,12 +265,14 @@ export function createAuditLogService({
     try {
       result = await run();
     } catch (error) {
+      const failure = formatFailureDiagnostic(error);
       await appendChangedActionRecords(operationId, request.undoable, uniqueAffectedPaths, beforeSnapshots).catch(() => undefined);
       await appendRecord({
         recordKind: 'operation-failed',
         operationId,
         completedAt: now().toISOString(),
-        error: formatError(error),
+        error: failure.message,
+        trace: failure.trace,
       });
       throw error;
     }
@@ -282,11 +288,13 @@ export function createAuditLogService({
 
       operation = (await readOperations()).find((candidate) => candidate.id === operationId);
     } catch (error) {
+      const failure = formatFailureDiagnostic(error, 'Audit finalization failed after mutation');
       await appendRecord({
         recordKind: 'operation-failed',
         operationId,
         completedAt: now().toISOString(),
-        error: `Audit finalization failed after mutation: ${formatError(error)}`,
+        error: failure.message,
+        trace: failure.trace,
       }).catch(() => undefined);
       operation = (await readOperations().catch(() => []))
         .find((candidate) => candidate.id === operationId);
@@ -408,11 +416,13 @@ export function createAuditLogService({
         completedAt: now().toISOString(),
       });
     } catch (error) {
+      const failure = formatFailureDiagnostic(error);
       await appendRecord({
         recordKind: 'undo-failed',
         operationId,
         completedAt: now().toISOString(),
-        error: formatError(error),
+        error: failure.message,
+        trace: failure.trace,
       });
       throw error;
     }
@@ -464,6 +474,7 @@ function groupRecords(records: AuditLogRecord[], currentSessionId: string): Audi
       actor: record.operation.actor,
       sourceMode: record.operation.sourceMode,
       entity: record.operation.entity,
+      failure: record.failure,
       undoState,
       actionCount: actions.length,
       actions,
@@ -502,6 +513,10 @@ function groupRawRecords(records: AuditLogRecord[]): Map<string, GroupedOperatio
       case 'operation-failed':
         groupedOperation.failedAt = record.completedAt;
         groupedOperation.completedAt = record.completedAt;
+        groupedOperation.failure = {
+          message: record.error,
+          trace: record.trace ?? record.error,
+        };
         groupedOperation.status = 'failed';
         break;
       case 'undo-action-completed':
@@ -518,6 +533,10 @@ function groupRawRecords(records: AuditLogRecord[]): Map<string, GroupedOperatio
       case 'undo-failed':
         groupedOperation.status = 'undo-failed';
         groupedOperation.completedAt = record.completedAt;
+        groupedOperation.failure = {
+          message: record.error,
+          trace: record.trace ?? record.error,
+        };
         break;
       case 'undo-started':
         break;
@@ -1114,4 +1133,17 @@ function isFileNotFoundError(error: unknown): boolean {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatFailureDiagnostic(error: unknown, prefix?: string): AuditFailureDiagnostic {
+  const message = formatError(error);
+  const prefixedMessage = prefix ? `${prefix}: ${message}` : message;
+  const trace = error instanceof Error && error.stack
+    ? error.stack
+    : prefixedMessage;
+
+  return {
+    message: prefixedMessage,
+    trace: prefix && trace !== prefixedMessage ? `${prefix}: ${trace}` : trace,
+  };
 }
