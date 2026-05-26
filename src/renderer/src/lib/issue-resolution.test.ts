@@ -155,6 +155,53 @@ describe('issue resolution request builder', () => {
     ]);
   });
 
+  it('keeps plugin-owned missing-from-agents MCP repairs out of Home auto-resolve batches', () => {
+    const baseMcp = findRepresentativeMcp('missing-from-agents-mcp');
+    const pluginSourceId = 'plugin:live:codex:mcpmarket-my-toolkit@market:1.0.0';
+    const pluginMcp: McpRecord = {
+      ...structuredClone(baseMcp),
+      name: 'mcpmarket-my-toolkit:mcpmarket-my-toolkit',
+      locations: [
+        {
+          ...baseMcp.locations[0],
+          agentId: pluginSourceId,
+          agentLabel: 'Codex Plugin mcpmarket-my-toolkit',
+          configPath: '/Users/tester/.codex/plugins/cache/mcpmarket-my-toolkit/1.0.0/.mcp.json',
+          provenance: {
+            kind: 'plugin',
+            plugin: {
+              host: 'codex',
+              pluginId: 'mcpmarket-my-toolkit@market',
+              version: '1.0.0',
+            },
+            sourcePath: '/Users/tester/.codex/plugins/cache/mcpmarket-my-toolkit/1.0.0/.mcp.json',
+            discoveredAt: '2026-05-01T00:00:00.000Z',
+          },
+          mutability: 'read-only-managed',
+        },
+      ],
+    };
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      mcps: [pluginMcp],
+      sources: [
+        ...representativeInventorySnapshot.sources,
+        {
+          id: pluginSourceId,
+          label: 'Codex Plugin mcpmarket-my-toolkit',
+          canonical: true,
+          kind: 'plugin',
+          writable: false,
+          scope: 'live',
+          skillsDir: '/Users/tester/.codex/plugins/cache/mcpmarket-my-toolkit/1.0.0/skills',
+          mcpConfigPath: '/Users/tester/.codex/plugins/cache/mcpmarket-my-toolkit/1.0.0/.mcp.json',
+        },
+      ],
+    };
+
+    expect(getAutoResolvableMcpRequests(snapshot)).toEqual([]);
+  });
+
   it('builds a missing-symlink skill request without forcing diverged selection when canonical exists', () => {
     const baseSkill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'diagnostic-rich-skill')!;
     const skill: SkillRecord = {

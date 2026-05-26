@@ -316,9 +316,14 @@ export function getAutoResolvableMcpRequests(
   snapshot: SkillInventorySnapshot,
 ): ResolveIssueRequest[] {
   const requests: ResolveIssueRequest[] = [];
+  const sourceIndex = new Map(snapshot.sources.map((source) => [source.id, source]));
 
   for (const mcp of snapshot.mcps ?? []) {
     if (mcp.presentation !== 'active' || !mcp.issueReasons.includes('missing-from-agents')) {
+      continue;
+    }
+
+    if (hasPluginMcpLocation(mcp, sourceIndex)) {
       continue;
     }
 
@@ -346,4 +351,13 @@ export function getAutoResolvableMcpRequests(
   }
 
   return requests;
+}
+
+function hasPluginMcpLocation(
+  mcp: McpRecord,
+  sourceIndex: Map<string, SkillScanSource>,
+): boolean {
+  return mcp.locations.some((location) =>
+    location.provenance?.kind === 'plugin'
+    || sourceIndex.get(location.agentId)?.kind === 'plugin');
 }
