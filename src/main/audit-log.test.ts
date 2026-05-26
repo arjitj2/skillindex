@@ -255,6 +255,32 @@ describe('audit log service', () => {
     });
   });
 
+  it('exposes failed operation error details for issue reports', async () => {
+    const { paths } = await createTempPaths('audit-failure-trace-');
+    const service = createAuditLogService({ paths });
+    const error = new Error('MCP "stale-mcp" no longer has Missing From Agents.');
+
+    await expect(service.runOperation({
+      kind: 'resolve-mcp-issue',
+      title: 'Resolved Missing From Agents for stale-mcp',
+      summary: 'Resolution failed before mutating configs.',
+      sourceMode: 'sandbox',
+      entity: { type: 'mcp', name: 'stale-mcp' },
+      affectedPaths: [],
+      undoable: false,
+    }, () => Promise.reject(error))).rejects.toThrow('MCP "stale-mcp" no longer has Missing From Agents.');
+
+    const [operation] = await service.readOperations();
+    expect(operation).toMatchObject({
+      status: 'failed',
+      failure: {
+        message: 'MCP "stale-mcp" no longer has Missing From Agents.',
+      },
+    });
+    expect(operation.failure?.trace).toContain('MCP "stale-mcp" no longer has Missing From Agents.');
+    expect(operation.failure?.trace).toContain('audit-log.test.ts');
+  });
+
   it('blocks undo when permissions changed after the audited write', async () => {
     const { paths, root } = await createTempPaths('audit-mode-change-');
     const service = createAuditLogService({ paths });

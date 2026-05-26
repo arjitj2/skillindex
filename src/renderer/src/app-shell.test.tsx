@@ -478,6 +478,50 @@ describe('App shell inventory views', () => {
     });
   });
 
+  it('shows and copies failure traces from failed audit operations', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+      },
+    });
+    readAuditLogMock.mockResolvedValue(createAuditOperations({
+      status: 'failed',
+      undoState: 'not-undoable',
+      actionCount: 0,
+      actions: [],
+      failure: {
+        message: 'MCP "missing-from-agents-mcp" no longer has Missing From Agents.',
+        trace: [
+          'Error: MCP "missing-from-agents-mcp" no longer has Missing From Agents.',
+          '    at resolveMcpIssueIfCurrent (src/main/issue-resolution.ts:1:1)',
+        ].join('\n'),
+      },
+    }));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Audit Log$/i }));
+
+    const auditTable = await screen.findByRole('table', { name: /^Audit events$/i });
+    fireEvent.click(within(auditTable).getByRole('button', { name: /^Expand audit row/i }));
+
+    expect(await within(auditTable).findByText('Failure')).toBeInTheDocument();
+    expect(within(auditTable).getByText('MCP "missing-from-agents-mcp" no longer has Missing From Agents.')).toBeInTheDocument();
+    const failureDetail = within(auditTable).getByText('Failure').closest('.audit-detail-item');
+    expect(failureDetail).not.toBeNull();
+    expect(within(failureDetail as HTMLElement).getByRole('button', { name: /^Copy failure trace$/i })).toBeInTheDocument();
+    expect(document.querySelector('.audit-undo-panel .audit-copy-trace-button')).toBeNull();
+
+    fireEvent.click(within(auditTable).getByRole('button', { name: /^Copy failure trace$/i }));
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(expect.stringContaining('resolveMcpIssueIfCurrent'));
+    });
+    expect(within(failureDetail as HTMLElement).getByRole('button', { name: /^Failure trace copied$/i })).toBeInTheDocument();
+  });
+
   it('paginates compact Audit rows for large audit trails', async () => {
     readAuditLogMock.mockResolvedValue(createAuditOperationsWithActionCount(55));
     render(<App />);

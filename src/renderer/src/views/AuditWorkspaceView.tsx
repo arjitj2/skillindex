@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { Check, Copy } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
 
 import type { AuditAction, AuditOperation, AuditStateSummary } from '@shared/contracts';
 
@@ -171,10 +172,39 @@ function AuditEventTableRow({
   onToggle: () => void;
   row: AuditEventRow;
 }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const action = row.action;
   const title = action?.title ?? row.operation.title;
   const path = action?.path ?? row.operation.summary;
   const eventTime = action?.completedAt ?? row.operation.completedAt ?? row.operation.startedAt;
+  const failure = row.operation.failure;
+  useEffect(() => {
+    if (copyState === 'idle') {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCopyState('idle');
+    }, copyState === 'copied' ? 1800 : 2400);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [copyState]);
+
+  const handleCopyFailureTrace = () => {
+    if (!failure?.trace) {
+      return;
+    }
+    if (!navigator.clipboard?.writeText) {
+      setCopyState('failed');
+      return;
+    }
+
+    void navigator.clipboard.writeText(failure.trace)
+      .then(() => setCopyState('copied'))
+      .catch(() => setCopyState('failed'));
+  };
 
   return (
     <>
@@ -207,6 +237,36 @@ function AuditEventTableRow({
               <DetailItem label="Change" value={action ? formatAuditKind(action.kind) : formatAuditKind(row.operation.kind)} />
               <DetailItem label="Before" value={formatStateSummary(action?.before)} variant="wide" />
               <DetailItem label="After" value={formatStateSummary(action?.after)} variant="wide" />
+              {failure ? (
+                <DetailItem
+                  action={failure.trace ? (
+                    <button
+                      aria-label={copyState === 'copied'
+                        ? 'Failure trace copied'
+                        : copyState === 'failed'
+                          ? 'Copy failure trace failed'
+                          : 'Copy failure trace'}
+                      className={[
+                        'audit-copy-trace-button',
+                        copyState === 'copied' ? 'audit-copy-trace-button--copied' : '',
+                        copyState === 'failed' ? 'audit-copy-trace-button--failed' : '',
+                      ].filter(Boolean).join(' ')}
+                      title="Copy failure trace"
+                      type="button"
+                      onClick={handleCopyFailureTrace}
+                    >
+                      <span className="audit-copy-trace-button__icon" aria-hidden="true">
+                        <Copy className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--copy" strokeWidth={2} />
+                        <Check className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--check" strokeWidth={2.3} />
+                      </span>
+                      <span>{copyState === 'failed' ? 'Copy failed' : 'Copy trace'}</span>
+                    </button>
+                  ) : null}
+                  label="Failure"
+                  value={failure.message}
+                  variant="wide"
+                />
+              ) : null}
               <DetailItem label="Path" value={path} variant="wide" />
             </div>
             <div className="audit-undo-panel">
@@ -234,17 +294,22 @@ function AuditEventTableRow({
 }
 
 function DetailItem({
+  action,
   label,
   value,
   variant = 'normal',
 }: {
+  action?: ReactNode;
   label: string;
   value: string;
   variant?: 'normal' | 'wide';
 }) {
   return (
     <div className={`audit-detail-item audit-detail-item--${variant}`}>
-      <span>{label}</span>
+      <span className="audit-detail-item__label-row">
+        <span className="audit-detail-item__label">{label}</span>
+        {action ? <span className="audit-detail-item__action">{action}</span> : null}
+      </span>
       <code>{value}</code>
     </div>
   );
@@ -283,6 +348,8 @@ function filterAuditRows(rows: AuditEventRow[], query: string): AuditEventRow[] 
     row.action?.path,
     row.action?.targetPath,
     row.action?.kind,
+    row.operation.failure?.message,
+    row.operation.failure?.trace,
   ].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery)));
 }
 

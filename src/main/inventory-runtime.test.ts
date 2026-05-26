@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
-import type { McpConnectivityRecord, SkillInventorySnapshot } from '@shared/contracts';
+import type { AuditOperation, McpConnectivityRecord, SkillInventorySnapshot } from '@shared/contracts';
 import { resolveSkillIndexPaths } from '@shared/skill-index-paths';
 
 interface FakeWatcher {
@@ -902,6 +902,52 @@ describe('inventory runtime', () => {
       kind: 'add-skill',
       sourceMode: 'sandbox',
       title: 'Added sandbox-only-skill',
+    });
+  });
+
+  it('audits failed issue resolutions with a shareable failure trace', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-failed-resolution-audit-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const auditUpdates: AuditOperation[][] = [];
+    runtime.onDidAuditUpdate((operations) => {
+      auditUpdates.push(operations);
+    });
+
+    await writeSkillFile(paths.sandboxAgentsSkillsDir, 'healthy-skill', '# Healthy skill\n', '2026-04-09T00:00:00.000Z');
+    await runtime.scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    await expect(runtime.resolveIssue({
+      entity: 'skill',
+      issue: 'missing-symlinks',
+      skillName: 'healthy-skill',
+    })).rejects.toThrow('Skill "healthy-skill" no longer has Missing Symlinks.');
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation).toMatchObject({
+      kind: 'resolve-skill-issue',
+      status: 'failed',
+      entity: { type: 'skill', name: 'healthy-skill' },
+      failure: {
+        message: 'Skill "healthy-skill" no longer has Missing Symlinks. Refresh inventory and try again if it still needs attention.',
+      },
+    });
+    expect(operation.failure?.trace).toContain('Skill "healthy-skill" no longer has Missing Symlinks.');
+    expect(auditUpdates.at(-1)?.[0]).toMatchObject({
+      kind: 'resolve-skill-issue',
+      status: 'failed',
+      failure: {
+        message: 'Skill "healthy-skill" no longer has Missing Symlinks. Refresh inventory and try again if it still needs attention.',
+      },
     });
   });
 });

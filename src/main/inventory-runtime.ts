@@ -366,13 +366,18 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
 
       const beforeSnapshot = currentSnapshot ?? await scanSkillInventory(lastScanOptions);
       const auditRequest = buildResolveIssueAuditRequest(request, beforeSnapshot, lastScanOptions);
-      const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
-        auditRequest,
-        () => resolveInventoryIssue(request, lastScanOptions),
-      );
-      commitSnapshot(nextSnapshot);
-      await emitAudit(lastScanOptions);
-      return nextSnapshot;
+      try {
+        const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
+          auditRequest,
+          () => resolveInventoryIssue(request, lastScanOptions),
+        );
+        commitSnapshot(nextSnapshot);
+        await emitAudit(lastScanOptions);
+        return nextSnapshot;
+      } catch (error) {
+        await emitAudit(lastScanOptions).catch(() => undefined);
+        throw error;
+      }
     },
     async applyCapabilityAction(request, optionsOverride = {}) {
       if (refreshInFlight) {

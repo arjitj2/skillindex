@@ -73,6 +73,8 @@ export async function resolveInventoryIssue(
     paths,
   });
 
+  assertResolutionIssueIsCurrent(snapshot, request);
+
   if (request.entity === 'skill') {
     await resolveSkillIssueIfCurrent(snapshot, request, {
       ...options,
@@ -82,10 +84,12 @@ export async function resolveInventoryIssue(
     await resolveMcpIssueIfCurrent(snapshot, request);
   }
 
-  return scanSkillInventory({
+  const nextSnapshot = await scanSkillInventory({
     ...options,
     paths,
   });
+  assertResolutionIssueWasResolved(nextSnapshot, request);
+  return nextSnapshot;
 }
 
 export async function addMcpServer(
@@ -130,6 +134,60 @@ export async function addMcpServer(
   });
 }
 
+function assertResolutionIssueIsCurrent(snapshot: SkillInventorySnapshot, request: ResolveIssueRequest): void {
+  if (request.entity === 'skill') {
+    const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
+    if (!skill) {
+      throw new Error(`Skill "${request.skillName}" was not found in the current inventory.`);
+    }
+
+    if (!(skill.issueReasons ?? []).includes(request.issue) && !canResolveSkillIssueWithoutListedReason(skill, request.issue)) {
+      throw new Error(`Skill "${request.skillName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
+    }
+    return;
+  }
+
+  const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+  if (!mcp) {
+    throw new Error(`MCP "${request.mcpName}" was not found in the current inventory.`);
+  }
+
+  if (!mcp.issueReasons.includes(request.issue)) {
+    throw new Error(`MCP "${request.mcpName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
+  }
+}
+
+function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, request: ResolveIssueRequest): void {
+  if (request.entity === 'skill') {
+    const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
+    if (skill && (skill.issueReasons ?? []).includes(request.issue)) {
+      throw new Error(`Skill "${request.skillName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
+    }
+    return;
+  }
+
+  const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+  if (mcp && mcp.issueReasons.includes(request.issue)) {
+    throw new Error(`MCP "${request.mcpName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
+  }
+}
+
+function formatIssueLabel(issue: ResolveIssueRequest['issue']): string {
+  return issue
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function canResolveSkillIssueWithoutListedReason(skill: SkillRecord, issue: ResolveIssueRequest['issue']): boolean {
+  if (issue !== 'missing-symlinks') {
+    return false;
+  }
+
+  return Boolean(skill.detailDiagnostics.universalDecision)
+    && (skill.detailDiagnostics.missingInstallSources?.length ?? 0) > 0;
+}
+
 async function resolveSkillIssueIfCurrent(
   snapshot: SkillInventorySnapshot,
   request: Extract<ResolveIssueRequest, { entity: 'skill' }>,
@@ -137,11 +195,11 @@ async function resolveSkillIssueIfCurrent(
 ): Promise<void> {
   const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
   if (!skill) {
-    return;
+    throw new Error(`Skill "${request.skillName}" was not found in the current inventory.`);
   }
 
-  if (!(skill.issueReasons ?? []).includes(request.issue)) {
-    return;
+  if (!(skill.issueReasons ?? []).includes(request.issue) && !canResolveSkillIssueWithoutListedReason(skill, request.issue)) {
+    throw new Error(`Skill "${request.skillName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
   }
 
   assertSkillResolutionScopeAllowed(skill);
@@ -299,11 +357,11 @@ async function resolveMcpIssueIfCurrent(
 ): Promise<void> {
   const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
   if (!mcp) {
-    return;
+    throw new Error(`MCP "${request.mcpName}" was not found in the current inventory.`);
   }
 
   if (!mcp.issueReasons.includes(request.issue)) {
-    return;
+    throw new Error(`MCP "${request.mcpName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
   }
 
   const selectedVariant = pickMcpSelection(mcp.locations, request.selectedVariantPath, {
