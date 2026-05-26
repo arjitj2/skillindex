@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -104,7 +104,9 @@ describe('HomeDashboard', () => {
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Auto-resolve issues with safe resolutions')).toBeInTheDocument();
     expect(screen.getByText('Review planned fixes')).toBeInTheDocument();
+    expect(screen.queryByText(/1 issue across 1 item/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Apply 1 repair/i }));
     expect(onAutoResolve).toHaveBeenCalledTimes(1);
@@ -132,6 +134,99 @@ describe('HomeDashboard', () => {
     expect(screen.getAllByText('Missing From Agents').length).toBeGreaterThan(0);
     expect(screen.getByText('Add to missing agents')).toBeInTheDocument();
     expect(screen.getByText(/2 repairs · 2 items affected/i)).toBeInTheDocument();
+  });
+
+  it('shows how many active issues will still need manual review', () => {
+    const inventorySnapshot = createNoAttentionSnapshot();
+    const safeSkill = structuredClone(representativeInventorySnapshot.skills.find((skill) => skill.name === 'identical-drift-skill')!);
+    safeSkill.driftPresentation = 'active';
+    safeSkill.isDrifted = true;
+    safeSkill.issueReasons = ['identical-copies'];
+    const manualSkill = structuredClone(representativeInventorySnapshot.skills.find((skill) => skill.name === 'diagnostic-rich-skill')!);
+    manualSkill.name = 'manual-choice-skill';
+    manualSkill.driftPresentation = 'active';
+    manualSkill.isDrifted = true;
+    manualSkill.issueReasons = ['diverged-copies', 'invalid-definition'];
+    inventorySnapshot.skills = [safeSkill, manualSkill];
+    inventorySnapshot.counts = {
+      ...inventorySnapshot.counts,
+      totalSkills: 2,
+      healthySkills: 0,
+      driftedSkills: 2,
+    };
+    inventorySnapshot.homeSummary = getHomeSummary(inventorySnapshot);
+
+    renderDashboard({
+      autoResolvableRequests: [safeRepairRequest],
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+    });
+
+    expect(screen.getByText(/2 issues will still need manual review/i)).toBeInTheDocument();
+    expect(screen.getByText(/explicit choices/i)).toBeInTheDocument();
+    expect(screen.getByText(/plugin-managed contents/i)).toBeInTheDocument();
+  });
+
+  it('uses skill and MCP display names in planned safe repairs', () => {
+    const inventorySnapshot = createNoAttentionSnapshot();
+    const pluginSkill = structuredClone(representativeInventorySnapshot.skills.find((skill) => skill.name === 'mixed-plugin-skill')!);
+    pluginSkill.name = 'toolkit:sync-workflow';
+    pluginSkill.displayName = 'toolkit:sync-workflow';
+    const pluginMcp: McpRecord = {
+      name: 'toolkit:syncServer',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-from-agents'],
+      locations: [
+        {
+          agentId: 'sandbox-plugin-pack',
+          agentLabel: 'Sandbox Plugin bundle',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/plugins/.mcp.json',
+          command: 'node',
+          args: ['server.js'],
+          provenance: {
+            kind: 'plugin',
+            plugin: {
+              host: 'claude',
+              pluginId: 'sandbox-plugin-pack',
+              version: '0.1.0',
+            },
+            sourcePath: '~/.skillindex/sandbox/plugins/.mcp.json',
+            discoveredAt: '2026-01-06T00:00:31.000Z',
+          },
+          mutability: 'read-only-managed',
+        },
+      ],
+    };
+    inventorySnapshot.skills = [pluginSkill];
+    inventorySnapshot.mcps = [pluginMcp];
+
+    renderDashboard({
+      autoResolvableRequests: [
+        {
+          entity: 'skill',
+          issue: 'identical-copies',
+          skillName: 'toolkit:sync-workflow',
+        },
+        {
+          entity: 'mcp',
+          issue: 'missing-from-agents',
+          mcpName: 'toolkit:syncServer',
+        },
+      ],
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Review 2 safe repairs/i }));
+    const reviewPanel = document.getElementById('home-auto-repair-review-panel');
+    expect(reviewPanel).not.toBeNull();
+
+    expect(within(reviewPanel!).getByText('sync-workflow')).toBeInTheDocument();
+    expect(within(reviewPanel!).getByText('syncServer')).toBeInTheDocument();
+    expect(within(reviewPanel!).queryByText('toolkit:sync-workflow')).not.toBeInTheDocument();
+    expect(within(reviewPanel!).queryByText('toolkit:syncServer')).not.toBeInTheDocument();
   });
 
   it('shows busy auto-resolve controls as disabled', () => {

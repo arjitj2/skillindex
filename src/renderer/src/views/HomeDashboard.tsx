@@ -10,6 +10,7 @@ import {
   getMcpStatusLabels,
   getSkillStatusLabels,
   getSkillRowDescription,
+  getDisplaySkillIssueReasons,
   formatLastScanLabel,
 } from '../lib/inventory-presentation';
 import {
@@ -37,6 +38,48 @@ const FIX_TYPE_LABELS: Record<string, string> = {
   'missing-from-agents': 'Missing From Agents',
 };
 
+interface PlannedFixRow {
+  key: string;
+  name: string;
+}
+
+function getResolveRequestDisplayName(
+  request: ResolveIssueRequest,
+  inventorySnapshot: SkillInventorySnapshot | null,
+): string {
+  if (request.entity === 'skill') {
+    const skill = inventorySnapshot?.skills.find((entry) => entry.name === request.skillName);
+    return skill ? getSkillDisplayName(skill) : request.skillName;
+  }
+
+  const mcp = inventorySnapshot?.mcps?.find((entry) => entry.name === request.mcpName);
+  return mcp ? getMcpDisplayName(mcp) : request.mcpName;
+}
+
+function getResolveRequestKey(request: ResolveIssueRequest): string {
+  return [
+    request.entity,
+    request.skillName ?? request.mcpName,
+    request.issue,
+    request.selectedVariantPath ?? '',
+  ].join(':');
+}
+
+function getActiveIssueCount(inventorySnapshot: SkillInventorySnapshot | null): number {
+  if (!inventorySnapshot) {
+    return 0;
+  }
+
+  const skillIssueCount = inventorySnapshot.skills
+    .filter((skill) => skill.driftPresentation === 'active')
+    .reduce((count, skill) => count + getDisplaySkillIssueReasons(skill).length, 0);
+  const mcpIssueCount = (inventorySnapshot.mcps ?? [])
+    .filter((mcp) => mcp.presentation === 'active' && mcp.status === 'needs-attention')
+    .reduce((count, mcp) => count + mcp.issueReasons.length, 0);
+
+  return skillIssueCount + mcpIssueCount;
+}
+
 function RepairError({ errorMessage }: { errorMessage: string | null }) {
   if (!errorMessage) {
     return null;
@@ -54,6 +97,7 @@ function RepairSurface({
   autoResolvableRequests,
   errorMessage,
   hasAttentionIssues,
+  inventorySnapshot,
   isAutoResolving,
   onAutoResolve,
   onViewSkills,
@@ -61,6 +105,7 @@ function RepairSurface({
   autoResolvableRequests: ResolveIssueRequest[];
   errorMessage: string | null;
   hasAttentionIssues: boolean;
+  inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving: boolean;
   onAutoResolve: () => void;
   onViewSkills: () => void;
@@ -68,15 +113,19 @@ function RepairSurface({
   const [reviewOpen, setReviewOpen] = useState(false);
   const reviewPanelId = 'home-auto-repair-review-panel';
 
-  const fixesByType = autoResolvableRequests.reduce<Map<string, string[]>>((acc, req) => {
+  const fixesByType = autoResolvableRequests.reduce<Map<string, PlannedFixRow[]>>((acc, req) => {
     const names = acc.get(req.issue) ?? [];
-    names.push(req.skillName ?? req.mcpName ?? '');
+    names.push({
+      key: getResolveRequestKey(req),
+      name: getResolveRequestDisplayName(req, inventorySnapshot),
+    });
     acc.set(req.issue, names);
     return acc;
   }, new Map());
 
   const totalIssues = autoResolvableRequests.length;
   const totalItems = new Set(autoResolvableRequests.map((r) => r.skillName ?? r.mcpName)).size;
+  const manualIssueCount = Math.max(0, getActiveIssueCount(inventorySnapshot) - totalIssues);
 
   if (autoResolvableRequests.length === 0 && !hasAttentionIssues) {
     return (
@@ -121,7 +170,12 @@ function RepairSurface({
       <div className="repair-banner">
         <Wrench aria-hidden className="repair-banner-wrench" />
         <div className="repair-banner-copy">
-          <div className="repair-banner-title">Auto-resolve easy issues</div>
+          <div className="repair-banner-title">Auto-resolve issues with safe resolutions</div>
+          <div className="repair-banner-sub">
+            {manualIssueCount === 0
+              ? '0 issues should need manual review after these safe repairs.'
+              : `${manualIssueCount} ${manualIssueCount === 1 ? 'issue' : 'issues'} will still need manual review. Some issues require explicit choices; plugin-managed contents stay manual.`}
+          </div>
         </div>
         <button
           aria-controls={reviewPanelId}
@@ -148,19 +202,18 @@ function RepairSurface({
         <div className="review-panel review-panel--open" id={reviewPanelId}>
           <div className="review-header">
             <span className="review-header-title">Review planned fixes</span>
-            <span className="review-header-sub">· {totalIssues} {totalIssues === 1 ? 'issue' : 'issues'} across {totalItems} {totalItems === 1 ? 'item' : 'items'}</span>
           </div>
           <div className="review-body">
-            {[...fixesByType.entries()].map(([issueType, skillNames]) => (
+            {[...fixesByType.entries()].map(([issueType, fixRows]) => (
               <div className="issue-bucket" key={issueType}>
                 <div className="issue-bucket-header">
                   <span className="issue-bucket-label">{FIX_TYPE_LABELS[issueType] ?? issueType}</span>
-                  <span className="issue-bucket-count">{skillNames.length} {skillNames.length === 1 ? 'item' : 'items'}</span>
+                  <span className="issue-bucket-count">{fixRows.length} {fixRows.length === 1 ? 'item' : 'items'}</span>
                 </div>
                 <div className="issue-bucket-rows">
-                  {skillNames.map((name) => (
-                    <div className="skill-fix-row" key={name}>
-                      <span className="skill-fix-name">{name}</span>
+                  {fixRows.map((row) => (
+                    <div className="skill-fix-row" key={row.key}>
+                      <span className="skill-fix-name">{row.name}</span>
                       <span className="skill-fix-action">{FIX_ACTION_LABELS[issueType] ?? issueType}</span>
                     </div>
                   ))}
@@ -282,6 +335,7 @@ export function HomeDashboard({
               autoResolvableRequests={autoResolvableRequests}
               errorMessage={errorMessage}
               hasAttentionIssues={skillAttentionRows.length > 0 || mcpAttentionRows.length > 0}
+              inventorySnapshot={inventorySnapshot}
               isAutoResolving={isAutoResolving}
               onAutoResolve={onAutoResolve}
               onViewSkills={onNavigateToSkills}
