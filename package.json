@@ -1,6 +1,6 @@
 {
   "name": "skillindex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop app for auditing local agent skills and making canonical skill directories easier to manage.",
   "author": "Arjit Jaiswal",
   "license": "Apache-2.0",
