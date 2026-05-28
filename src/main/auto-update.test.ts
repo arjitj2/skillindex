@@ -49,7 +49,7 @@ describe('auto-update lifecycle', () => {
     expect(runtime.updater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
-  it('publishes downloading and ready statuses without a native prompt', () => {
+  it('publishes download progress and ready statuses without a native prompt', () => {
     const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
 
     configureAutoUpdates(runtime);
@@ -58,6 +58,23 @@ describe('auto-update lifecycle', () => {
     expect(downloadingStatus.phase).toBe('downloading');
     expect(downloadingStatus.version).toBe('0.2.0');
     expect(downloadingStatus.lastCheckedAt).toEqual(expect.any(String));
+
+    runtime.listeners.get('download-progress')?.({
+      bytesPerSecond: 1_024_000,
+      percent: 23.5714,
+      total: 28_000_000,
+      transferred: 6_600_000,
+    });
+    expect(getAutoUpdateStatus()).toEqual(expect.objectContaining({
+      downloadProgress: {
+        bytesPerSecond: 1_024_000,
+        percent: 23.5714,
+        totalBytes: 28_000_000,
+        transferredBytes: 6_600_000,
+      },
+      phase: 'downloading',
+      version: '0.2.0',
+    }));
 
     runtime.listeners.get('update-downloaded')?.({ version: '0.2.0' });
     const readyStatus = getAutoUpdateStatus();

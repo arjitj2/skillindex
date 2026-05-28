@@ -209,6 +209,12 @@ function getBrowserPreviewUpdateStatus() {
   }
   if (mockUpdate === 'downloading') {
     return {
+      downloadProgress: {
+        bytesPerSecond: 1_024_000,
+        percent: 23.5714,
+        totalBytes: 28_000_000,
+        transferredBytes: 6_600_000,
+      },
       phase: 'downloading' as const,
       version: '0.2.0',
       lastCheckedAt: new Date().toISOString(),
