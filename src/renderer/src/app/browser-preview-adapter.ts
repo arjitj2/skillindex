@@ -73,6 +73,7 @@ const browserPreviewApi: SkillIndexDesktopApi = {
   scanInventory: () => Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot)),
   rescanInventory: () => resolveWithOptionalPreviewHold(cloneInventorySnapshot(browserPreviewSnapshot)),
   testMcpConnectivity: () => resolveWithOptionalPreviewHold(cloneInventorySnapshot(browserPreviewSnapshot)),
+  cancelMcpConnectivityTest: () => Promise.resolve(),
   addSkill: (request: AddSkillRequest) => {
     void request;
     return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));

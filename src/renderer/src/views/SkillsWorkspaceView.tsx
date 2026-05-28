@@ -43,6 +43,7 @@ export function SkillsWorkspaceView({
   isResolvingIssue,
   isRescanning,
   onAddSkill,
+  onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
   onApplyCapabilityAction,
@@ -73,6 +74,7 @@ export function SkillsWorkspaceView({
   isResolvingIssue: boolean;
   isRescanning: boolean;
   onAddSkill: (request: AddSkillRequest) => Promise<void>;
+  onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
   onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
@@ -127,7 +129,7 @@ export function SkillsWorkspaceView({
         <PageTopBar
           actions={(
             <div className="header-action-cluster">
-              <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+              <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
               <ToolbarButton
                 label="Add Skill"
                 variant="strong"

@@ -191,6 +191,7 @@ describe('createSkillIndexDesktopApi', () => {
       if (channel === IPC_CHANNELS.scanInventory) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.rescanInventory) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.testMcpConnectivity) return Promise.resolve(inventorySnapshot);
+      if (channel === IPC_CHANNELS.cancelMcpConnectivityTest) return Promise.resolve(undefined);
       if (channel === IPC_CHANNELS.addSkill) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.addMcpServer) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.resolveIssue) return Promise.resolve(inventorySnapshot);
@@ -246,6 +247,7 @@ describe('createSkillIndexDesktopApi', () => {
     await expect(api.scanInventory()).resolves.toEqual(inventorySnapshot);
     await expect(api.rescanInventory({ verifyMcpConnectivity: false })).resolves.toEqual(inventorySnapshot);
     await expect((api as unknown as { testMcpConnectivity(): Promise<SkillInventorySnapshot> }).testMcpConnectivity()).resolves.toEqual(inventorySnapshot);
+    await expect(api.cancelMcpConnectivityTest()).resolves.toBeUndefined();
     await expect(api.addSkill({
       sourceType: 'url',
       source: 'https://github.com/vercel-labs/agent-skills',
@@ -313,6 +315,7 @@ describe('createSkillIndexDesktopApi', () => {
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.scanInventory);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.rescanInventory, { verifyMcpConnectivity: false });
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.testMcpConnectivity);
+    expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.cancelMcpConnectivityTest);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.addSkill, {
       sourceType: 'url',
       source: 'https://github.com/vercel-labs/agent-skills',

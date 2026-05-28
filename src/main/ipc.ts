@@ -66,6 +66,7 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC_CHANNELS.scanInventory);
   ipcMain.removeHandler(IPC_CHANNELS.rescanInventory);
   ipcMain.removeHandler(IPC_CHANNELS.testMcpConnectivity);
+  ipcMain.removeHandler(IPC_CHANNELS.cancelMcpConnectivityTest);
   ipcMain.removeHandler(IPC_CHANNELS.addSkill);
   ipcMain.removeHandler(IPC_CHANNELS.addMcpServer);
   ipcMain.removeHandler(IPC_CHANNELS.resolveIssue);
@@ -139,6 +140,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.testMcpConnectivity, () =>
     inventoryRuntime.testMcpConnectivity(resolveInventoryScanOptions()),
   );
+  ipcMain.handle(IPC_CHANNELS.cancelMcpConnectivityTest, () => {
+    inventoryRuntime.cancelMcpConnectivityTest();
+  });
   ipcMain.handle(
     IPC_CHANNELS.addSkill,
     (_event, request: AddSkillRequest) =>

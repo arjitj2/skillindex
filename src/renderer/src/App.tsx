@@ -276,6 +276,20 @@ export default function App() {
       });
   }, [applyInventorySnapshot, desktopApi]);
 
+  const cancelMcpConnectivityTest = useCallback(() => {
+    const previousConnectivityError = mcpConnectivityErrorMessageRef.current;
+    mcpConnectivityRunIdRef.current += 1;
+    mcpConnectivityErrorMessageRef.current = null;
+    setIsTestingMcpConnectivity(false);
+    setErrorMessage((currentMessage) =>
+      currentMessage === previousConnectivityError ? null : currentMessage);
+
+    void desktopApi.cancelMcpConnectivityTest()
+      .catch((error) => {
+        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      });
+  }, [desktopApi]);
+
   const triggerRescan = useCallback(async ({
     pendingOperation = null,
     shouldManagePendingOperation = true,
@@ -309,11 +323,13 @@ export default function App() {
       if (showSuccessToast) {
         showAppToast('Inventory refreshed', 'Manual rescan completed successfully.');
       }
+      return true;
     } catch (error) {
       if (showSuccessToast) {
         setAppToast(null);
       }
       setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      return false;
     } finally {
       setIsRescanning(false);
       if (shouldManagePendingOperation) {
@@ -323,8 +339,15 @@ export default function App() {
   }, [applyInventorySnapshot, desktopApi, showAppToast]);
 
   const triggerManualRescan = useCallback(async () => {
-    await triggerRescan({ showSuccessToast: true });
-  }, [triggerRescan]);
+    const didRescan = await triggerRescan({
+      showSuccessToast: true,
+      verifyMcpConnectivity: false,
+    });
+
+    if (didRescan && inventorySourceMode === 'live') {
+      startMcpConnectivityTest();
+    }
+  }, [inventorySourceMode, startMcpConnectivityTest, triggerRescan]);
 
   useEffect(() => {
     if (!appToast) {
@@ -1342,6 +1365,7 @@ export default function App() {
 
   const isInventoryRefreshActive = isRescanning;
   const isRescanActionBusy = isRescanning || isTestingMcpConnectivity;
+  const onCancelMcpConnectivityTest = isTestingMcpConnectivity ? cancelMcpConnectivityTest : undefined;
   if (!hasLoadedStartupState) {
     return <StartupScreen appName={APP_NAME} />;
   }
@@ -1360,6 +1384,7 @@ export default function App() {
           isAutoResolving={isAutoResolving}
           isRescanning={isRescanActionBusy}
           onAutoResolve={() => { void handleAutoResolve(); }}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onNavigateToSkills={navigateToSkills}
           onSelectMcp={openMcpFromHome}
           onRescan={triggerManualRescan}
@@ -1378,6 +1403,7 @@ export default function App() {
           isApplyingCapabilityAction={isApplyingCapabilityAction}
           isRescanning={isRescanActionBusy}
           onAddSkill={handleAddSkill}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
           onApplyCapabilityAction={handleCapabilityAction}
@@ -1415,6 +1441,7 @@ export default function App() {
           mcpInspectorModel={selectedMcpInspectorModel}
           sandboxRoot={shellState?.devTools?.sandboxRoot ?? null}
           onAddMcpServer={handleAddMcpServer}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
@@ -1437,6 +1464,7 @@ export default function App() {
           errorMessage={errorMessage}
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onRescan={triggerManualRescan}
           onSearchQueryChange={setAgentSearchQuery}
           rows={agentRows}
@@ -1451,6 +1479,7 @@ export default function App() {
           errorMessage={errorMessage}
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onRescan={triggerManualRescan}
           onSearchQueryChange={setPluginSearchQuery}
           onSelectMcpAsset={openMcpFromHome}
@@ -1476,6 +1505,7 @@ export default function App() {
           auditOperations={auditOperations}
           isRescanning={isRescanActionBusy}
           isUndoingOperation={isUndoingToastOperation}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onUndoOperation={(operationId) => {
             void handleUndoToastOperation(operationId);
           }}
@@ -1507,6 +1537,7 @@ export default function App() {
           isUpdatingSettings={isUpdatingSettings}
           inventorySnapshot={inventorySnapshot}
           onOpenOnboarding={openOnboardingFromDevelopment}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onRescan={triggerManualRescan}
           pendingInventoryOperation={pendingInventoryOperation}
           preferredCanonicalSourcePathInput={preferredCanonicalSourcePathInput}

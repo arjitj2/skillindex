@@ -167,11 +167,11 @@ describe('inventory view chrome', () => {
     expect(screen.getByRole('button', { name: /healthy-mcp/i }).querySelector('p')).toBeNull();
   });
 
-  it('uses MCP-specific rescan loading copy while connectivity checks run', () => {
+  it('uses rescan loading copy in the MCP workspace', () => {
     renderMcpWorkspaceView({ isRescanning: true });
 
-    expect(screen.getByRole('button', { name: 'Testing MCP connectivity…' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Rescanning…' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rescanning…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Testing MCP connectivity…' })).not.toBeInTheDocument();
   });
 
   it('shows the plugin indicator for MCP rows with mixed plugin and manual locations', () => {
@@ -252,11 +252,11 @@ describe('inventory view chrome', () => {
     expect(pluginSkillRow).toHaveAccessibleName(/This skill was installed via one or more plugins/i);
   });
 
-  it('uses MCP connectivity loading copy in the Skills workspace', () => {
+  it('uses rescan loading copy in the Skills workspace', () => {
     renderSkillsWorkspaceView({ isRescanning: true });
 
-    expect(screen.getByRole('button', { name: 'Testing MCP connectivity…' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Rescanning…' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rescanning…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Testing MCP connectivity…' })).not.toBeInTheDocument();
   });
 
   it('keeps the Plugins list inside the shared split scroll container', () => {

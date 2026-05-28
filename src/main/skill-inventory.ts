@@ -76,6 +76,7 @@ import { buildPluginSkillScanSources, scanPluginInventory } from '@main/plugin-i
 export interface ScanSkillInventoryOptions extends ScanInventoryOptions, ResolveSkillIndexPathOptions {
   paths?: SkillIndexPaths;
   verifyMcpConnectivity?: boolean | McpConnectivityVerifier;
+  mcpConnectivityAbortSignal?: AbortSignal;
   mcpConnectivityTimeoutMs?: number;
   mcpConnectivityConcurrency?: number;
   writeCache?: boolean;
@@ -87,7 +88,14 @@ export interface McpConnectivityProbeTarget {
   definition: McpDefinitionObject;
 }
 
-export type McpConnectivityVerifier = (target: McpConnectivityProbeTarget) => Promise<McpConnectivityRecord>;
+export interface McpConnectivityVerifierContext {
+  signal?: AbortSignal;
+}
+
+export type McpConnectivityVerifier = (
+  target: McpConnectivityProbeTarget,
+  context?: McpConnectivityVerifierContext,
+) => Promise<McpConnectivityRecord>;
 
 interface IndexedSkillLocation extends SkillLocationRecord {
   entrypointContent?: string;
@@ -1019,7 +1027,7 @@ async function verifyMcpProbeTargets(
   options: ScanSkillInventoryOptions,
 ): Promise<void> {
   const verifier = resolveMcpConnectivityVerifier(options);
-  if (!verifier || targets.length === 0) {
+  if (!verifier || targets.length === 0 || options.mcpConnectivityAbortSignal?.aborted) {
     return;
   }
 
@@ -1027,8 +1035,15 @@ async function verifyMcpProbeTargets(
     targets,
     Math.max(1, options.mcpConnectivityConcurrency ?? 3),
     async (target) => {
-      target.location.connectivity = await verifier(target);
+      if (options.mcpConnectivityAbortSignal?.aborted) {
+        return;
+      }
+
+      target.location.connectivity = await verifier(target, {
+        signal: options.mcpConnectivityAbortSignal,
+      });
     },
+    () => !options.mcpConnectivityAbortSignal?.aborted,
   );
 }
 
@@ -1041,7 +1056,7 @@ function resolveMcpConnectivityVerifier(options: ScanSkillInventoryOptions): Mcp
     return null;
   }
 
-  return async (target) => {
+  return async (target, context) => {
     if (target.location.scope === 'sandbox') {
       return {
         status: 'skipped',
@@ -1052,6 +1067,7 @@ function resolveMcpConnectivityVerifier(options: ScanSkillInventoryOptions): Mcp
 
     return verifyMcpConnection(target.location, {
       definition: target.definition,
+      signal: context?.signal,
       timeoutMs: options.mcpConnectivityTimeoutMs,
     });
   };
@@ -1061,12 +1077,13 @@ async function mapWithConcurrency<T>(
   items: T[],
   concurrency: number,
   run: (item: T) => Promise<void>,
+  shouldContinue: () => boolean = () => true,
 ): Promise<void> {
   let nextIndex = 0;
   const workerCount = Math.min(concurrency, items.length);
 
   await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
+    while (shouldContinue() && nextIndex < items.length) {
       const item = items[nextIndex];
       nextIndex += 1;
       if (item !== undefined) {

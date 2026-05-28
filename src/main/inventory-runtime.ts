@@ -66,6 +66,7 @@ export interface InventoryRuntime {
   scanInventory(options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   rescanInventory(options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   testMcpConnectivity(options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
+  cancelMcpConnectivityTest(): void;
   addSkill(request: AddSkillRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   addMcpServer(request: AddMcpServerRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
@@ -99,6 +100,8 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   let refreshInFlight: Promise<SkillInventorySnapshot> | null = null;
   let committedSnapshotRevision = 0;
   let watchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let mcpConnectivityRunId = 0;
+  let activeMcpConnectivityAbortController: AbortController | null = null;
 
   const emit = (snapshot: SkillInventorySnapshot) => {
     for (const subscriber of subscribers) {
@@ -200,25 +203,52 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   const runPassiveMcpConnectivityScan = async (optionsOverride: ScanSkillInventoryOptions = {}): Promise<SkillInventorySnapshot> => {
     const { verifyMcpConnectivity, ...persistentOptionsOverride } = optionsOverride;
     delete persistentOptionsOverride.writeCache;
+    delete persistentOptionsOverride.mcpConnectivityAbortSignal;
+    activeMcpConnectivityAbortController?.abort();
+    const abortController = new AbortController();
+    activeMcpConnectivityAbortController = abortController;
+    const runId = mcpConnectivityRunId + 1;
+    mcpConnectivityRunId = runId;
     const scanOptions: ScanSkillInventoryOptions = {
       ...lastScanOptions,
       ...persistentOptionsOverride,
       verifyMcpConnectivity: verifyMcpConnectivity ?? true,
+      mcpConnectivityAbortSignal: abortController.signal,
       writeCache: false,
     };
     const revisionAtStart = committedSnapshotRevision;
 
-    const snapshot = await scanSkillInventory(scanOptions);
+    try {
+      const snapshot = await scanSkillInventory(scanOptions);
 
-    if (committedSnapshotRevision !== revisionAtStart && currentSnapshot) {
-      await writeSkillInventorySnapshotCache(currentSnapshot, lastScanOptions);
-      return currentSnapshot;
+      if (abortController.signal.aborted || runId !== mcpConnectivityRunId) {
+        return currentSnapshot ?? snapshot;
+      }
+
+      if (committedSnapshotRevision !== revisionAtStart && currentSnapshot) {
+        await writeSkillInventorySnapshotCache(currentSnapshot, lastScanOptions);
+        return currentSnapshot;
+      }
+
+      lastScanOptions = { ...lastScanOptions, ...persistentOptionsOverride };
+      commitSnapshot(snapshot);
+      await writeSkillInventorySnapshotCache(snapshot, lastScanOptions);
+      return snapshot;
+    } finally {
+      if (activeMcpConnectivityAbortController === abortController) {
+        activeMcpConnectivityAbortController = null;
+      }
+    }
+  };
+
+  const cancelMcpConnectivityTest = () => {
+    if (!activeMcpConnectivityAbortController) {
+      return;
     }
 
-    lastScanOptions = { ...lastScanOptions, ...persistentOptionsOverride };
-    commitSnapshot(snapshot);
-    await writeSkillInventorySnapshotCache(snapshot, lastScanOptions);
-    return snapshot;
+    activeMcpConnectivityAbortController.abort();
+    activeMcpConnectivityAbortController = null;
+    mcpConnectivityRunId += 1;
   };
 
   const resolvePersistentRefreshOptions = (optionsOverride?: ScanSkillInventoryOptions): ScanSkillInventoryOptions => {
@@ -368,6 +398,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
     async testMcpConnectivity(optionsOverride = {}) {
       return runPassiveMcpConnectivityScan(optionsOverride);
     },
+    cancelMcpConnectivityTest,
     async addSkill(request, optionsOverride = {}) {
       if (refreshInFlight) {
         await refreshInFlight;
@@ -496,6 +527,8 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       };
     },
     dispose() {
+      cancelMcpConnectivityTest();
+
       if (watchRefreshTimer) {
         clearTimeout(watchRefreshTimer);
         watchRefreshTimer = null;

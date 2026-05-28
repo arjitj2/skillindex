@@ -18,6 +18,7 @@ export function AuditWorkspaceView({
   auditOperations,
   isRescanning,
   isUndoingOperation,
+  onCancelMcpConnectivityTest,
   onUndoOperation,
   onRescan,
   searchInputRef,
@@ -27,6 +28,7 @@ export function AuditWorkspaceView({
   auditOperations: AuditOperation[];
   isRescanning: boolean;
   isUndoingOperation: boolean;
+  onCancelMcpConnectivityTest?: () => void;
   onUndoOperation: (operationId: string) => void;
   onRescan: () => Promise<void>;
   searchInputRef?: RefObject<HTMLInputElement | null>;
@@ -76,7 +78,7 @@ export function AuditWorkspaceView({
     <main className="workspace-view workspace-view--audit">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
         )}
         title="Audit Log"
         search={(

@@ -43,6 +43,7 @@ export function McpWorkspaceView({
   mcpInspectorModel,
   sandboxRoot,
   onAddMcpServer,
+  onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
   onResolveIssue,
@@ -67,6 +68,7 @@ export function McpWorkspaceView({
   mcpInspectorModel: InspectorModel | null;
   sandboxRoot: string | null;
   onAddMcpServer: (request: AddMcpServerRequest) => Promise<void>;
+  onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
@@ -112,7 +114,7 @@ export function McpWorkspaceView({
         <PageTopBar
           actions={(
             <div className="header-action-cluster">
-              <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+              <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
               <ToolbarButton
                 label="Add Server"
                 variant="strong"

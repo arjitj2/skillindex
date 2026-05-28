@@ -11,6 +11,7 @@ export function AgentsWorkspaceView({
   errorMessage,
   inventorySnapshot,
   isRescanning,
+  onCancelMcpConnectivityTest,
   onRescan,
   onSearchQueryChange,
   rows,
@@ -20,6 +21,7 @@ export function AgentsWorkspaceView({
   errorMessage: string | null;
   inventorySnapshot: SkillInventorySnapshot | null;
   isRescanning: boolean;
+  onCancelMcpConnectivityTest?: () => void;
   onRescan: () => Promise<void>;
   onSearchQueryChange: (query: string) => void;
   rows: AgentRecord[];
@@ -66,7 +68,7 @@ export function AgentsWorkspaceView({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
         )}
         search={(
           <HeaderSearch

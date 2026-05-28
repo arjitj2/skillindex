@@ -21,6 +21,7 @@ export function PluginsWorkspaceView({
   errorMessage,
   inventorySnapshot,
   isRescanning,
+  onCancelMcpConnectivityTest,
   onRescan,
   onSearchQueryChange,
   onSelectMcpAsset,
@@ -37,6 +38,7 @@ export function PluginsWorkspaceView({
   errorMessage: string | null;
   inventorySnapshot: SkillInventorySnapshot | null;
   isRescanning: boolean;
+  onCancelMcpConnectivityTest?: () => void;
   onRescan: () => Promise<void>;
   onSearchQueryChange: (query: string) => void;
   onSelectMcpAsset: (mcpName: string) => void;
@@ -61,7 +63,7 @@ export function PluginsWorkspaceView({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
         )}
         search={(
           <HeaderSearch
