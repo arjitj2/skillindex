@@ -29,6 +29,7 @@ export function SettingsWorkspaceView({
   isUpdatingSettings,
   inventorySnapshot,
   onOpenOnboarding,
+  onCancelMcpConnectivityTest,
   onRescan,
   pendingInventoryOperation,
   preferredCanonicalSourcePathInput,
@@ -55,6 +56,7 @@ export function SettingsWorkspaceView({
   isUpdatingSettings: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
   onOpenOnboarding: () => void;
+  onCancelMcpConnectivityTest?: () => void;
   onRescan: () => Promise<void>;
   pendingInventoryOperation: PendingInventoryOperation | null;
   preferredCanonicalSourcePathInput: string;
@@ -72,7 +74,7 @@ export function SettingsWorkspaceView({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
         )}
         title="Settings"
       />

@@ -15,11 +15,11 @@ const safeRepairRequest: ResolveIssueRequest = {
 };
 
 describe('HomeDashboard', () => {
-  it('uses MCP connectivity loading copy for the global rescan action', () => {
+  it('uses rescan loading copy for the global rescan action', () => {
     renderDashboard({ isRescanning: true });
 
-    expect(screen.getByRole('button', { name: 'Testing MCP connectivity…' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Rescanning…' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rescanning…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Testing MCP connectivity…' })).not.toBeInTheDocument();
   });
 
   it('renders the Home header without a home directory subtitle', () => {

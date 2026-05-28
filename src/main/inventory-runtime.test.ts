@@ -702,6 +702,61 @@ describe('inventory runtime', () => {
     });
   }, 10000);
 
+  it('cancels MCP connectivity testing without publishing failed connection results', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-cancel-mcp-connectivity-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const connectivityDeferred = createDeferred<McpConnectivityRecord>();
+    let connectivityProbeStarted = false;
+
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+
+    const updates: SkillInventorySnapshot[] = [];
+    runtime.onDidUpdate((snapshot) => {
+      updates.push(snapshot);
+    });
+
+    await seedRepresentativeFixtures({ paths });
+    const initialSnapshot = await runtime.scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    const connectivityPromise = runtime.testMcpConnectivity({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      mcpConnectivityConcurrency: 1,
+      verifyMcpConnectivity: async () => {
+        connectivityProbeStarted = true;
+        return connectivityDeferred.promise;
+      },
+    });
+
+    await waitFor(() => {
+      expect(connectivityProbeStarted).toBe(true);
+    });
+
+    runtime.cancelMcpConnectivityTest();
+
+    connectivityDeferred.resolve({
+      status: 'failed',
+      checkedAt: '2026-05-28T12:00:00.000Z',
+      error: 'Canceled run should not publish this failure.',
+    });
+
+    const canceledSnapshot = await connectivityPromise;
+
+    expect(canceledSnapshot).toBe(initialSnapshot);
+    expect(updates).toHaveLength(1);
+    expect((updates[0].mcps ?? []).flatMap((mcp) => mcp.issueReasons)).not.toContain('connection-failed');
+  }, 10000);
+
   it('keeps accepted plugin alternates during watcher refresh after creating missing symlinks', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-'));
     const paths = resolveSkillIndexPaths({

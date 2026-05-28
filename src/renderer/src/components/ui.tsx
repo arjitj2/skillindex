@@ -1,5 +1,5 @@
 import type { AgentRecord } from '@shared/contracts';
-import { Check, Plug, Search } from 'lucide-react';
+import { Check, Plug, Search, X } from 'lucide-react';
 import {
   useEffect,
   useId,
@@ -190,30 +190,61 @@ export function PageTopBar({
 }
 
 export function ToolbarButton({
+  cancelLoadingLabel,
   disabled = false,
   icon,
   isLoading = false,
   label,
   loadingLabel,
+  onCancelLoading,
   onClick,
   subtle = false,
   variant = 'default',
 }: {
+  cancelLoadingLabel?: string;
   disabled?: boolean;
   icon?: Extract<NavIconName, 'rescan'>;
   isLoading?: boolean;
   label: string;
   loadingLabel?: string;
+  onCancelLoading?: () => void;
   onClick?: () => void;
   subtle?: boolean;
   variant?: 'default' | 'strong';
 }) {
   const visibleLabel = isLoading && loadingLabel ? loadingLabel : label;
+  const className = `toolbar-button toolbar-button--${variant}${subtle ? ' toolbar-button--subtle' : ''}${isLoading ? ' toolbar-button--loading' : ''}`;
+
+  if (isLoading && onCancelLoading) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label={visibleLabel}
+        className={`${className} toolbar-button--cancelable`}
+        role="group"
+      >
+        {icon ? (
+          <span className="toolbar-button-icon toolbar-button-icon--loading" aria-hidden="true">
+            <NavIcon icon={icon} />
+          </span>
+        ) : null}
+        <span>{variant === 'strong' ? `+ ${visibleLabel}` : visibleLabel}</span>
+        <button
+          aria-label={cancelLoadingLabel ?? `Cancel ${visibleLabel}`}
+          className="toolbar-button-cancel"
+          type="button"
+          onClick={onCancelLoading}
+        >
+          <X aria-hidden="true" />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <button
       aria-busy={isLoading || undefined}
-      className={`toolbar-button toolbar-button--${variant}${subtle ? ' toolbar-button--subtle' : ''}${isLoading ? ' toolbar-button--loading' : ''}`}
+      className={className}
       disabled={disabled || isLoading}
       type="button"
       onClick={onClick}
@@ -230,17 +261,21 @@ export function ToolbarButton({
 
 export function RescanToolbarButton({
   isRescanning,
+  onCancel,
   onRescan,
 }: {
   isRescanning: boolean;
+  onCancel?: () => void;
   onRescan: () => Promise<void>;
 }) {
   return (
     <ToolbarButton
+      cancelLoadingLabel="Cancel MCP connectivity test"
       icon="rescan"
       isLoading={isRescanning}
       label="Rescan"
-      loadingLabel="Testing MCP connectivity…"
+      loadingLabel={onCancel ? 'Testing MCP connectivity…' : 'Rescanning…'}
+      onCancelLoading={onCancel}
       onClick={() => {
         void onRescan();
       }}

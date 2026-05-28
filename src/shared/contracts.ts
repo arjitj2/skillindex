@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
   scanInventory: 'inventory:scan',
   rescanInventory: 'inventory:rescan',
   testMcpConnectivity: 'inventory:test-mcp-connectivity',
+  cancelMcpConnectivityTest: 'inventory:cancel-mcp-connectivity-test',
   addSkill: 'inventory:add-skill',
   addMcpServer: 'inventory:add-mcp-server',
   resolveIssue: 'inventory:resolve-issue',
@@ -811,6 +812,7 @@ export interface SkillIndexDesktopApi {
   scanInventory(): Promise<SkillInventorySnapshot>;
   rescanInventory(request?: RescanInventoryRequest): Promise<SkillInventorySnapshot>;
   testMcpConnectivity(): Promise<SkillInventorySnapshot>;
+  cancelMcpConnectivityTest(): Promise<void>;
   addSkill(request: AddSkillRequest): Promise<SkillInventorySnapshot>;
   addMcpServer(request: AddMcpServerRequest): Promise<SkillInventorySnapshot>;
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
@@ -880,6 +882,9 @@ export function createSkillIndexDesktopApi(invoke: InvokeLike, subscribe: Subscr
     },
     async testMcpConnectivity() {
       return invoke(IPC_CHANNELS.testMcpConnectivity) as Promise<SkillInventorySnapshot>;
+    },
+    async cancelMcpConnectivityTest() {
+      await invoke(IPC_CHANNELS.cancelMcpConnectivityTest);
     },
     async addSkill(request) {
       return invoke(IPC_CHANNELS.addSkill, request) as Promise<SkillInventorySnapshot>;

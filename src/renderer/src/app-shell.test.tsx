@@ -45,6 +45,7 @@ describe('App shell inventory views', () => {
   let scanInventoryMock: Mock<SkillIndexDesktopApi['scanInventory']>;
   let rescanInventoryMock: Mock<SkillIndexDesktopApi['rescanInventory']>;
   let testMcpConnectivityMock: Mock<SkillIndexDesktopApi['testMcpConnectivity']>;
+  let cancelMcpConnectivityTestMock: Mock<SkillIndexDesktopApi['cancelMcpConnectivityTest']>;
   let addSkillMock: Mock<SkillIndexDesktopApi['addSkill']>;
   let addMcpServerMock: Mock<SkillIndexDesktopApi['addMcpServer']>;
   let makeCanonicalMock: Mock<SkillIndexDesktopApi['resolveIssue']>;
@@ -76,6 +77,7 @@ describe('App shell inventory views', () => {
     scanInventoryMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     rescanInventoryMock = vi.fn().mockResolvedValue(createReconciledInventorySnapshot());
     testMcpConnectivityMock = vi.fn().mockResolvedValue(createReconciledInventorySnapshot());
+    cancelMcpConnectivityTestMock = vi.fn().mockResolvedValue(undefined);
     addSkillMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     addMcpServerMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     makeCanonicalMock = vi.fn().mockResolvedValue(createCanonicalizedDivergedInventorySnapshot());
@@ -129,6 +131,7 @@ describe('App shell inventory views', () => {
       scanInventory: scanInventoryMock,
       rescanInventory: rescanInventoryMock,
       testMcpConnectivity: testMcpConnectivityMock,
+      cancelMcpConnectivityTest: cancelMcpConnectivityTestMock,
       addSkill: addSkillMock,
       addMcpServer: addMcpServerMock,
       resolveIssue: makeCanonicalMock,
@@ -888,7 +891,8 @@ describe('App shell inventory views', () => {
 
     expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toBeEnabled();
     expect(within(settingsSourceControl).getByRole('radio', { name: /Live/i })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Testing MCP connectivity/i })).toBeDisabled();
+    expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
 
     connectivityDeferred.resolve(createReconciledInventorySnapshot());
 
@@ -897,6 +901,74 @@ describe('App shell inventory views', () => {
       expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toBeEnabled();
       expect(within(settingsSourceControl).getByRole('radio', { name: /Live/i })).toBeEnabled();
     });
+  });
+
+  it('cancels live MCP connectivity testing without applying the eventual test result', async () => {
+    const rescanDeferred = createDeferred<SkillInventorySnapshot>();
+    const connectivityDeferred = createDeferred<SkillInventorySnapshot>();
+    rescanInventoryMock.mockReturnValueOnce(rescanDeferred.promise);
+    testMcpConnectivityMock.mockReturnValueOnce(connectivityDeferred.promise);
+
+    render(<App />);
+
+    await openSettings();
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Inventory source' })).getByRole('radio', { name: /Live/i }));
+    rescanDeferred.resolve(createInventorySnapshot());
+
+    await waitFor(() => {
+      expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
+    });
+
+    const cancelButton = screen.getByRole('button', { name: /Cancel MCP connectivity test/i });
+    expect(cancelButton).toBeEnabled();
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(cancelMcpConnectivityTestMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: /^Rescan$/i })).toBeEnabled();
+    });
+
+    connectivityDeferred.resolve(createMcpConnectionFailedInventorySnapshot());
+
+    await openMcps();
+
+    expect(screen.queryByText('Connection Failed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /healthy-mcp Healthy/i })).toBeInTheDocument();
+  });
+
+  it('runs manual rescans structurally before starting cancelable MCP connectivity in live mode', async () => {
+    const liveShellState = createShellState({
+      devTools: {
+        ...createShellState().devTools!,
+        inventoryMode: 'live',
+      },
+    });
+    const rescanDeferred = createDeferred<SkillInventorySnapshot>();
+    const connectivityDeferred = createDeferred<SkillInventorySnapshot>();
+    getShellStateMock.mockResolvedValue(liveShellState);
+    rescanInventoryMock.mockReturnValueOnce(rescanDeferred.promise);
+    testMcpConnectivityMock.mockReturnValueOnce(connectivityDeferred.promise);
+
+    render(<App />);
+
+    await screen.findByLabelText(/Home summary metrics/i);
+    fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));
+
+    await waitFor(() => {
+      expect(rescanInventoryMock).toHaveBeenCalledWith({ verifyMcpConnectivity: false });
+    });
+    expect(testMcpConnectivityMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^Rescanning…$/i })).toBeDisabled();
+
+    rescanDeferred.resolve(createInventorySnapshot());
+
+    await waitFor(() => {
+      expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
+    });
+
+    connectivityDeferred.resolve(createReconciledInventorySnapshot());
   });
 
   it('keeps issue actions enabled while MCP connectivity testing runs in the background', async () => {
@@ -913,7 +985,8 @@ describe('App shell inventory views', () => {
 
     await waitFor(() => {
       expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('button', { name: /Testing MCP connectivity/i })).toBeDisabled();
+      expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
     });
 
     await openSkills();
@@ -3012,6 +3085,44 @@ function createReconciledInventorySnapshot(): SkillInventorySnapshot {
       identicalDriftSkills: 2,
       divergedDriftSkills: 1,
       dismissedDriftSkills: 1,
+    },
+  });
+}
+
+function createMcpConnectionFailedInventorySnapshot(): SkillInventorySnapshot {
+  const snapshot = createInventorySnapshot();
+  const mcps = (snapshot.mcps ?? []).map<NonNullable<SkillInventorySnapshot['mcps']>[number]>((mcp) => {
+    if (mcp.name !== 'healthy-mcp') {
+      return mcp;
+    }
+
+    return {
+      ...mcp,
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['connection-failed'],
+      locations: mcp.locations.map((location, index) => index === 0
+        ? {
+            ...location,
+            connectivity: {
+              status: 'failed',
+              checkedAt: '2026-05-28T12:00:00.000Z',
+              error: 'Canceled run should not apply this result.',
+            },
+          }
+        : location),
+    };
+  });
+
+  return withSnapshotDetailDiagnostics({
+    ...snapshot,
+    scannedAt: '2026-04-09T00:00:10.000Z',
+    mcps,
+    mcpCounts: {
+      totalMcps: mcps.length,
+      attentionMcps: mcps.filter((mcp) => mcp.presentation === 'active' && mcp.status === 'needs-attention').length,
+      healthyMcps: mcps.filter((mcp) => mcp.status === 'healthy').length,
+      dismissedAttentionMcps: mcps.filter((mcp) => mcp.presentation === 'dismissed').length,
     },
   });
 }

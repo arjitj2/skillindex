@@ -18,6 +18,7 @@ interface VerifyMcpConnectionOptions {
   checkedAt?: string;
   timeoutMs?: number;
   definition?: McpDefinitionObject;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -37,6 +38,14 @@ export async function verifyMcpConnection(
   options: VerifyMcpConnectionOptions = {},
 ): Promise<McpConnectivityRecord> {
   const checkedAt = options.checkedAt ?? new Date().toISOString();
+  if (options.signal?.aborted) {
+    return {
+      status: 'skipped',
+      checkedAt,
+      error: 'MCP connectivity check canceled.',
+    };
+  }
+
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
   const transport = createTransport(location, options.definition);
@@ -55,13 +64,25 @@ export async function verifyMcpConnection(
   });
 
   try {
-    await client.connect(transport, { timeout: timeoutMs, maxTotalTimeout: timeoutMs });
+    await raceMcpConnectWithAbort(
+      client.connect(transport, { timeout: timeoutMs, maxTotalTimeout: timeoutMs }),
+      options.signal,
+    );
     return {
       status: 'verified',
       checkedAt,
       latencyMs: Date.now() - startedAt,
     };
   } catch (error) {
+    if (isAbortError(error)) {
+      return {
+        status: 'skipped',
+        checkedAt,
+        latencyMs: Date.now() - startedAt,
+        error: 'MCP connectivity check canceled.',
+      };
+    }
+
     return {
       status: 'failed',
       checkedAt,
@@ -71,6 +92,31 @@ export async function verifyMcpConnection(
   } finally {
     await closeClient(client);
   }
+}
+
+async function raceMcpConnectWithAbort(connectPromise: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) {
+    return connectPromise;
+  }
+
+  if (signal.aborted) {
+    throw new DOMException('MCP connectivity check canceled.', 'AbortError');
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      reject(new DOMException('MCP connectivity check canceled.', 'AbortError'));
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    connectPromise.then(resolve, reject).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    });
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function createTransport(location: McpLocationRecord, definition: McpDefinitionObject | undefined): Transport | null {
