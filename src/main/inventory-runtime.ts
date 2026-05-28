@@ -50,6 +50,8 @@ interface WatchSourceEvent {
   filePath?: string;
 }
 
+type InventoryRescanAuditTrigger = 'manual' | 'watch';
+
 type WatchSource = (source: SkillScanSource, onChange: (event: WatchSourceEvent) => void) => ClosableWatcher;
 
 interface CreateInventoryRuntimeOptions {
@@ -128,6 +130,26 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
     return operations;
   };
 
+  const auditFailedInventoryRescan = async (
+    error: unknown,
+    scanOptions: ScanSkillInventoryOptions,
+    trigger: InventoryRescanAuditTrigger,
+  ) => {
+    const isManual = trigger === 'manual';
+    const auditService = getAuditService(scanOptions);
+    await auditService.runOperation({
+      kind: 'inventory-rescan',
+      title: isManual ? 'Inventory rescan failed' : 'Background inventory rescan failed',
+      summary: isManual
+        ? 'Manual inventory rescan failed before the latest snapshot could be saved.'
+        : 'File watcher-triggered inventory rescan failed before the latest snapshot could be saved.',
+      sourceMode: resolveAuditSourceMode(scanOptions),
+      affectedPaths: [],
+      undoable: false,
+    }, () => Promise.reject(error instanceof Error ? error : new Error(String(error)))).catch(() => undefined);
+    await emitAudit(scanOptions).catch(() => undefined);
+  };
+
   const syncWatchers = (sources: SkillScanSource[]) => {
     const nextSourceIds = new Set(sources.map((source) => source.id));
 
@@ -199,10 +221,16 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
     return snapshot;
   };
 
+  const resolvePersistentRefreshOptions = (optionsOverride?: ScanSkillInventoryOptions): ScanSkillInventoryOptions => {
+    const persistentOptionsOverride = { ...(optionsOverride ?? {}) };
+    delete persistentOptionsOverride.verifyMcpConnectivity;
+    return optionsOverride ? { ...lastScanOptions, ...persistentOptionsOverride } : { ...lastScanOptions };
+  };
+
   const refreshInventory = async (optionsOverride?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot> => {
     // Connectivity probing is an explicit one-shot choice; keep source options sticky without making later watcher refreshes inherit probe cost.
-    const { verifyMcpConnectivity, ...persistentOptionsOverride } = optionsOverride ?? {};
-    lastScanOptions = optionsOverride ? { ...lastScanOptions, ...persistentOptionsOverride } : { ...lastScanOptions };
+    const verifyMcpConnectivity = optionsOverride?.verifyMcpConnectivity;
+    lastScanOptions = resolvePersistentRefreshOptions(optionsOverride);
 
     if (refreshInFlight) {
       queuedFullRefresh = true;
@@ -261,7 +289,12 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       return refreshInFlight;
     }
 
+    const auditScanOptions = { ...lastScanOptions };
     refreshInFlight = refreshFromWatchEvents(events)
+      .catch(async (error: unknown) => {
+        await auditFailedInventoryRescan(error, auditScanOptions, 'watch');
+        throw error;
+      })
       .finally(() => {
         refreshInFlight = null;
         drainQueuedRefreshes();
@@ -296,7 +329,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
 
     if (queuedWatchEvents.length > 0) {
       const queuedEvents = queuedWatchEvents.splice(0, queuedWatchEvents.length);
-      void runWatchRefresh(queuedEvents);
+      void runWatchRefresh(queuedEvents).catch(() => undefined);
     }
   };
 
@@ -310,7 +343,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
     watchRefreshTimer = setTimeout(() => {
       watchRefreshTimer = null;
       const queuedEvents = pendingWatchEvents.splice(0, pendingWatchEvents.length);
-      void runWatchRefresh(queuedEvents);
+      void runWatchRefresh(queuedEvents).catch(() => undefined);
     }, watchDebounceMs);
   };
 
@@ -324,7 +357,13 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       return refreshInventory(optionsOverride);
     },
     async rescanInventory(optionsOverride = {}) {
-      return refreshInventory(optionsOverride);
+      const auditScanOptions = resolvePersistentRefreshOptions(optionsOverride);
+      try {
+        return await refreshInventory(optionsOverride);
+      } catch (error) {
+        await auditFailedInventoryRescan(error, auditScanOptions, 'manual');
+        throw error;
+      }
     },
     async testMcpConnectivity(optionsOverride = {}) {
       return runPassiveMcpConnectivityScan(optionsOverride);
