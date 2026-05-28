@@ -595,45 +595,51 @@ async function collectNestedSkillEntryFiles(
   source: SkillScanSource,
   rootDir: string,
   currentDir: string,
-  visitedDirectories: Set<string>,
+  activeDirectories: Set<string>,
 ): Promise<SkillPackageEntry[]> {
   const visitKey = await getDirectoryVisitKey(currentDir);
-  if (visitKey && visitedDirectories.has(visitKey)) {
+  if (visitKey && activeDirectories.has(visitKey)) {
     return [];
   }
   if (visitKey) {
-    visitedDirectories.add(visitKey);
+    activeDirectories.add(visitKey);
   }
 
-  let entries: Dirent[];
   try {
-    entries = await readdir(currentDir, { withFileTypes: true });
-  } catch {
-    return [];
+    let entries: Dirent[];
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const files: SkillPackageEntry[] = [];
+
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (
+        (!entry.isDirectory() && !entry.isSymbolicLink())
+        || shouldIgnoreSkillDiscoveryEntry(source, rootDir, entryPath, entry.name)
+      ) {
+        continue;
+      }
+
+      const skillPackage = await describeExistingSkillPackage(rootDir, entryPath);
+      if (skillPackage) {
+        files.push(skillPackage);
+        continue;
+      }
+
+      if (await isDirectoryLikePath(entryPath)) {
+        files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, activeDirectories)));
+      }
+    }
+
+    return files.sort((left, right) => left.rootPath.localeCompare(right.rootPath));
+  } finally {
+    if (visitKey) {
+      activeDirectories.delete(visitKey);
+    }
   }
-  const files: SkillPackageEntry[] = [];
-
-  for (const entry of entries) {
-    const entryPath = path.join(currentDir, entry.name);
-    if (
-      (!entry.isDirectory() && !entry.isSymbolicLink())
-      || shouldIgnoreSkillDiscoveryEntry(source, rootDir, entryPath, entry.name)
-    ) {
-      continue;
-    }
-
-    const skillPackage = await describeExistingSkillPackage(rootDir, entryPath);
-    if (skillPackage) {
-      files.push(skillPackage);
-      continue;
-    }
-
-    if (await isDirectoryLikePath(entryPath)) {
-      files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, visitedDirectories)));
-    }
-  }
-
-  return files.sort((left, right) => left.rootPath.localeCompare(right.rootPath));
 }
 
 async function readSkillLocation(
@@ -3143,50 +3149,56 @@ async function readPackageFiles(rootPath: string): Promise<SkillPackageFileRecor
 async function walkPackageFiles(
   rootDir: string,
   currentDir: string,
-  visitedDirectories: Set<string>,
+  activeDirectories: Set<string>,
 ): Promise<SkillPackageFileRecord[]> {
   const visitKey = await getDirectoryVisitKey(currentDir);
-  if (visitKey && visitedDirectories.has(visitKey)) {
+  if (visitKey && activeDirectories.has(visitKey)) {
     return [];
   }
   if (visitKey) {
-    visitedDirectories.add(visitKey);
+    activeDirectories.add(visitKey);
   }
 
-  let entries: Dirent[];
   try {
-    entries = await readdir(currentDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const files: SkillPackageFileRecord[] = [];
-
-  for (const entry of entries) {
-    if (shouldIgnorePackageEntry(entry.name, entry.isDirectory())) {
-      continue;
+    let entries: Dirent[];
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return [];
     }
+    const files: SkillPackageFileRecord[] = [];
 
-    const entryPath = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkPackageFiles(rootDir, entryPath, visitedDirectories)));
-      continue;
-    }
-
-    if (entry.isSymbolicLink()) {
-      const stats = await safeStat(entryPath);
-      if (stats?.isDirectory()) {
-        files.push(...(await walkPackageFiles(rootDir, entryPath, visitedDirectories)));
+    for (const entry of entries) {
+      if (shouldIgnorePackageEntry(entry.name, entry.isDirectory())) {
         continue;
+      }
+
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        const stats = await safeStat(entryPath);
+        if (stats?.isDirectory()) {
+          files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+          continue;
+        }
+      }
+
+      const file = await readPackageFile(entryPath, path.relative(rootDir, entryPath));
+      if (file) {
+        files.push(file);
       }
     }
 
-    const file = await readPackageFile(entryPath, path.relative(rootDir, entryPath));
-    if (file) {
-      files.push(file);
+    return files;
+  } finally {
+    if (visitKey) {
+      activeDirectories.delete(visitKey);
     }
   }
-
-  return files;
 }
 
 function shouldIgnorePackageEntry(name: string, isDirectoryEntry: boolean): boolean {

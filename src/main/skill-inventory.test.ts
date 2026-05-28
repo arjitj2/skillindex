@@ -2713,6 +2713,57 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
+  it('keeps repeated support-directory aliases in package files when they are not recursive cycles', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-package-aliases-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const skillDir = path.join(paths.sandboxAgentsSkillsDir, 'support-dir-alias-skill');
+    const sharedSupportDir = path.join(skillDir, 'shared-support');
+
+    await writeSkillFile(
+      paths.sandboxAgentsSkillsDir,
+      'support-dir-alias-skill',
+      [
+        '---',
+        'name: support-dir-alias-skill',
+        'description: Skill with repeated support directory aliases.',
+        '---',
+        '',
+        '# Support dir alias skill',
+        '',
+      ].join('\n'),
+      '2026-04-09T00:00:00.000Z',
+    );
+    await writeNestedSkillFile(
+      path.join(sharedSupportDir, 'guide.md'),
+      '# Shared support guide\n',
+      '2026-04-09T00:00:01.000Z',
+    );
+    await symlink(sharedSupportDir, path.join(skillDir, 'alias-a'));
+    await symlink(sharedSupportDir, path.join(skillDir, 'alias-b'));
+
+    const inventory = await scanSkillInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    expect(
+      inventory.skills
+        .find((skill) => skill.name === 'support-dir-alias-skill')
+        ?.locations.find((location) => location.path === skillDir)
+        ?.packageFiles?.map((file) => file.relativePath),
+    ).toEqual([
+      'alias-a/guide.md',
+      'alias-b/guide.md',
+      'shared-support/guide.md',
+      'SKILL.md',
+    ].sort((left, right) => left.localeCompare(right)));
+  });
+
   it('treats identical zero-byte markdown copies as identical drift with stable hashes', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-scan-'));
     const paths = resolveSkillIndexPaths({
