@@ -691,6 +691,7 @@ export type AuditOperationKind =
   | 'settings-update'
   | 'capability-action'
   | 'dismiss-drift'
+  | 'inventory-rescan'
   | 'seed-representative-fixtures'
   | 'undo';
 

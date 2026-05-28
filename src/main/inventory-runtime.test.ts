@@ -956,6 +956,50 @@ describe('inventory runtime', () => {
       },
     });
   });
+
+  it('audits failed manual rescans with a shareable failure trace', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-failed-rescan-audit-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const auditUpdates: AuditOperation[][] = [];
+    runtime.onDidAuditUpdate((operations) => {
+      auditUpdates.push(operations);
+    });
+
+    await writeSkillFile(paths.sandboxAgentsSkillsDir, 'healthy-skill', '# Healthy skill\n', '2026-04-09T00:00:00.000Z');
+    await runtime.scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    await writeFile(paths.configFile, '{not-json', 'utf8');
+
+    await expect(runtime.rescanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow('Failed to parse Skill Index config');
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation).toMatchObject({
+      kind: 'inventory-rescan',
+      title: 'Inventory rescan failed',
+      status: 'failed',
+      undoState: 'not-undoable',
+    });
+    expect(operation.failure?.message).toContain('Failed to parse Skill Index config');
+    expect(operation.failure?.trace).toContain('Failed to parse Skill Index config');
+    expect(auditUpdates.at(-1)?.[0]).toMatchObject({
+      kind: 'inventory-rescan',
+      status: 'failed',
+    });
+    expect(auditUpdates.at(-1)?.[0]?.failure?.message).toContain('Failed to parse Skill Index config');
+  });
 });
 
 function createFakeWatcher(onChange: (event: { filePath?: string }) => void): FakeWatcher {
