@@ -91,6 +91,20 @@ function comparePluginsForTable(left: PluginRecord, right: PluginRecord): number
     || left.rootPath.localeCompare(right.rootPath);
 }
 
+function getErrorTrace(error: unknown): string | null {
+  if (error instanceof Error) {
+    return error.stack ?? error.message;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const stack = 'stack' in error && typeof error.stack === 'string' ? error.stack : null;
+    const message = 'message' in error && typeof error.message === 'string' ? error.message : null;
+    return stack ?? message;
+  }
+
+  return typeof error === 'string' ? error : null;
+}
+
 function getPluginSelectionKey(plugin: PluginRecord): string {
   return [
     plugin.host,
@@ -174,6 +188,7 @@ export default function App() {
   const [isPreviewingOnboarding, setIsPreviewingOnboarding] = useState(false);
   const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false);
   const [onboardingErrorMessage, setOnboardingErrorMessage] = useState<string | null>(null);
+  const [onboardingErrorTrace, setOnboardingErrorTrace] = useState<string | null>(null);
 
   const applyInventorySnapshot = useCallback(
     (nextInventorySnapshot: SkillInventorySnapshot, preferredSkillName?: string | null) => {
@@ -1294,6 +1309,7 @@ export default function App() {
 
   const chooseOnboardingPreferredSource = useCallback(async () => {
     setOnboardingErrorMessage(null);
+    setOnboardingErrorTrace(null);
     try {
       return await desktopApi.chooseDirectory({
         title: 'Choose a preferred skills source',
@@ -1301,6 +1317,17 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to open the folder picker.';
       setOnboardingErrorMessage(message);
+      setOnboardingErrorTrace(getErrorTrace(error));
+      return null;
+    }
+  }, [desktopApi]);
+
+  const readLatestFailedAuditTrace = useCallback(async () => {
+    try {
+      const latestOperations = await desktopApi.readAuditLog({ limit: 1 });
+      return latestOperations.find((operation) => operation.status === 'failed' && operation.failure?.trace)
+        ?.failure?.trace ?? null;
+    } catch {
       return null;
     }
   }, [desktopApi]);
@@ -1308,19 +1335,26 @@ export default function App() {
   const completeOnboarding = useCallback(async (preferredSourcePath: string | null) => {
     setIsCompletingOnboarding(true);
     setOnboardingErrorMessage(null);
+    setOnboardingErrorTrace(null);
     setErrorMessage(null);
+    let failureTrace: string | null = null;
 
     try {
       if (shellState?.devTools && devApi) {
         await devApi.setInventoryMode(shellState.devTools.inventoryMode);
       }
 
-      const nextSettingsState = await desktopApi.completeOnboarding(
-        preferredSourcePath
-          ? { preferredCanonicalSourcePath: preferredSourcePath }
-          : {},
-      );
-      const nextInventorySnapshot = await desktopApi.scanInventory();
+      if (preferredSourcePath) {
+        await desktopApi.setPreferredCanonicalSourcePath(preferredSourcePath);
+      }
+      let nextInventorySnapshot: SkillInventorySnapshot;
+      try {
+        nextInventorySnapshot = await desktopApi.rescanInventory();
+      } catch (scanError) {
+        failureTrace = await readLatestFailedAuditTrace() ?? getErrorTrace(scanError);
+        throw scanError;
+      }
+      const nextSettingsState = await desktopApi.completeOnboarding({});
 
       setSettingsState(nextSettingsState);
       setIsPreviewingOnboarding(false);
@@ -1329,14 +1363,16 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to complete onboarding.';
       setOnboardingErrorMessage(message);
+      setOnboardingErrorTrace(failureTrace ?? getErrorTrace(error));
       setErrorMessage(message);
     } finally {
       setIsCompletingOnboarding(false);
     }
-  }, [applyInventorySnapshot, desktopApi, devApi, shellState?.devTools]);
+  }, [applyInventorySnapshot, desktopApi, devApi, readLatestFailedAuditTrace, shellState?.devTools]);
 
   const openOnboardingFromDevelopment = useCallback(() => {
     setOnboardingErrorMessage(null);
+    setOnboardingErrorTrace(null);
     setIsPreviewingOnboarding(true);
   }, []);
 
@@ -1524,6 +1560,7 @@ export default function App() {
       <>
         <OnboardingFlow
           errorMessage={onboardingErrorMessage}
+          errorTrace={onboardingErrorTrace}
           isCompleting={isCompletingOnboarding}
           universalSkillsPath={CANONICAL_USER_SKILLS_DISPLAY_PATH}
           onChoosePreferredSource={chooseOnboardingPreferredSource}
