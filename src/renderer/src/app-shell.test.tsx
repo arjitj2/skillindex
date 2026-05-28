@@ -6,6 +6,7 @@ import {
   type AgentRecord,
   type AppShellState,
   type AuditOperation,
+  type AutoUpdateStatus,
   type SettingsState,
   type SkillInventorySnapshot,
   type SkillRecord,
@@ -66,6 +67,7 @@ describe('App shell inventory views', () => {
   let onUpdateStatusUpdatedMock: Mock<SkillIndexDesktopApi['onUpdateStatusUpdated']>;
   let onAuditUpdatedMock: Mock<SkillIndexDesktopApi['onAuditUpdated']>;
   let inventoryUpdatedListener: ((snapshot: SkillInventorySnapshot) => void) | null;
+  let updateStatusUpdatedListener: ((status: AutoUpdateStatus) => void) | null;
 
   beforeEach(() => {
     getShellStateMock = vi.fn().mockResolvedValue(createShellState());
@@ -102,11 +104,15 @@ describe('App shell inventory views', () => {
     readUpdateStatusMock = vi.fn().mockResolvedValue({ phase: 'disabled' });
     installUpdateMock = vi.fn().mockResolvedValue({ phase: 'ready', version: '0.2.0' });
     inventoryUpdatedListener = null;
+    updateStatusUpdatedListener = null;
     onInventoryUpdatedMock = vi.fn((listener: (snapshot: SkillInventorySnapshot) => void) => {
       inventoryUpdatedListener = listener;
       return () => undefined;
     });
-    onUpdateStatusUpdatedMock = vi.fn(() => () => undefined);
+    onUpdateStatusUpdatedMock = vi.fn((listener: (status: AutoUpdateStatus) => void) => {
+      updateStatusUpdatedListener = listener;
+      return () => undefined;
+    });
     onAuditUpdatedMock = vi.fn(() => {
       return () => undefined;
     });
@@ -390,7 +396,62 @@ describe('App shell inventory views', () => {
     expect(completeOnboardingMock).not.toHaveBeenCalled();
   });
 
-  it('shows a compact sidebar update button when an update is ready', async () => {
+  it('shows a download progress dialog while an update downloads', async () => {
+    readUpdateStatusMock.mockResolvedValue({
+      downloadProgress: {
+        percent: 23.5714,
+        totalBytes: 28_000_000,
+        transferredBytes: 6_600_000,
+      },
+      phase: 'downloading',
+      version: '0.2.0',
+      lastCheckedAt: '2026-05-17T00:00:00.000Z',
+    });
+    render(<App />);
+
+    const updateDialog = await screen.findByRole('dialog', { name: /Updating Skill Index/i });
+    const progressbar = within(updateDialog).getByRole('progressbar', { name: /Update download progress/i });
+
+    expect(within(updateDialog).getByRole('heading', { name: /Downloading update/i })).toBeInTheDocument();
+    expect(within(updateDialog).getByText('6.6 MB of 28.0 MB')).toBeInTheDocument();
+    expect(progressbar).toHaveAttribute('aria-valuenow', '24');
+  });
+
+  it('relaunches automatically once a downloaded update is ready', async () => {
+    readUpdateStatusMock.mockResolvedValue({
+      downloadProgress: {
+        percent: 100,
+        totalBytes: 28_000_000,
+        transferredBytes: 28_000_000,
+      },
+      phase: 'downloading',
+      version: '0.2.0',
+      lastCheckedAt: '2026-05-17T00:00:00.000Z',
+    });
+    render(<App />);
+
+    await screen.findByRole('dialog', { name: /Updating Skill Index/i });
+    await waitFor(() => {
+      expect(onUpdateStatusUpdatedMock).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      updateStatusUpdatedListener?.({
+        phase: 'ready',
+        version: '0.2.0',
+        lastCheckedAt: '2026-05-17T00:00:01.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(installUpdateMock).toHaveBeenCalledTimes(1);
+    });
+    expect(await screen.findByRole('dialog', { name: /Updating Skill Index/i })).toHaveTextContent(
+      /Relaunching Skill Index/i,
+    );
+  });
+
+  it('relaunches automatically when an update is already ready', async () => {
     readUpdateStatusMock.mockResolvedValue({
       phase: 'ready',
       version: '0.2.0',
@@ -398,14 +459,12 @@ describe('App shell inventory views', () => {
     });
     render(<App />);
 
-    const updateButton = await screen.findByRole('button', { name: /Restart to install Skill Index 0\.2\.0/i });
-
-    expect(updateButton).toHaveTextContent(/^Update$/);
-    fireEvent.click(updateButton);
-
     await waitFor(() => {
       expect(installUpdateMock).toHaveBeenCalledTimes(1);
     });
+    expect(await screen.findByRole('dialog', { name: /Updating Skill Index/i })).toHaveTextContent(
+      /Relaunching Skill Index/i,
+    );
   });
 
   it('hides the sidebar update affordance when updates are disabled', async () => {

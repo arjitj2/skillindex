@@ -5745,6 +5745,142 @@ body {
   transform-origin: center;
 }
 
+.auto-update-dialog-root {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(11, 15, 17, 0.24);
+  backdrop-filter: blur(4px);
+}
+
+.auto-update-dialog {
+  width: min(500px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid rgba(139, 158, 166, 0.36);
+  border-radius: 16px;
+  background: #20292c;
+  color: #eef2f3;
+  box-shadow:
+    0 22px 64px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.auto-update-dialog__titlebar {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 24px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.24);
+  background: #202a2e;
+}
+
+.auto-update-dialog__titlebar h2 {
+  margin: 0;
+  font-family: Inter, sans-serif;
+  font-size: 16px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #aeb9be;
+}
+
+.auto-update-dialog__body {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 16px 24px 20px;
+}
+
+.auto-update-dialog__mark {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: #fbfbfb;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.auto-update-dialog__mark img {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+}
+
+.auto-update-dialog__content {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.auto-update-dialog__content h3 {
+  margin: 0;
+  font-family: Inter, sans-serif;
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 750;
+  letter-spacing: 0;
+  color: #f4f6f7;
+}
+
+.auto-update-dialog__progress {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #3a4448;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.34);
+}
+
+.auto-update-dialog__progress > div {
+  height: 100%;
+  min-width: 8px;
+  border-radius: inherit;
+  background: #1188f4;
+  box-shadow: 0 0 18px rgba(17, 136, 244, 0.3);
+  transition: width 180ms ease;
+}
+
+.auto-update-dialog__progress--indeterminate > div {
+  animation: auto-update-progress-pulse 1200ms ease-in-out infinite;
+}
+
+.auto-update-dialog__bytes {
+  display: block;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #e5eaec;
+}
+
+@keyframes auto-update-progress-pulse {
+  0% {
+    transform: translateX(-40%);
+  }
+
+  50% {
+    transform: translateX(160%);
+  }
+
+  100% {
+    transform: translateX(-40%);
+  }
+}
+
+@media (max-width: 560px) {
+  .auto-update-dialog__body {
+    grid-template-columns: 1fr;
+  }
+}
+
 .add-skill-modal-root {
   position: fixed;
   inset: 0;

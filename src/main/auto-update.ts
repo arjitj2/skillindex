@@ -2,7 +2,7 @@ import { app, BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 
 import { getSkillIndexBuildFlavor, type SkillIndexBuildFlavor } from '@shared/build-flavor';
-import { IPC_CHANNELS, type AutoUpdateStatus } from '@shared/contracts';
+import { IPC_CHANNELS, type AutoUpdateDownloadProgress, type AutoUpdateStatus } from '@shared/contracts';
 
 export const STARTUP_UPDATE_CHECK_DELAY_MS = 5_000;
 export const UPDATE_CHECK_INTERVAL_MS = 5 * 60_000;
@@ -79,6 +79,7 @@ export function configureAutoUpdates(runtime: AutoUpdateRuntime): boolean {
   runtime.updater.on('download-progress', (info) => {
     setAutoUpdateStatus({
       ...getAutoUpdateStatus(),
+      downloadProgress: readDownloadProgress(info),
       phase: 'downloading',
       version: getAutoUpdateStatus().version ?? readUpdateVersion(info),
     });
@@ -203,8 +204,32 @@ function readUpdateVersion(info: unknown): string | undefined {
   return typeof version === 'string' ? version : undefined;
 }
 
+function readDownloadProgress(info: unknown): AutoUpdateDownloadProgress | undefined {
+  if (!info || typeof info !== 'object') {
+    return undefined;
+  }
+
+  const downloadProgress = removeUndefinedFields({
+    bytesPerSecond: readFiniteNumberField(info, 'bytesPerSecond'),
+    percent: readFiniteNumberField(info, 'percent'),
+    totalBytes: readFiniteNumberField(info, 'total'),
+    transferredBytes: readFiniteNumberField(info, 'transferred'),
+  });
+
+  return Object.keys(downloadProgress).length > 0 ? downloadProgress : undefined;
+}
+
+function readFiniteNumberField(source: object, field: string): number | undefined {
+  const value = (source as Record<string, unknown>)[field];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function removeUndefinedStatusFields(status: AutoUpdateStatus): AutoUpdateStatus {
+  return removeUndefinedFields(status) as AutoUpdateStatus;
+}
+
+function removeUndefinedFields<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(
-    Object.entries(status).filter(([, value]) => value !== undefined),
-  ) as AutoUpdateStatus;
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
+  ) as Partial<T>;
 }

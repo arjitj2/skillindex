@@ -170,6 +170,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus>({ phase: 'disabled' });
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const didRequestUpdateInstallRef = useRef(false);
   const [isPreviewingOnboarding, setIsPreviewingOnboarding] = useState(false);
   const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false);
   const [onboardingErrorMessage, setOnboardingErrorMessage] = useState<string | null>(null);
@@ -1258,15 +1259,38 @@ export default function App() {
   }, [resetMcpSelection, resetSkillSelection]);
 
   const handleInstallUpdate = useCallback(async () => {
+    if (didRequestUpdateInstallRef.current) {
+      return;
+    }
+
+    didRequestUpdateInstallRef.current = true;
     setIsInstallingUpdate(true);
     try {
       const nextStatus = await desktopApi.installUpdate();
       setAutoUpdateStatus(nextStatus);
     } catch (error) {
+      didRequestUpdateInstallRef.current = false;
       setIsInstallingUpdate(false);
       setErrorMessage(error instanceof Error ? error.message : 'Failed to install update.');
     }
   }, [desktopApi]);
+
+  useEffect(() => {
+    if (autoUpdateStatus.phase !== 'ready' || didRequestUpdateInstallRef.current) {
+      return;
+    }
+
+    void handleInstallUpdate();
+  }, [autoUpdateStatus.phase, handleInstallUpdate]);
+
+  useEffect(() => {
+    if (autoUpdateStatus.phase === 'downloading' || autoUpdateStatus.phase === 'ready') {
+      return;
+    }
+
+    didRequestUpdateInstallRef.current = false;
+    setIsInstallingUpdate(false);
+  }, [autoUpdateStatus.phase]);
 
   const chooseOnboardingPreferredSource = useCallback(async () => {
     setOnboardingErrorMessage(null);
@@ -1497,13 +1521,20 @@ export default function App() {
 
   if (shouldShowOnboarding) {
     return (
-      <OnboardingFlow
-        errorMessage={onboardingErrorMessage}
-        isCompleting={isCompletingOnboarding}
-        universalSkillsPath={CANONICAL_USER_SKILLS_DISPLAY_PATH}
-        onChoosePreferredSource={chooseOnboardingPreferredSource}
-        onComplete={completeOnboarding}
-      />
+      <>
+        <OnboardingFlow
+          errorMessage={onboardingErrorMessage}
+          isCompleting={isCompletingOnboarding}
+          universalSkillsPath={CANONICAL_USER_SKILLS_DISPLAY_PATH}
+          onChoosePreferredSource={chooseOnboardingPreferredSource}
+          onComplete={completeOnboarding}
+        />
+        <AutoUpdateDialog
+          appName={shellState?.appName ?? APP_NAME}
+          isInstallingUpdate={isInstallingUpdate}
+          status={autoUpdateStatus}
+        />
+      </>
     );
   }
 
@@ -1573,8 +1604,104 @@ export default function App() {
           </section>
         </div>
       ) : null}
+
+      <AutoUpdateDialog
+        appName={shellState?.appName ?? APP_NAME}
+        isInstallingUpdate={isInstallingUpdate}
+        status={autoUpdateStatus}
+      />
     </div>
   );
+}
+
+function AutoUpdateDialog({
+  appName,
+  isInstallingUpdate,
+  status,
+}: {
+  appName: string;
+  isInstallingUpdate: boolean;
+  status: AutoUpdateStatus;
+}) {
+  if (status.phase !== 'downloading' && status.phase !== 'ready' && !isInstallingUpdate) {
+    return null;
+  }
+
+  const isRelaunching = status.phase === 'ready' || isInstallingUpdate;
+  const progressPercent = getUpdateDownloadPercent(status);
+  const visualProgressPercent = isRelaunching ? 100 : progressPercent ?? 22;
+  const sizeLabel = getUpdateDownloadSizeLabel(status);
+  const progressValue = progressPercent === null ? undefined : Math.round(progressPercent);
+
+  return (
+    <div className="auto-update-dialog-root">
+      <section
+        aria-labelledby="auto-update-dialog-title"
+        aria-modal="true"
+        className="auto-update-dialog"
+        role="dialog"
+      >
+        <header className="auto-update-dialog__titlebar">
+          <h2 id="auto-update-dialog-title">Updating {appName}</h2>
+        </header>
+        <div className="auto-update-dialog__body">
+          <div className="auto-update-dialog__mark" aria-hidden="true">
+            <img src={skillIndexMark} alt="" />
+          </div>
+          <div className="auto-update-dialog__content">
+            <h3>{isRelaunching ? `Relaunching ${appName}...` : 'Downloading update...'}</h3>
+            <div
+              aria-label="Update download progress"
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={progressValue}
+              aria-valuetext={sizeLabel ?? (progressValue === undefined ? 'Preparing download' : `${progressValue}% downloaded`)}
+              className={`auto-update-dialog__progress${progressPercent === null && !isRelaunching ? ' auto-update-dialog__progress--indeterminate' : ''}`}
+              role="progressbar"
+            >
+              <div style={{ width: `${visualProgressPercent}%` }} />
+            </div>
+            <strong className="auto-update-dialog__bytes">
+              {isRelaunching ? 'Download complete' : sizeLabel ?? 'Preparing download...'}
+            </strong>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function getUpdateDownloadPercent(status: AutoUpdateStatus): number | null {
+  const percent = status.downloadProgress?.percent;
+  if (typeof percent !== 'number' || !Number.isFinite(percent)) {
+    return null;
+  }
+
+  return Math.min(Math.max(percent, 0), 100);
+}
+
+function getUpdateDownloadSizeLabel(status: AutoUpdateStatus): string | null {
+  const transferredBytes = status.downloadProgress?.transferredBytes;
+  const totalBytes = status.downloadProgress?.totalBytes;
+
+  if (typeof transferredBytes === 'number' && Number.isFinite(transferredBytes)
+    && typeof totalBytes === 'number' && Number.isFinite(totalBytes)) {
+    return `${formatMegabytes(transferredBytes)} of ${formatMegabytes(totalBytes)}`;
+  }
+
+  if (typeof transferredBytes === 'number' && Number.isFinite(transferredBytes)) {
+    return `${formatMegabytes(transferredBytes)} downloaded`;
+  }
+
+  if (typeof totalBytes === 'number' && Number.isFinite(totalBytes)) {
+    return `${formatMegabytes(totalBytes)} update`;
+  }
+
+  return null;
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 function StartupScreen({ appName }: { appName: string }) {

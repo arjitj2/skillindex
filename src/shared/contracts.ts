@@ -83,9 +83,17 @@ export type AutoUpdatePhase =
 
 export interface AutoUpdateStatus {
   phase: AutoUpdatePhase;
+  downloadProgress?: AutoUpdateDownloadProgress;
   version?: string;
   lastCheckedAt?: string;
   errorMessage?: string;
+}
+
+export interface AutoUpdateDownloadProgress {
+  bytesPerSecond?: number;
+  percent?: number;
+  totalBytes?: number;
+  transferredBytes?: number;
 }
 
 export type SkillSourceScope = 'sandbox' | 'live' | 'custom';
