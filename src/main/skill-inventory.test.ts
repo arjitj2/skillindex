@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -2458,6 +2458,259 @@ describe('representative-agent scan foundation', () => {
     expect(divergedPartialSymlink?.locations.map((location) => location.fileType)).toEqual(['real-file', 'symlink', 'symlink', 'real-file']);
     expect(divergedPartialSymlink?.structuralState).toBe('diverged-drift');
     expect(divergedPartialSymlink?.diff?.files?.map((file) => file.relativePath)).toEqual(['rules/usage.md']);
+  });
+
+  it('keeps scanning when a skill folder contains a stale SKILL.md symlink', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-stale-entrypoint-symlink-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const skillDir = path.join(paths.sandboxAgentsSkillsDir, 'stale-entrypoint-symlink-skill');
+    const missingEntrypointTarget = path.join(root, 'removed-source', 'stale-entrypoint-symlink-skill', 'SKILL.md');
+
+    await mkdir(skillDir, { recursive: true });
+    await symlink(missingEntrypointTarget, path.join(skillDir, 'SKILL.md'));
+
+    const inventory = await scanSkillInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    expect(inventory.skills.find((skill) => skill.name === 'stale-entrypoint-symlink-skill')).toMatchObject({
+      issueReasons: arrayContaining(['invalid-definition']),
+      detailDiagnostics: {
+        definitionIssues: arrayContaining([
+          objectContaining({
+            type: 'unreadable-file',
+            entrypointPath: path.join(skillDir, 'SKILL.md'),
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('keeps scanning the live Claude skills folder when SKILL.md points at a removed nested skill', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-live-claude-stale-entrypoint-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const env = {
+      SKILL_INDEX_AGENT_SUBSET: 'claude',
+    };
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: dataDir,
+      },
+      homeDir,
+    });
+    const claudeSkillsDir = path.join(homeDir, '.claude', 'skills');
+    const autoplanDir = path.join(claudeSkillsDir, 'autoplan');
+    const missingNestedEntrypoint = path.join(claudeSkillsDir, 'gstack', 'autoplan', 'SKILL.md');
+
+    await mkdir(autoplanDir, { recursive: true });
+    await symlink(missingNestedEntrypoint, path.join(autoplanDir, 'SKILL.md'));
+
+    const inventory = await scanSkillInventory({
+      paths,
+      homeDir,
+      env,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    });
+
+    expect(inventory.skills.find((skill) => skill.name === 'autoplan')).toMatchObject({
+      locations: arrayContaining([
+        objectContaining({
+          path: autoplanDir,
+          entrypointPath: path.join(autoplanDir, 'SKILL.md'),
+          sourceId: 'live-claude',
+        }),
+      ]),
+      issueReasons: arrayContaining(['invalid-definition']),
+      detailDiagnostics: {
+        definitionIssues: arrayContaining([
+          objectContaining({
+            type: 'unreadable-file',
+            entrypointPath: path.join(autoplanDir, 'SKILL.md'),
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('keeps scanning valid skills when discovery reaches an unreadable nested directory', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-unreadable-discovery-dir-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const customSkillsDir = path.join(root, 'custom-skills');
+    const unreadableDir = path.join(customSkillsDir, 'archived');
+
+    await writeSkillFile(
+      customSkillsDir,
+      'healthy-custom-skill',
+      [
+        '---',
+        'name: healthy-custom-skill',
+        'description: Healthy custom skill.',
+        '---',
+        '',
+        '# Healthy custom skill',
+        '',
+      ].join('\n'),
+      '2026-04-09T00:00:00.000Z',
+    );
+    await mkdir(unreadableDir, { recursive: true });
+    await chmod(unreadableDir, 0o000);
+    try {
+      await writeSkillIndexConfig(paths.configFile, {
+        customScanPaths: [customSkillsDir],
+        preferredCanonicalSourcePath: null,
+        dismissedDriftSignatures: [],
+        dismissedMcpSignatures: [],
+      });
+
+      const inventory = await scanSkillInventory({
+        paths,
+        includeSandboxSources: false,
+        includeLiveSources: false,
+      });
+
+      expect(inventory.skills.find((skill) => skill.name === 'healthy-custom-skill')).toMatchObject({
+        issueReasons: arrayContaining(['missing-canonical']),
+      });
+    } finally {
+      await chmod(unreadableDir, 0o700).catch(() => undefined);
+    }
+  });
+
+  it('keeps a skill readable when an unreadable support directory cannot be walked', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-unreadable-support-dir-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const skillDir = path.join(paths.sandboxAgentsSkillsDir, 'support-dir-permission-skill');
+    const unreadableSupportDir = path.join(skillDir, 'private');
+
+    await writeSkillFile(
+      paths.sandboxAgentsSkillsDir,
+      'support-dir-permission-skill',
+      [
+        '---',
+        'name: support-dir-permission-skill',
+        'description: Skill with a private support directory.',
+        '---',
+        '',
+        '# Support dir permission skill',
+        '',
+      ].join('\n'),
+      '2026-04-09T00:00:00.000Z',
+    );
+    await mkdir(unreadableSupportDir, { recursive: true });
+    await chmod(unreadableSupportDir, 0o000);
+    try {
+      const inventory = await scanSkillInventory({
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+      });
+
+      expect(inventory.skills.find((skill) => skill.name === 'support-dir-permission-skill')).toMatchObject({
+        description: 'Skill with a private support directory.',
+        detailDiagnostics: {
+          definitionIssues: [],
+        },
+      });
+    } finally {
+      await chmod(unreadableSupportDir, 0o700).catch(() => undefined);
+    }
+  });
+
+  it('keeps scanning when discovery encounters a symlinked directory cycle', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-discovery-cycle-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const customSkillsDir = path.join(root, 'custom-skills');
+
+    await writeSkillFile(
+      customSkillsDir,
+      'cycle-neighbor-skill',
+      [
+        '---',
+        'name: cycle-neighbor-skill',
+        'description: Neighbor skill next to a directory loop.',
+        '---',
+        '',
+        '# Cycle neighbor skill',
+        '',
+      ].join('\n'),
+      '2026-04-09T00:00:00.000Z',
+    );
+    await symlink(customSkillsDir, path.join(customSkillsDir, 'loop'));
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [customSkillsDir],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+
+    const inventory = await scanSkillInventory({
+      paths,
+      includeSandboxSources: false,
+      includeLiveSources: false,
+    });
+
+    expect(inventory.skills.find((skill) => skill.name === 'cycle-neighbor-skill')).toMatchObject({
+      description: 'Neighbor skill next to a directory loop.',
+    });
+  });
+
+  it('keeps a skill readable when its support files contain a symlinked directory cycle', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-package-cycle-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const skillDir = path.join(paths.sandboxAgentsSkillsDir, 'support-dir-cycle-skill');
+
+    await writeSkillFile(
+      paths.sandboxAgentsSkillsDir,
+      'support-dir-cycle-skill',
+      [
+        '---',
+        'name: support-dir-cycle-skill',
+        'description: Skill with a support directory cycle.',
+        '---',
+        '',
+        '# Support dir cycle skill',
+        '',
+      ].join('\n'),
+      '2026-04-09T00:00:00.000Z',
+    );
+    await symlink(skillDir, path.join(skillDir, 'loop'));
+
+    const inventory = await scanSkillInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    expect(inventory.skills.find((skill) => skill.name === 'support-dir-cycle-skill')).toMatchObject({
+      description: 'Skill with a support directory cycle.',
+      detailDiagnostics: {
+        definitionIssues: [],
+      },
+    });
   });
 
   it('treats identical zero-byte markdown copies as identical drift with stable hashes', async () => {
