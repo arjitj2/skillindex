@@ -4,7 +4,7 @@
 [![CodeQL](https://github.com/arjitj2/skillindex/actions/workflows/codeql.yml/badge.svg)](https://github.com/arjitj2/skillindex/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/arjitj2/skillindex/badge)](https://scorecard.dev/viewer/?uri=github.com/arjitj2/skillindex)
 
-https://github.com/user-attachments/assets/f852192a-352d-4087-bab4-c0aac400ca35
+https://github.com/user-attachments/assets/730265b3-46ce-46f9-9150-0e0057e2f00c
 
 Organize and standardize your knowledge across agents, 100% locally.
 
