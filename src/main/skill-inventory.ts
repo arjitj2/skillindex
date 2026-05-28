@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { accessSync, constants, readFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync, type Dirent } from 'node:fs';
 import { lstat, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -549,7 +549,11 @@ async function collectLocationsFromSource(
   const npxLockCache: NpxSkillLockCache = new Map();
   const locations = await Promise.all(
     filePaths.map(async ({ rootPath, name }) => {
-      const record = await readSkillLocation(rootPath, source, npxLockCache);
+      const record = await safeReadSkillLocation(rootPath, source, npxLockCache);
+      if (!record) {
+        return null;
+      }
+
       return {
         name: createInventorySkillName(name, source),
         record,
@@ -557,7 +561,7 @@ async function collectLocationsFromSource(
     }),
   );
 
-  return locations;
+  return locations.filter((location): location is { name: string; record: IndexedSkillLocation } => location !== null);
 }
 
 function createInventorySkillName(skillName: string, source: SkillScanSource): string {
@@ -584,38 +588,58 @@ function normalizeSelfQualifiedSkillName(skillName: string): string {
 }
 
 async function collectSkillEntryFiles(source: SkillScanSource): Promise<SkillPackageEntry[]> {
-  return collectNestedSkillEntryFiles(source, source.skillsDir, source.skillsDir);
+  return collectNestedSkillEntryFiles(source, source.skillsDir, source.skillsDir, new Set());
 }
 
 async function collectNestedSkillEntryFiles(
   source: SkillScanSource,
   rootDir: string,
   currentDir: string,
+  activeDirectories: Set<string>,
 ): Promise<SkillPackageEntry[]> {
-  const entries = await readdir(currentDir, { withFileTypes: true });
-  const files: SkillPackageEntry[] = [];
-
-  for (const entry of entries) {
-    const entryPath = path.join(currentDir, entry.name);
-    if (
-      (!entry.isDirectory() && !entry.isSymbolicLink())
-      || shouldIgnoreSkillDiscoveryEntry(source, rootDir, entryPath, entry.name)
-    ) {
-      continue;
-    }
-
-    const skillPackage = await describeExistingSkillPackage(rootDir, entryPath);
-    if (skillPackage) {
-      files.push(skillPackage);
-      continue;
-    }
-
-    if (await isDirectoryLikePath(entryPath)) {
-      files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath)));
-    }
+  const visitKey = await getDirectoryVisitKey(currentDir);
+  if (visitKey && activeDirectories.has(visitKey)) {
+    return [];
+  }
+  if (visitKey) {
+    activeDirectories.add(visitKey);
   }
 
-  return files.sort((left, right) => left.rootPath.localeCompare(right.rootPath));
+  try {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const files: SkillPackageEntry[] = [];
+
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (
+        (!entry.isDirectory() && !entry.isSymbolicLink())
+        || shouldIgnoreSkillDiscoveryEntry(source, rootDir, entryPath, entry.name)
+      ) {
+        continue;
+      }
+
+      const skillPackage = await describeExistingSkillPackage(rootDir, entryPath);
+      if (skillPackage) {
+        files.push(skillPackage);
+        continue;
+      }
+
+      if (await isDirectoryLikePath(entryPath)) {
+        files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, activeDirectories)));
+      }
+    }
+
+    return files.sort((left, right) => left.rootPath.localeCompare(right.rootPath));
+  } finally {
+    if (visitKey) {
+      activeDirectories.delete(visitKey);
+    }
+  }
 }
 
 async function readSkillLocation(
@@ -828,9 +852,13 @@ function getOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-async function safeReadSkillLocation(filePath: string, source: SkillScanSource): Promise<IndexedSkillLocation | null> {
+async function safeReadSkillLocation(
+  filePath: string,
+  source: SkillScanSource,
+  npxLockCache?: NpxSkillLockCache,
+): Promise<IndexedSkillLocation | null> {
   try {
-    return await readSkillLocation(filePath, source);
+    return await readSkillLocation(filePath, source, npxLockCache);
   } catch {
     return null;
   }
@@ -3114,40 +3142,63 @@ async function isBrokenTopLevelSkillSymlink(rootDir: string, rootPath: string): 
 }
 
 async function readPackageFiles(rootPath: string): Promise<SkillPackageFileRecord[]> {
-  const files = await walkPackageFiles(rootPath, rootPath);
+  const files = await walkPackageFiles(rootPath, rootPath, new Set());
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
-async function walkPackageFiles(rootDir: string, currentDir: string): Promise<SkillPackageFileRecord[]> {
-  const entries = await readdir(currentDir, { withFileTypes: true });
-  const files: SkillPackageFileRecord[] = [];
+async function walkPackageFiles(
+  rootDir: string,
+  currentDir: string,
+  activeDirectories: Set<string>,
+): Promise<SkillPackageFileRecord[]> {
+  const visitKey = await getDirectoryVisitKey(currentDir);
+  if (visitKey && activeDirectories.has(visitKey)) {
+    return [];
+  }
+  if (visitKey) {
+    activeDirectories.add(visitKey);
+  }
 
-  for (const entry of entries) {
-    if (shouldIgnorePackageEntry(entry.name, entry.isDirectory())) {
-      continue;
+  try {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return [];
     }
+    const files: SkillPackageFileRecord[] = [];
 
-    const entryPath = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkPackageFiles(rootDir, entryPath)));
-      continue;
-    }
-
-    if (entry.isSymbolicLink()) {
-      const stats = await safeStat(entryPath);
-      if (stats?.isDirectory()) {
-        files.push(...(await walkPackageFiles(rootDir, entryPath)));
+    for (const entry of entries) {
+      if (shouldIgnorePackageEntry(entry.name, entry.isDirectory())) {
         continue;
+      }
+
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        const stats = await safeStat(entryPath);
+        if (stats?.isDirectory()) {
+          files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+          continue;
+        }
+      }
+
+      const file = await readPackageFile(entryPath, path.relative(rootDir, entryPath));
+      if (file) {
+        files.push(file);
       }
     }
 
-    const file = await readPackageFile(entryPath, path.relative(rootDir, entryPath));
-    if (file) {
-      files.push(file);
+    return files;
+  } finally {
+    if (visitKey) {
+      activeDirectories.delete(visitKey);
     }
   }
-
-  return files;
 }
 
 function shouldIgnorePackageEntry(name: string, isDirectoryEntry: boolean): boolean {
@@ -3246,8 +3297,13 @@ async function getLocationModifiedAt(
     return stats.mtime.toISOString();
   }
 
-  const stats = await stat(entrypointPath);
-  return stats.mtime.toISOString();
+  const resolvedEntrypointStats = await safeStat(entrypointPath);
+  if (resolvedEntrypointStats) {
+    return resolvedEntrypointStats.mtime.toISOString();
+  }
+
+  const entrypointStats = await lstat(entrypointPath);
+  return entrypointStats.mtime.toISOString();
 }
 
 function buildPackageDiffFiles(
@@ -3321,6 +3377,10 @@ async function safeRealpath(filePath: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+async function getDirectoryVisitKey(directoryPath: string): Promise<string | null> {
+  return normalizePath(await safeRealpath(directoryPath) ?? directoryPath);
 }
 
 function collectMcpOwners(agents: AgentRecord[], sources: SkillScanSource[], plugins: PluginRecord[] = []): McpOwnerRecord[] {
