@@ -429,6 +429,53 @@ describe('App shell inventory views', () => {
     expect(screen.getByRole('button', { name: /^Failure trace copied$/i })).toBeInTheDocument();
   });
 
+  it('clears a persisted onboarding preferred source before retrying without one', async () => {
+    const preferredSourcePath = '/Users/arjitjaiswal/repos/problem-skills';
+    readSettingsMock.mockResolvedValueOnce(createSettingsState([], null, null));
+    chooseDirectoryMock.mockResolvedValueOnce(preferredSourcePath);
+    setPreferredCanonicalSourcePathMock.mockResolvedValueOnce(createSettingsState(
+      [preferredSourcePath],
+      preferredSourcePath,
+      null,
+    ));
+    clearPreferredCanonicalSourcePathMock.mockResolvedValueOnce(createSettingsState([], null, null));
+    rescanInventoryMock
+      .mockRejectedValueOnce(new Error('Scan failed during onboarding.'))
+      .mockResolvedValueOnce(createInventorySnapshot());
+    completeOnboardingMock.mockResolvedValueOnce(createSettingsState(
+      [],
+      null,
+      '2026-05-19T06:30:00.000Z',
+    ));
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: /^How it fits together$/i, level: 1 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Continue/i }));
+    expect(await screen.findByRole('heading', { name: /^Where your skills live$/i, level: 1 })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Browse/i }));
+    expect(await screen.findByText(preferredSourcePath)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
+
+    await waitFor(() => {
+      expect(rescanInventoryMock).toHaveBeenCalledTimes(1);
+    });
+    expect(completeOnboardingMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Remove preferred source$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
+
+    await waitFor(() => {
+      expect(clearPreferredCanonicalSourcePathMock).toHaveBeenCalledTimes(1);
+      expect(rescanInventoryMock).toHaveBeenCalledTimes(2);
+      expect(completeOnboardingMock).toHaveBeenCalledWith({});
+    });
+    expect(setPreferredCanonicalSourcePathMock.mock.invocationCallOrder[0]).toBeLessThan(rescanInventoryMock.mock.invocationCallOrder[0]);
+    expect(clearPreferredCanonicalSourcePathMock.mock.invocationCallOrder[0]).toBeLessThan(rescanInventoryMock.mock.invocationCallOrder[1]);
+  });
+
   it('holds startup UI instead of flashing the app shell while first-run settings load', async () => {
     let resolveSettings: (settingsState: SettingsState) => void = () => undefined;
     readSettingsMock.mockReturnValueOnce(new Promise<SettingsState>((resolve) => {

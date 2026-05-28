@@ -3,6 +3,11 @@ import { ArrowRight, Check, ChevronDown, ChevronUp, Copy, Folder, GitBranch, Inf
 
 import skillIndexMarkCream from '../assets/skill-index-mark-cream.svg';
 
+export interface OnboardingPreferredSourceSelection {
+  didChangePreferredSource: boolean;
+  preferredSourcePath: string | null;
+}
+
 export function OnboardingFlow({
   errorMessage,
   errorTrace,
@@ -15,11 +20,12 @@ export function OnboardingFlow({
   errorTrace: string | null;
   isCompleting: boolean;
   onChoosePreferredSource: () => Promise<string | null>;
-  onComplete: (preferredSourcePath: string | null) => Promise<void>;
+  onComplete: (selection: OnboardingPreferredSourceSelection) => Promise<void>;
   universalSkillsPath: string;
 }) {
   const [step, setStep] = useState<1 | 2>(1);
   const [preferredSourcePath, setPreferredSourcePath] = useState<string | null>(null);
+  const [didChangePreferredSource, setDidChangePreferredSource] = useState(false);
   const [isChoosingPreferredSource, setIsChoosingPreferredSource] = useState(false);
 
   const choosePreferredSource = async () => {
@@ -28,6 +34,7 @@ export function OnboardingFlow({
       const chosenPath = await onChoosePreferredSource();
       if (chosenPath) {
         setPreferredSourcePath(chosenPath);
+        setDidChangePreferredSource(true);
       }
     } finally {
       setIsChoosingPreferredSource(false);
@@ -60,9 +67,15 @@ export function OnboardingFlow({
               onChoosePreferredSource={() => {
                 void choosePreferredSource();
               }}
-              onClearPreferredSource={() => setPreferredSourcePath(null)}
+              onClearPreferredSource={() => {
+                setPreferredSourcePath(null);
+                setDidChangePreferredSource(true);
+              }}
               onComplete={() => {
-                void onComplete(preferredSourcePath);
+                void onComplete({
+                  didChangePreferredSource,
+                  preferredSourcePath,
+                });
               }}
             />
           )}

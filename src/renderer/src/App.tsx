@@ -75,6 +75,11 @@ function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot):
   ];
 }
 
+interface OnboardingPreferredSourceSelection {
+  didChangePreferredSource: boolean;
+  preferredSourcePath: string | null;
+}
+
 function getResolveIssueRequestKey(request: ResolveIssueRequest): string {
   return [
     request.entity,
@@ -1332,7 +1337,10 @@ export default function App() {
     }
   }, [desktopApi]);
 
-  const completeOnboarding = useCallback(async (preferredSourcePath: string | null) => {
+  const completeOnboarding = useCallback(async ({
+    didChangePreferredSource,
+    preferredSourcePath,
+  }: OnboardingPreferredSourceSelection) => {
     setIsCompletingOnboarding(true);
     setOnboardingErrorMessage(null);
     setOnboardingErrorTrace(null);
@@ -1344,8 +1352,12 @@ export default function App() {
         await devApi.setInventoryMode(shellState.devTools.inventoryMode);
       }
 
-      if (preferredSourcePath) {
-        await desktopApi.setPreferredCanonicalSourcePath(preferredSourcePath);
+      if (didChangePreferredSource) {
+        if (preferredSourcePath) {
+          await desktopApi.setPreferredCanonicalSourcePath(preferredSourcePath);
+        } else {
+          await desktopApi.clearPreferredCanonicalSourcePath();
+        }
       }
       let nextInventorySnapshot: SkillInventorySnapshot;
       try {
