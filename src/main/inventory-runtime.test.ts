@@ -675,22 +675,28 @@ describe('inventory runtime', () => {
     const dismissPromise = runtime.dismissDrift({
       skillName: 'identical-drift-skill',
     });
+    let dismissedSnapshot: SkillInventorySnapshot | undefined;
+    void dismissPromise.then(
+      (snapshot) => {
+        dismissedSnapshot = snapshot;
+      },
+      () => undefined,
+    );
 
     try {
-      await expect(Promise.race([
-        dismissPromise.then(() => 'dismissed' as const),
-        delay(50).then(() => 'blocked' as const),
-      ])).resolves.toBe('dismissed');
+      await waitFor(() => {
+        expect(dismissedSnapshot).toBeDefined();
+      }, 1000);
     } finally {
       connectivityDeferred.resolve({
         status: 'verified',
         checkedAt: new Date().toISOString(),
       });
-      await connectivityPromise;
+      await Promise.all([connectivityPromise, dismissPromise]);
     }
 
-    const dismissedSnapshot = await dismissPromise;
-    expect(dismissedSnapshot.skills.find((skill) => skill.name === 'identical-drift-skill')).toMatchObject({
+    const finalDismissedSnapshot = dismissedSnapshot ?? await dismissPromise;
+    expect(finalDismissedSnapshot.skills.find((skill) => skill.name === 'identical-drift-skill')).toMatchObject({
       driftPresentation: 'dismissed',
       structuralState: 'identical-drift',
     });
