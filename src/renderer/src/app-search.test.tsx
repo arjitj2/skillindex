@@ -39,7 +39,7 @@ describe('App search behavior', () => {
     expect(screen.getByRole('searchbox', { name: /Search MCPs/i })).toBeInTheDocument();
     expect(screen.getByText('⌘F')).toBeInTheDocument();
 
-    await openTab('Agents');
+    await openTab('Agent Directory');
     expect(screen.getByRole('searchbox', { name: /Search agents/i })).toBeInTheDocument();
     expect(screen.getByText('⌘F')).toBeInTheDocument();
 
@@ -51,7 +51,7 @@ describe('App search behavior', () => {
   it('filters agents from the header search field and focuses that field on Command+F', async () => {
     render(<App />);
 
-    await openTab('Agents');
+    await openTab('Agent Directory');
 
     const searchbox = screen.getByRole('searchbox', { name: /Search agents/i });
 
@@ -61,7 +61,7 @@ describe('App search behavior', () => {
     expect(screen.queryByText('Claude')).not.toBeInTheDocument();
     expect(screen.queryByText('Factory')).not.toBeInTheDocument();
 
-    screen.getByRole('button', { name: /^Agents\d*$/i }).focus();
+    screen.getByRole('button', { name: /^Agent Directory\s*\d*$/i }).focus();
     fireEvent.keyDown(window, { key: 'f', metaKey: true });
 
     expect(searchbox).toHaveFocus();
@@ -83,7 +83,7 @@ describe('App search behavior', () => {
   it('matches agents from the header search field by path', async () => {
     render(<App />);
 
-    await openTab('Agents');
+    await openTab('Agent Directory');
 
     const searchbox = screen.getByRole('searchbox', { name: /Search agents/i });
 
@@ -111,7 +111,7 @@ describe('App search behavior', () => {
   it('uses the shared Rescan action in the Agents header', async () => {
     render(<App />);
 
-    await openTab('Agents');
+    await openTab('Agent Directory');
 
     const rescanButton = screen.getByRole('button', { name: /^Rescan$/i });
     expect(rescanButton.querySelector('svg')).not.toBeNull();
@@ -202,8 +202,8 @@ describe('App search behavior', () => {
   });
 });
 
-async function openTab(label: 'Skills' | 'MCPs' | 'Agents' | 'Audit Log' | 'Settings') {
-  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${label}\\d*$`, 'i') }));
+async function openTab(label: 'Skills' | 'MCPs' | 'Agent Directory' | 'Audit Log' | 'Settings') {
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${label}\\s*\\d*$`, 'i') }));
   await waitFor(() => {
     expect(screen.getByRole('heading', { level: 2, name: new RegExp(`^${label}$`, 'i') })).toBeInTheDocument();
   });

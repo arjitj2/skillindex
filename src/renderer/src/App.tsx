@@ -1389,15 +1389,8 @@ export default function App() {
         icon: 'plugins' as const,
         meta: inventorySnapshot?.plugins?.length ?? 0,
       },
-      {
-        tab: 'agents' as const,
-        label: 'Agents',
-        icon: 'agents' as const,
-        meta: inventorySnapshot?.agentCounts?.installedAgents ?? 0,
-      },
     ],
     [
-      inventorySnapshot?.agentCounts?.installedAgents,
       inventorySnapshot?.counts.driftedSkills,
       inventorySnapshot?.counts.totalSkills,
       inventorySnapshot?.mcpCounts?.attentionMcps,

@@ -254,8 +254,8 @@ describe('App shell inventory views', () => {
   }
 
   async function openAgents() {
-    fireEvent.click(within(await getPrimaryNavAsync()).getByRole('button', { name: /^Agents/i }));
-    await screen.findByRole('heading', { name: /^Agents$/i, level: 2 });
+    fireEvent.click(await screen.findByRole('button', { name: /^Agent Directory/i }));
+    await screen.findByRole('heading', { name: /^Agent Directory$/i, level: 2 });
     await waitFor(() => {
       expect(getAgentDataRows().length).toBeGreaterThan(0);
     });
@@ -276,7 +276,7 @@ describe('App shell inventory views', () => {
     return row as HTMLElement;
   }
 
-  it('launches into Home with six primary tabs and keeps Audit Log above Settings', async () => {
+  it('launches into Home with five primary tabs and keeps Agent Directory above Audit Log', async () => {
     readAuditLogMock.mockResolvedValue(createAuditOperations());
     render(<App />);
 
@@ -287,30 +287,30 @@ describe('App shell inventory views', () => {
 
     const installedAgentCount = createInventorySnapshot().agentCounts?.installedAgents ?? 0;
 
-    expect(within(primaryNav).getAllByRole('button')).toHaveLength(6);
+    expect(within(primaryNav).getAllByRole('button')).toHaveLength(5);
     expect(within(primaryNav).getAllByRole('button').map((button) => button.textContent?.replace(/\s+/g, ''))).toEqual([
       'Home',
       'Skills38',
       'MCPs16',
       'Subagents0',
       'Plugins0',
-      `Agents${installedAgentCount}`,
     ]);
     expect(within(primaryNav).getByRole('button', { name: /^Home$/i })).toHaveTextContent(/^Home$/);
     expect(within(primaryNav).getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills38$/);
     expect(within(primaryNav).getByRole('button', { name: /^MCPs/i })).toHaveTextContent(/^MCPs16$/);
     expect(within(primaryNav).getByRole('button', { name: /^Subagents/i })).toHaveTextContent(/^Subagents0$/);
-    expect(within(primaryNav).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${installedAgentCount}$`),
-    );
     expect(within(primaryNav).getByRole('button', { name: /^Plugins/i })).toHaveTextContent(/^Plugins0$/);
+    expect(within(primaryNav).queryByRole('button', { name: /^Agent Directory/i })).not.toBeInTheDocument();
     expect(within(primaryNav).queryByRole('button', { name: /^Audit Log$/i })).not.toBeInTheDocument();
     expect(within(primaryNav).queryByRole('button', { name: /^All Skills/i })).not.toBeInTheDocument();
     expect(within(primaryNav).queryByRole('button', { name: /^Drift/i })).not.toBeInTheDocument();
 
+    const agentDirectoryButton = screen.getByRole('button', { name: /^Agent Directory/i });
     const auditLogButton = screen.getByRole('button', { name: /^Audit Log$/i });
     const settingsButton = screen.getByRole('button', { name: /^Settings/i });
-    expect(primaryNav.compareDocumentPosition(auditLogButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(agentDirectoryButton).toHaveTextContent(new RegExp(`^Agent Directory${installedAgentCount}$`));
+    expect(primaryNav.compareDocumentPosition(agentDirectoryButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(agentDirectoryButton.compareDocumentPosition(auditLogButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(auditLogButton.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(primaryNav.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('heading', { name: /^Home$/i, level: 2 })).toBeInTheDocument();
@@ -1333,8 +1333,8 @@ describe('App shell inventory views', () => {
 
     expect(within(getPrimaryNav()).getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills38$/);
     expect(within(getPrimaryNav()).getByRole('button', { name: /^MCPs/i })).toHaveTextContent(/^MCPs16$/);
-    expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
+    expect(screen.getByRole('button', { name: /^Agent Directory/i })).toHaveTextContent(
+      new RegExp(`^Agent Directory${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
 
     await openSkills();
@@ -1455,8 +1455,8 @@ describe('App shell inventory views', () => {
     render(<App />);
     await openAgents();
 
-    expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
+    expect(screen.getByRole('button', { name: /^Agent Directory/i })).toHaveTextContent(
+      new RegExp(`^Agent Directory${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
 
     const list = getAgentsList();
@@ -1549,7 +1549,7 @@ describe('App shell inventory views', () => {
     expect(screen.getByRole('searchbox', { name: /Search MCPs/i })).toHaveFocus();
 
     await openAgents();
-    within(getPrimaryNav()).getByRole('button', { name: /^Agents/i }).focus();
+    screen.getByRole('button', { name: /^Agent Directory/i }).focus();
     fireEvent.keyDown(window, { key: 'f', metaKey: true });
     expect(screen.getByRole('searchbox', { name: /Search agents/i })).toHaveFocus();
   });
@@ -1952,8 +1952,8 @@ describe('App shell inventory views', () => {
     render(<App />);
 
     await screen.findByLabelText(/Home inventory metrics/i);
-    expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${createOperationalBaselineInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
+    expect(screen.getByRole('button', { name: /^Agent Directory/i })).toHaveTextContent(
+      new RegExp(`^Agent Directory${createOperationalBaselineInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));
