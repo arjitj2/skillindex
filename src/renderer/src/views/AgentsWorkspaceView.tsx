@@ -79,7 +79,7 @@ export function AgentsWorkspaceView({
             query={searchQuery}
           />
         )}
-        title="Agents"
+        title="Agent Directory"
       />
 
       <div className="page-scroll page-scroll--agents">
