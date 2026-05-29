@@ -1,7 +1,7 @@
-import { ArrowRight, Check, ChevronUp, Wrench } from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, ChevronUp, Wrench } from 'lucide-react';
 import { useState } from 'react';
 
-import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SkillRecord, SkillScanSource } from '@shared/contracts';
+import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SkillRecord, SkillScanSource, SubagentRecord } from '@shared/contracts';
 
 import {
   getHomeSummary,
@@ -9,23 +9,24 @@ import {
   getMcpSections,
   getSkillDisplayName,
   getSkillSections,
+  getSubagentDisplayName,
   getSubagentSections,
 } from '../inventory-view-model';
 import {
-  getPillToneForMcp,
-  getPillToneForSkill,
   getMcpStatusLabels,
   getSkillStatusLabels,
+  getSubagentStatusLabels,
   getSkillRowDescription,
   getDisplaySkillIssueReasons,
   formatLastScanLabel,
 } from '../lib/inventory-presentation';
 import {
-  AttentionGroupCard,
   EmptyStatePanel,
   PageTopBar,
   PLUGIN_MCP_TOOLTIP,
   PLUGIN_SKILL_TOOLTIP,
+  PLUGIN_SUBAGENT_TOOLTIP,
+  PluginTooltipIndicator,
   RescanToolbarButton,
 } from '../components/ui';
 
@@ -65,6 +66,41 @@ interface PlannedFixGroup {
   issue: ResolveIssueRequest['issue'];
   rows: PlannedFixRow[];
 }
+
+interface HomeMetric {
+  key: string;
+  label: string;
+  needsAttention: number;
+  severity: 'alert' | 'warn';
+  total: number;
+  unit: string;
+}
+
+interface AttentionBadge {
+  label: string;
+  tone: 'attention' | 'warning' | 'healthy' | 'muted';
+}
+
+interface HomeAttentionItem {
+  badges: AttentionBadge[];
+  description?: string;
+  isLocked?: boolean;
+  key: string;
+  label: string;
+  lockedTooltip?: string;
+  onClick: () => void;
+}
+
+interface HomeAttentionGroup {
+  actionLabel: string;
+  count: number;
+  items: HomeAttentionItem[];
+  key: string;
+  label: string;
+  onAction: () => void;
+}
+
+const EMPTY_HOME_METRIC = { total: 0, healthy: 0, needsAttention: 0 };
 
 function getResolveRequestDisplayName(
   request: ResolveIssueRequest,
@@ -115,6 +151,167 @@ function getFixGroupKey(request: ResolveIssueRequest): string {
 
 function formatFixGroupLabel(group: Pick<PlannedFixGroup, 'entity' | 'issue'>): string {
   return `${FIX_ENTITY_LABELS[group.entity]} • ${FIX_TYPE_LABELS[group.issue] ?? group.issue}`;
+}
+
+function HomeInventoryMetrics({ metrics }: { metrics: HomeMetric[] }) {
+  return (
+    <section aria-label="Home inventory metrics" className="home-inventory-bar">
+      {metrics.map((metric) => {
+        const isClean = metric.needsAttention === 0;
+        const attentionTone = isClean ? 'clean' : metric.severity;
+
+        return (
+          <div className="home-inventory-cell" key={metric.key}>
+            <div className="home-inventory-label">{metric.label}</div>
+            <div className="home-inventory-total">
+              {metric.total}
+              <span className="home-inventory-unit">{metric.unit}</span>
+            </div>
+            <div className={`home-inventory-attention home-inventory-attention--${attentionTone}`}>
+              {isClean ? (
+                <>
+                  <Check aria-hidden="true" />
+                  All clean
+                </>
+              ) : (
+                <>
+                  <span className="home-inventory-dot" aria-hidden="true" />
+                  {metric.needsAttention} {metric.needsAttention === 1 ? 'needs' : 'need'} attention
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function HomeNeedsAttentionCard({
+  groups,
+  lastCheckedLabel,
+}: {
+  groups: HomeAttentionGroup[];
+  lastCheckedLabel: string;
+}) {
+  const attentionGroups = groups.filter((group) => group.items.length > 0);
+  const cleanGroups = groups.filter((group) => group.items.length === 0);
+  const totalAttention = attentionGroups.reduce((total, group) => total + group.items.length, 0);
+  const cleanCopy = formatCleanGroupCopy(cleanGroups.map((group) => group.label));
+
+  return (
+    <section
+      aria-labelledby="home-needs-attention-title"
+      className={`home-attention-card${totalAttention === 0 ? ' home-attention-card--clean' : ''}`}
+      role="region"
+    >
+      <div className="home-attention-header">
+        <h3 id="home-needs-attention-title">Needs attention</h3>
+      </div>
+
+      <div className="home-attention-body">
+        {totalAttention === 0 ? (
+          <div className="home-attention-all-clean">
+            <div className="home-attention-clean-icon" aria-hidden="true">
+              <Check />
+            </div>
+            <div>
+              <div className="home-attention-clean-title">Everything is in its expected state</div>
+              <div className="home-attention-clean-copy">
+                Canonical sources present, symlinks resolved, no drift across all 3 content types. Last checked {lastCheckedLabel}.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {attentionGroups.map((group, index) => (
+              <div className="home-attention-group" key={group.key}>
+                <div className={`home-attention-group-header${index > 0 ? ' home-attention-group-header--separated' : ''}`}>
+                  <span className="home-attention-group-label">{group.label}</span>
+                  <span className="home-attention-group-count">· {group.count}</span>
+                  <span className="home-attention-group-spacer" />
+                  <button className="home-attention-group-link" type="button" onClick={group.onAction}>
+                    {group.actionLabel}
+                    <ChevronRight aria-hidden="true" />
+                  </button>
+                </div>
+
+                {group.items.map((item) => (
+                  <button className="home-attention-row" key={item.key} type="button" onClick={item.onClick}>
+                    <div className="home-attention-row-main">
+                      <div className="home-attention-row-title">
+                        <span>{item.label}</span>
+                        {item.isLocked ? (
+                          <PluginTooltipIndicator
+                            className="home-attention-row__plugin-indicator"
+                            tooltip={item.lockedTooltip ?? PLUGIN_SKILL_TOOLTIP}
+                          />
+                        ) : null}
+                      </div>
+                      {item.description ? <div className="home-attention-row-description">{item.description}</div> : null}
+                    </div>
+                    <div className="home-attention-row-statuses">
+                      {item.badges.map((badge) => (
+                        <span className={`home-attention-status-pill home-attention-status-pill--${badge.tone}`} key={badge.label}>
+                          <span className="home-attention-status-dot" aria-hidden="true" />
+                          {badge.label}
+                        </span>
+                      ))}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ))}
+
+            {cleanCopy ? (
+              <div className="home-attention-clean-foot">
+                <div className="home-attention-clean-foot-icon" aria-hidden="true">
+                  <Check />
+                </div>
+                <div>
+                  <strong>{cleanCopy.label}</strong> {cleanCopy.verb} fully in sync - no action needed.
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function formatCleanGroupCopy(labels: string[]): { label: string; verb: 'is' | 'are' } | null {
+  if (labels.length === 0) {
+    return null;
+  }
+
+  return {
+    label: labels.join(' & '),
+    verb: labels.length === 1 ? 'is' : 'are',
+  };
+}
+
+function getHomeAttentionBadgeTone(label: string): AttentionBadge['tone'] {
+  if (label === 'Healthy') {
+    return 'healthy';
+  }
+
+  if (label === 'Dismissed') {
+    return 'muted';
+  }
+
+  if (label.includes('Diverged') || label.includes('Definition Mismatch')) {
+    return 'attention';
+  }
+
+  return 'warning';
+}
+
+function toHomeAttentionBadges(labels: string[]): AttentionBadge[] {
+  return labels.map((label) => ({
+    label,
+    tone: getHomeAttentionBadgeTone(label),
+  }));
 }
 
 function RepairSurface({
@@ -307,9 +504,85 @@ export function HomeDashboard({
   const mcpAttentionRows = mcpSections.find((section) => section.tone === 'attention')?.rows ?? [];
   const subagentAttentionRows = subagentSections.find((section) => section.tone === 'attention')?.rows ?? [];
   const lastCheckedLabel = formatLastScanLabel(inventorySnapshot?.scannedAt);
+  const subagentSummary = homeSummary.subagents ?? EMPTY_HOME_METRIC;
   const sourceIndex = inventorySnapshot
     ? new Map(inventorySnapshot.sources.map((source) => [source.id, source]))
     : new Map<string, SkillScanSource>();
+  const homeMetrics: HomeMetric[] = [
+    {
+      key: 'skills',
+      label: 'Skills',
+      total: homeSummary.skills.total,
+      unit: 'on disk',
+      needsAttention: homeSummary.skills.needsAttention,
+      severity: 'alert',
+    },
+    {
+      key: 'subagents',
+      label: 'Subagents',
+      total: subagentSummary.total,
+      unit: 'on disk',
+      needsAttention: subagentSummary.needsAttention,
+      severity: 'warn',
+    },
+    {
+      key: 'mcps',
+      label: 'MCPs',
+      total: homeSummary.mcps.total,
+      unit: 'servers',
+      needsAttention: homeSummary.mcps.needsAttention,
+      severity: 'warn',
+    },
+  ];
+  const attentionGroups: HomeAttentionGroup[] = [
+    {
+      key: 'skills',
+      label: 'Skills',
+      count: skillAttentionRows.length,
+      actionLabel: 'View all skills',
+      onAction: onNavigateToSkills,
+      items: skillAttentionRows.map((skill) => ({
+        badges: toHomeAttentionBadges(getSkillStatusLabels(skill)),
+        description: getSkillRowDescription(skill),
+        isLocked: hasPluginSkillLocation(skill, sourceIndex),
+        key: skill.name,
+        label: getSkillDisplayName(skill),
+        lockedTooltip: PLUGIN_SKILL_TOOLTIP,
+        onClick: () => onSelectSkill(skill.name),
+      })),
+    },
+    {
+      key: 'subagents',
+      label: 'Subagents',
+      count: subagentAttentionRows.length,
+      actionLabel: 'View all subagents',
+      onAction: () => onSelectSubagent(subagentAttentionRows[0]?.name ?? ''),
+      items: subagentAttentionRows.map((subagent) => ({
+        badges: toHomeAttentionBadges(getSubagentStatusLabels(subagent)),
+        description: subagent.description,
+        isLocked: hasPluginSubagentLocation(subagent),
+        key: subagent.name,
+        label: getSubagentDisplayName(subagent),
+        lockedTooltip: PLUGIN_SUBAGENT_TOOLTIP,
+        onClick: () => onSelectSubagent(subagent.name),
+      })),
+    },
+    {
+      key: 'mcps',
+      label: 'MCPs',
+      count: mcpAttentionRows.length,
+      actionLabel: 'View all MCPs',
+      onAction: () => onSelectMcp(mcpAttentionRows[0]?.name ?? ''),
+      items: mcpAttentionRows.map((mcp) => ({
+        badges: toHomeAttentionBadges(getMcpStatusLabels(mcp)),
+        isLocked: hasPluginMcpLocation(mcp),
+        key: mcp.name,
+        label: getMcpDisplayName(mcp),
+        lockedTooltip: PLUGIN_MCP_TOOLTIP,
+        onClick: () => onSelectMcp(mcp.name),
+      })),
+    },
+  ];
   const manualReviewTarget = skillAttentionRows.length > 0
     ? {
         label: 'Skills tab',
@@ -337,41 +610,7 @@ export function HomeDashboard({
       <div className="page-scroll page-scroll--dashboard">
         {inventorySnapshot ? (
           <>
-            <section aria-label="Home summary metrics" className="stat-card-grid">
-              <div className="stat-card">
-                <div className="stat-card-label">Skills</div>
-                <div className="stat-card-row">
-                  <div className="stat-item">
-                    <div className="stat-num">{homeSummary.skills.total}</div>
-                    <div className="stat-sub">on disk</div>
-                  </div>
-                  <div className="stat-divider" />
-                  <div className="stat-item">
-                    <div className={`stat-num${homeSummary.skills.needsAttention > 0 ? ' stat-num--alert' : ' stat-num--muted'}`}>
-                      {homeSummary.skills.needsAttention}
-                    </div>
-                    <div className="stat-sub">need attention</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-card-label">MCPs</div>
-                <div className="stat-card-row">
-                  <div className="stat-item">
-                    <div className="stat-num">{homeSummary.mcps.total}</div>
-                    <div className="stat-sub">servers</div>
-                  </div>
-                  <div className="stat-divider" />
-                  <div className="stat-item">
-                    <div className={`stat-num${homeSummary.mcps.needsAttention > 0 ? ' stat-num--warn' : ' stat-num--muted'}`}>
-                      {homeSummary.mcps.needsAttention}
-                    </div>
-                    <div className="stat-sub">need attention</div>
-                  </div>
-                </div>
-              </div>
-            </section>
+            <HomeInventoryMetrics metrics={homeMetrics} />
 
             <RepairSurface
               autoResolvableRequests={autoResolvableRequests}
@@ -387,52 +626,7 @@ export function HomeDashboard({
               onViewManualIssues={manualReviewTarget.onClick}
             />
 
-            <AttentionGroupCard
-              actionLabel="View all skills"
-              count={skillAttentionRows.length}
-              emptyState={{
-                title: `All ${homeSummary.skills.total} ${homeSummary.skills.total === 1 ? 'skill is' : 'skills are'} in their expected state`,
-                description: `Canonical sources present, symlinks resolved, no version drift. Last checked ${lastCheckedLabel}.`,
-              }}
-              emptyMessage="Nothing needs attention right now."
-              items={skillAttentionRows.map((skill) => ({
-                badges: getSkillStatusLabels(skill).map((label) => ({
-                  label,
-                  tone: getPillToneForSkill(skill),
-                })),
-                description: getSkillRowDescription(skill),
-                isLocked: hasPluginSkillLocation(skill, sourceIndex),
-                key: skill.name,
-                label: getSkillDisplayName(skill),
-                lockedTooltip: PLUGIN_SKILL_TOOLTIP,
-                onClick: () => onSelectSkill(skill.name),
-              }))}
-              onAction={() => onSelectSkill(skillAttentionRows[0]?.name ?? '')}
-              title="Skills needing attention"
-            />
-
-            <AttentionGroupCard
-              actionLabel="View all MCPs"
-              count={mcpAttentionRows.length}
-              emptyState={{
-                title: `All ${homeSummary.mcps.total} MCP ${homeSummary.mcps.total === 1 ? 'server is' : 'servers are'} healthy`,
-                description: `Configs match across all agents, versions aligned, no args drift. Last checked ${lastCheckedLabel}.`,
-              }}
-              emptyMessage="No MCPs need attention right now."
-              items={mcpAttentionRows.map((mcp) => ({
-                badges: getMcpStatusLabels(mcp).map((label) => ({
-                  label,
-                  tone: getPillToneForMcp(mcp),
-                })),
-                isLocked: hasPluginMcpLocation(mcp),
-                key: mcp.name,
-                label: getMcpDisplayName(mcp),
-                lockedTooltip: PLUGIN_MCP_TOOLTIP,
-                onClick: () => onSelectMcp(mcp.name),
-              }))}
-              onAction={() => onSelectMcp(mcpAttentionRows[0]?.name ?? '')}
-              title="MCPs needing attention"
-            />
+            <HomeNeedsAttentionCard groups={attentionGroups} lastCheckedLabel={lastCheckedLabel} />
           </>
         ) : (
           <EmptyStatePanel message="Loading your inventory summary…" />
@@ -449,4 +643,8 @@ function hasPluginSkillLocation(skill: SkillRecord, sourceIndex: Map<string, Ski
 
 function hasPluginMcpLocation(mcp: McpRecord): boolean {
   return mcp.locations.some((location) => location.provenance?.kind === 'plugin');
+}
+
+function hasPluginSubagentLocation(subagent: SubagentRecord): boolean {
+  return subagent.locations.some((location) => location.provenance?.kind === 'plugin');
 }

@@ -178,6 +178,12 @@ describe('inventory view ordering', () => {
       attentionMcps: 0,
       dismissedAttentionMcps: 4,
     };
+    snapshot.subagentCounts = {
+      totalSubagents: 6,
+      healthySubagents: 4,
+      attentionSubagents: 2,
+      dismissedAttentionSubagents: 1,
+    };
     snapshot.homeSummary = {
       skills: {
         total: 92,
@@ -198,6 +204,11 @@ describe('inventory view ordering', () => {
       },
       mcps: {
         needsAttention: 0,
+      },
+      subagents: {
+        total: 6,
+        healthy: 4,
+        needsAttention: 2,
       },
       installedAgents: snapshot.agentCounts?.installedAgents,
     });

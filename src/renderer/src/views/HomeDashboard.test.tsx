@@ -29,6 +29,31 @@ describe('HomeDashboard', () => {
     expect(heading.parentElement).toHaveTextContent(/^Home$/);
   });
 
+  it('renders three inventory stat boxes without the future Commands box', () => {
+    renderDashboard();
+
+    const metrics = screen.getByLabelText('Home inventory metrics');
+    expect(within(metrics).getByText('Skills')).toBeInTheDocument();
+    expect(within(metrics).getByText('Subagents')).toBeInTheDocument();
+    expect(within(metrics).getByText('MCPs')).toBeInTheDocument();
+    expect(within(metrics).queryByText('Commands')).not.toBeInTheDocument();
+  });
+
+  it('groups skill, subagent, and MCP attention rows in one table', () => {
+    renderDashboard();
+
+    const table = screen.getByRole('region', { name: /^Needs attention$/i });
+    expect(within(table).getByRole('heading', { name: /^Needs attention$/i })).toBeInTheDocument();
+    expect(table.querySelector('.home-attention-body')).not.toBeNull();
+    expect(within(table).getByText('Skills')).toBeInTheDocument();
+    expect(within(table).getByText('Subagents')).toBeInTheDocument();
+    expect(within(table).getByText('MCPs')).toBeInTheDocument();
+    expect(within(table).getByRole('button', { name: /reviewer/i })).toBeInTheDocument();
+    expect(within(table).getByRole('button', { name: /broken-mcp/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Skills needing attention$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^MCPs needing attention$/i })).not.toBeInTheDocument();
+  });
+
   it('renders MCP attention rows without a subtitle under the title', () => {
     renderDashboard();
 
@@ -69,10 +94,10 @@ describe('HomeDashboard', () => {
       inventorySnapshot,
     });
 
-    expect(screen.getByText('All 53 skills are in their expected state')).toBeInTheDocument();
-    expect(screen.getByText('Canonical sources present, symlinks resolved, no version drift. Last checked 2m ago.')).toBeInTheDocument();
-    expect(screen.getByText('All 5 MCP servers are healthy')).toBeInTheDocument();
-    expect(screen.getByText('Configs match across all agents, versions aligned, no args drift. Last checked 2m ago.')).toBeInTheDocument();
+    expect(screen.getByText('Everything is in its expected state')).toBeInTheDocument();
+    expect(screen.getByText('Canonical sources present, symlinks resolved, no drift across all 3 content types. Last checked 2m ago.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Skills needing attention$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^MCPs needing attention$/i })).not.toBeInTheDocument();
   });
 
   it('renders the no-safe-fixes state and routes users to skills', () => {
@@ -373,6 +398,10 @@ describe('HomeDashboard', () => {
     const pluginMcpRow = screen.getByRole('button', { name: /signalMap/i });
     expect(pluginMcpRow).not.toHaveTextContent('signal-tools:');
     expect(pluginMcpRow).toHaveAccessibleName(/This skill was installed via one or more plugins/i);
+
+    const pluginSubagentRow = screen.getByRole('button', { name: /deployment-expert/i });
+    expect(pluginSubagentRow).not.toHaveTextContent('sandbox-plugin-pack:');
+    expect(pluginSubagentRow).toHaveAccessibleName(/This subagent was installed via one or more plugins/i);
   });
 });
 

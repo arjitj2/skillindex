@@ -250,10 +250,7 @@ describe('App shell inventory views', () => {
   }
 
   function getHomeAttentionSection() {
-    const heading = screen.getByRole('heading', { name: /^Skills needing attention$/i, level: 3 });
-    const section = heading.closest('section');
-    expect(section).not.toBeNull();
-    return section as HTMLElement;
+    return screen.getByRole('region', { name: /^Needs attention$/i });
   }
 
   async function openAgents() {
@@ -770,32 +767,33 @@ describe('App shell inventory views', () => {
     expect(screen.queryByText('App-made changes will appear here.')).not.toBeInTheDocument();
   });
 
-  it('shows only the approved Home summary metrics', async () => {
+  it('shows only the approved Home inventory metrics', async () => {
     render(<App />);
 
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     expect(document.querySelectorAll('.metric-card-icon')).toHaveLength(0);
-    expect(document.querySelectorAll('.stat-card')).toHaveLength(2);
+    expect(document.querySelectorAll('.home-inventory-cell')).toHaveLength(3);
     expect(getHomeStatValue('Skills', 'on disk')).toBe('8');
     expect(getHomeStatValue('Skills', 'need attention')).toBe('3');
+    expect(getHomeStatValue('Subagents', 'on disk')).toBe('0');
+    expect(getHomeStatValue('Subagents', 'need attention')).toBe('0');
     expect(getHomeStatValue('MCPs', 'servers')).toBe('6');
     expect(getHomeStatValue('MCPs', 'need attention')).toBe('1');
-    expect(document.querySelector('.stat-card-label')?.textContent).not.toBe('Agents');
+    expect(document.querySelector('.home-inventory-label')?.textContent).not.toBe('Agents');
     expect(screen.queryByText(/^All Skills$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Drift$/i)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Home summary metrics/i)).not.toHaveTextContent(/^Plugins$/i);
+    expect(screen.queryByLabelText(/Home inventory metrics/i)).not.toHaveTextContent(/^Plugins$/i);
+    expect(screen.queryByLabelText(/Home inventory metrics/i)).not.toHaveTextContent(/^Commands$/i);
   });
 
-  it('shows positive healthy states on Home when no Skills or MCPs need attention', async () => {
+  it('shows a positive healthy state on Home when no content needs attention', async () => {
     readCachedInventoryMock.mockResolvedValue(createAllHealthyInventorySnapshot());
     scanInventoryMock.mockResolvedValue(createAllHealthyInventorySnapshot());
 
     render(<App />);
 
-    expect(await screen.findByText('All 8 skills are in their expected state')).toBeInTheDocument();
-    expect(screen.getByText(/Canonical sources present, symlinks resolved, no version drift\. Last checked/i)).toBeInTheDocument();
-    expect(screen.getByText('All 6 MCP servers are healthy')).toBeInTheDocument();
-    expect(screen.getByText(/Configs match across all agents, versions aligned, no args drift\. Last checked/i)).toBeInTheDocument();
+    expect(await screen.findByText('Everything is in its expected state')).toBeInTheDocument();
+    expect(screen.getByText(/Canonical sources present, symlinks resolved, no drift across all 3 content types\. Last checked/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /diverged-drift-skill/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /broken-mcp/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/Overview queue/i)).not.toBeInTheDocument();
@@ -868,18 +866,17 @@ describe('App shell inventory views', () => {
     render(<App />);
 
     await screen.findByRole('button', { name: /diverged-drift-skill/i });
-    const skillSection = getHomeAttentionSection();
-    const mcpHeading = screen.getByRole('heading', { name: /^MCPs needing attention$/i, level: 3 });
-    const mcpSection = mcpHeading.closest('section');
+    const attentionSection = getHomeAttentionSection();
 
-    expect(mcpSection).not.toBeNull();
     expect(screen.queryByText(/Overview queue/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Open any skill or MCP below/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/deserves a closer look/i)).not.toBeInTheDocument();
-    expect(within(skillSection).queryByRole('table')).not.toBeInTheDocument();
-    expect(within(skillSection).getByRole('button', { name: /diverged-drift-skill/i })).toBeInTheDocument();
-    expect(within(skillSection).getByRole('button', { name: /identical-drift-skill/i })).toBeInTheDocument();
-    expect(within(mcpSection as HTMLElement).getByRole('button', { name: /broken-mcp/i })).toBeInTheDocument();
+    expect(within(attentionSection).queryByRole('table')).not.toBeInTheDocument();
+    expect(within(attentionSection).getByText('Skills')).toBeInTheDocument();
+    expect(within(attentionSection).getByText('MCPs')).toBeInTheDocument();
+    expect(within(attentionSection).getByRole('button', { name: /diverged-drift-skill/i })).toBeInTheDocument();
+    expect(within(attentionSection).getByRole('button', { name: /identical-drift-skill/i })).toBeInTheDocument();
+    expect(within(attentionSection).getByRole('button', { name: /broken-mcp/i })).toBeInTheDocument();
   });
 
   it('keeps Home in a loading state until the first truthful inventory snapshot arrives', async () => {
@@ -892,12 +889,12 @@ describe('App shell inventory views', () => {
 
     expect(await screen.findByRole('heading', { name: /^Home$/i, level: 2 })).toBeInTheDocument();
     expect(screen.getByText(/Loading your inventory summary/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Home summary metrics/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Home inventory metrics/i)).not.toBeInTheDocument();
 
     cachedInventoryDeferred.resolve(null);
     liveInventoryDeferred.resolve(createOperationalBaselineInventorySnapshot());
 
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     expect(getHomeStatValue('Skills', 'on disk')).toBe('7');
     expect(getHomeAttentionSection()).toBeInTheDocument();
   });
@@ -916,8 +913,8 @@ describe('App shell inventory views', () => {
     render(<App />);
 
     expect(screen.getByRole('status', { name: /Loading Skill Index/i })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Home summary metrics/i)).not.toBeInTheDocument();
-    expect(await screen.findByLabelText(/Home summary metrics/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Home inventory metrics/i)).not.toBeInTheDocument();
+    expect(await screen.findByLabelText(/Home inventory metrics/i)).toBeInTheDocument();
     expect(getHomeStatValue('Skills', 'need attention')).toBe('3');
     expect(within(getPrimaryNav()).getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills38$/);
     expect(within(getPrimaryNav()).getByRole('button', { name: /^MCPs/i })).toHaveTextContent(/^MCPs16$/);
@@ -1105,7 +1102,7 @@ describe('App shell inventory views', () => {
 
     render(<App />);
 
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));
 
     await waitFor(() => {
@@ -1328,7 +1325,7 @@ describe('App shell inventory views', () => {
   it('reconciles Home summary counts with Skills, MCPs, and Agents partitions while keeping dismissed issues out of tab badges', async () => {
     render(<App />);
 
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     expect(getHomeStatValue('Skills', 'on disk')).toBe('8');
     expect(getHomeStatValue('Skills', 'need attention')).toBe('3');
     expect(getHomeStatValue('MCPs', 'servers')).toBe('6');
@@ -1774,7 +1771,7 @@ describe('App shell inventory views', () => {
     expect(screen.getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills28$/);
 
     fireEvent.click(screen.getByRole('button', { name: /^Home$/i }));
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     expect(getHomeStatValue('Skills', 'on disk')).toBe('8');
     expect(getHomeStatValue('Skills', 'need attention')).toBe('2');
   });
@@ -1954,7 +1951,7 @@ describe('App shell inventory views', () => {
 
     render(<App />);
 
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
       new RegExp(`^Agents${createOperationalBaselineInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
@@ -1999,7 +1996,7 @@ describe('App shell inventory views', () => {
     expect(screen.getByText('vanishing-muted-skill')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Home$/i }));
-    await screen.findByLabelText(/Home summary metrics/i);
+    await screen.findByLabelText(/Home inventory metrics/i);
     expect(getHomeStatValue('Skills', 'need attention')).toBe('3');
   });
 
@@ -2538,13 +2535,27 @@ function createShellState(overrides: Partial<AppShellState> = {}): AppShellState
 }
 
 function getHomeStatValue(cardLabel: string, subLabel: string): string {
-  const cards = [...document.querySelectorAll<HTMLElement>('.stat-card')];
-  const card = cards.find((candidate) => candidate.querySelector('.stat-card-label')?.textContent === cardLabel);
-  const item = [...(card?.querySelectorAll<HTMLElement>('.stat-item') ?? [])].find(
-    (candidate) => candidate.querySelector('.stat-sub')?.textContent === subLabel,
-  );
+  const cards = [...document.querySelectorAll<HTMLElement>('.home-inventory-cell')];
+  const card = cards.find((candidate) => candidate.querySelector('.home-inventory-label')?.textContent === cardLabel);
+  if (!card) {
+    return '';
+  }
 
-  return item?.querySelector('.stat-num')?.textContent ?? '';
+  if (subLabel === 'need attention') {
+    const attentionText = card.querySelector('.home-inventory-attention')?.textContent ?? '';
+    return attentionText.match(/\d+/)?.[0] ?? '0';
+  }
+
+  const total = card.querySelector('.home-inventory-total');
+  const unit = card.querySelector('.home-inventory-unit');
+  if (unit?.textContent !== subLabel) {
+    return '';
+  }
+
+  return [...(total?.childNodes ?? [])]
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent?.trim() ?? '')
+    .join('');
 }
 
 function createSettingsState(
