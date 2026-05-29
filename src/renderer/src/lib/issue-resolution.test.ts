@@ -1,13 +1,15 @@
-import type { AgentMcpParserKind, McpRecord, SkillInventorySnapshot, SkillRecord } from '@shared/contracts';
+import type { AgentMcpParserKind, McpRecord, SkillInventorySnapshot, SkillRecord, SubagentRecord } from '@shared/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { representativeInventorySnapshot } from '../representative-preview-data';
-import { buildMcpInspectorModel, buildSkillInspectorModel } from './detail-inspector-model';
+import { buildMcpInspectorModel, buildSkillInspectorModel, buildSubagentInspectorModel } from './detail-inspector-model';
 import {
   getAutoResolvableMcpRequests,
   getAutoResolvableSkillRequests,
+  getAutoResolvableSubagentRequests,
   getMcpResolveActionState,
   getSkillResolveActionState,
+  getSubagentResolveActionState,
 } from './issue-resolution';
 
 const sourceIndex = new Map(representativeInventorySnapshot.sources.map((source) => [source.id, source]));
@@ -19,6 +21,14 @@ function findRepresentativeMcp(name: string): McpRecord {
     throw new Error(`Missing representative MCP fixture: ${name}`);
   }
   return mcp;
+}
+
+function findRepresentativeSubagent(name: string): SubagentRecord {
+  const subagent = representativeInventorySnapshot.subagents?.find((entry) => entry.name === name);
+  if (!subagent) {
+    throw new Error(`Missing representative subagent fixture: ${name}`);
+  }
+  return subagent;
 }
 
 describe('issue resolution request builder', () => {
@@ -153,6 +163,27 @@ describe('issue resolution request builder', () => {
         selectedVariantPath: '~/.skillindex/sandbox/.agents/mcp.json',
       },
     ]);
+  });
+
+  it('includes supported missing-from-agents subagent repairs in Home auto-resolve batches', () => {
+    expect(getAutoResolvableSubagentRequests(representativeInventorySnapshot)).toEqual([
+      {
+        entity: 'subagent',
+        issue: 'missing-from-agents',
+        subagentName: 'reviewer',
+        selectedVariantPath: '~/.skillindex/sandbox/.agents/agents/reviewer.md',
+      },
+    ]);
+  });
+
+  it('keeps plugin-owned subagent repairs out of Home auto-resolve batches', () => {
+    const pluginSubagent = findRepresentativeSubagent('sandbox-plugin-pack:deployment-expert');
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      subagents: [pluginSubagent],
+    };
+
+    expect(getAutoResolvableSubagentRequests(snapshot)).toEqual([]);
   });
 
   it('keeps plugin-owned missing-from-agents MCP repairs out of Home auto-resolve batches', () => {
@@ -931,6 +962,129 @@ describe('issue resolution request builder', () => {
         mcpName: 'missing-from-agents-mcp',
         selectedVariantPath: '/Users/tester/.claude.json',
       },
+    });
+  });
+
+  it('auto-selects the canonical subagent definition for missing-from-agents', () => {
+    const subagent = findRepresentativeSubagent('reviewer');
+    const model = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-from-agents',
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    expect(getSubagentResolveActionState(subagent, model, representativeInventorySnapshot)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'subagent',
+        issue: 'missing-from-agents',
+        subagentName: 'reviewer',
+        selectedVariantPath: '~/.skillindex/sandbox/.agents/agents/reviewer.md',
+      },
+    });
+  });
+
+  it('allows subagent repairs for YAML targets', () => {
+    const baseSubagent = findRepresentativeSubagent('reviewer');
+    const targetAgentId = 'target-yaml-subagent';
+    const subagent: SubagentRecord = {
+      ...baseSubagent,
+      missingLocations: [{
+        agentId: targetAgentId,
+        agentLabel: 'YAML Agent',
+        scope: 'live',
+        directoryPath: '/Users/tester/yaml/agents',
+        path: '/Users/tester/yaml/agents/reviewer.yaml',
+        format: 'yaml',
+        supportStatus: 'supported',
+      }],
+    };
+    const baseAgent = representativeInventorySnapshot.agents!.find((agent) => agent.id === 'sandbox-codex')!;
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      subagents: [subagent],
+      agents: [
+        ...(representativeInventorySnapshot.agents ?? []),
+        {
+          ...baseAgent,
+          id: targetAgentId,
+          label: 'YAML Agent',
+          scope: 'live',
+          writable: true,
+          installState: 'installed',
+          subagentParserKind: 'yaml',
+          subagentsLocation: {
+            state: 'available',
+            path: '/Users/tester/yaml/agents',
+            displayPath: '/Users/tester/yaml/agents',
+            exists: true,
+          },
+        },
+      ],
+    };
+    const localAgentIndex = new Map((snapshot.agents ?? []).map((agent) => [agent.id, agent]));
+    const model = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-from-agents',
+      selectedVariantPath: null,
+    }, localAgentIndex);
+
+    expect(getSubagentResolveActionState(subagent, model, snapshot)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'subagent',
+        issue: 'missing-from-agents',
+        subagentName: 'reviewer',
+        selectedVariantPath: '~/.skillindex/sandbox/.agents/agents/reviewer.md',
+      },
+    });
+  });
+
+  it('keeps subagent repairs disabled for installed agents with unsupported parser kinds', () => {
+    const baseSubagent = findRepresentativeSubagent('reviewer');
+    const targetAgentId = 'target-unknown-subagent';
+    const subagent: SubagentRecord = {
+      ...baseSubagent,
+      missingLocations: [{
+        agentId: targetAgentId,
+        agentLabel: 'Unknown Agent',
+        scope: 'live',
+        directoryPath: '/Users/tester/unknown/agents',
+        path: '/Users/tester/unknown/agents/reviewer.agent',
+        format: 'unknown',
+        supportStatus: 'supported',
+      }],
+    };
+    const baseAgent = representativeInventorySnapshot.agents!.find((agent) => agent.id === 'sandbox-codex')!;
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      subagents: [subagent],
+      agents: [
+        ...(representativeInventorySnapshot.agents ?? []),
+        {
+          ...baseAgent,
+          id: targetAgentId,
+          label: 'Unknown Agent',
+          scope: 'live',
+          writable: true,
+          installState: 'installed',
+          subagentParserKind: 'unknown',
+          subagentsLocation: {
+            state: 'available',
+            path: '/Users/tester/unknown/agents',
+            displayPath: '/Users/tester/unknown/agents',
+            exists: true,
+          },
+        },
+      ],
+    };
+    const localAgentIndex = new Map((snapshot.agents ?? []).map((agent) => [agent.id, agent]));
+    const model = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-from-agents',
+      selectedVariantPath: null,
+    }, localAgentIndex);
+
+    expect(getSubagentResolveActionState(subagent, model, snapshot)).toEqual({
+      disabledReason: 'This subagent can only be resolved when every target location is writable and uses a supported format.',
+      request: null,
     });
   });
 

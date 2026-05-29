@@ -9,7 +9,7 @@ import { NavIcon, type NavIconName } from './NavIcon';
 
 export interface AppNavItem {
   badge?: number;
-  icon: Extract<NavIconName, 'home' | 'skills' | 'mcps' | 'agents' | 'plugins'>;
+  icon: Extract<NavIconName, 'home' | 'skills' | 'mcps' | 'subagents' | 'agents' | 'plugins'>;
   label: string;
   meta?: number;
   tab: Exclude<PrimaryTab, 'audit' | 'settings'>;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { Undo2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Undo2 } from 'lucide-react';
 
 import {
   type AddSkillRequest,
@@ -17,6 +17,7 @@ import {
   type SettingsState,
   type SkillInventorySnapshot,
   type SkillIssueReason,
+  type SubagentIssueReason,
 } from '@shared/contracts';
 import { CANONICAL_USER_SKILLS_DISPLAY_PATH } from '@shared/skill-path-policy';
 
@@ -31,30 +32,35 @@ import {
   loadInventorySnapshot,
   waitForStartupObservation,
 } from './app/bootstrap';
-import { getAutoResolvableMcpRequests, getAutoResolvableSkillRequests } from './lib/issue-resolution';
+import { getAutoResolvableMcpRequests, getAutoResolvableSkillRequests, getAutoResolvableSubagentRequests } from './lib/issue-resolution';
 import type { PendingInventoryOperation } from './lib/pending-inventory-operation';
 import { AppSidebar } from './components/AppSidebar';
 import {
   buildMcpInspectorModel,
   buildSkillInspectorModel,
+  buildSubagentInspectorModel,
   type InspectorProvenanceSummaryRow,
 } from './lib/detail-inspector-model';
 import {
   compareAgentsForTable,
   filterMcpRowsByStatus,
+  filterSubagentRowsByStatus,
   filterSkillRowsByStatus,
   formatLastScanLabel,
   type McpStatusFilter,
   type SkillStatusFilter,
+  type SubagentStatusFilter,
 } from './lib/inventory-presentation';
 import {
   filterAgentRows,
   filterMcpRows,
   filterPluginRows,
   filterSkillRows,
+  filterSubagentRows,
   getHomeSummary,
   getMcpTableRows,
   getSkillTableRows,
+  getSubagentTableRows,
   type PrimaryTab,
 } from './inventory-view-model';
 import { AgentsWorkspaceView } from './views/AgentsWorkspaceView';
@@ -65,6 +71,7 @@ import { OnboardingFlow } from './views/OnboardingFlow';
 import { PluginsWorkspaceView } from './views/PluginsWorkspaceView';
 import { SettingsWorkspaceView } from './views/SettingsWorkspaceView';
 import { SkillsWorkspaceView } from './views/SkillsWorkspaceView';
+import { SubagentsWorkspaceView } from './views/SubagentsWorkspaceView';
 
 function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot): ResolveIssueRequest[] {
   const sourceIndex = new Map(snapshot.sources.map((source) => [source.id, source]));
@@ -72,6 +79,7 @@ function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot):
   return [
     ...getAutoResolvableSkillRequests(snapshot, sourceIndex),
     ...getAutoResolvableMcpRequests(snapshot),
+    ...getAutoResolvableSubagentRequests(snapshot),
   ];
 }
 
@@ -83,7 +91,7 @@ interface OnboardingPreferredSourceSelection {
 function getResolveIssueRequestKey(request: ResolveIssueRequest): string {
   return [
     request.entity,
-    request.skillName ?? request.mcpName,
+    request.skillName ?? request.mcpName ?? request.subagentName,
     request.issue,
     request.selectedVariantPath ?? '',
   ].join(':');
@@ -110,6 +118,13 @@ function getErrorTrace(error: unknown): string | null {
   return typeof error === 'string' ? error : null;
 }
 
+function normalizeTraceText(trace: string): string {
+  return trace
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t');
+}
+
 function getPluginSelectionKey(plugin: PluginRecord): string {
   return [
     plugin.host,
@@ -134,6 +149,7 @@ export default function App() {
   const initialInventorySnapshot = useRef<SkillInventorySnapshot | null>(getInitialInventorySnapshot()).current;
   const skillSearchInputRef = useRef<HTMLInputElement | null>(null);
   const mcpSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const subagentSearchInputRef = useRef<HTMLInputElement | null>(null);
   const agentSearchInputRef = useRef<HTMLInputElement | null>(null);
   const pluginSearchInputRef = useRef<HTMLInputElement | null>(null);
   const auditSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -143,11 +159,11 @@ export default function App() {
   const [inventorySnapshot, setInventorySnapshot] = useState<SkillInventorySnapshot | null>(initialInventorySnapshot);
   const latestInventorySnapshotRef = useRef<SkillInventorySnapshot | null>(initialInventorySnapshot);
   const mcpConnectivityRunIdRef = useRef(0);
-  const mcpConnectivityErrorMessageRef = useRef<string | null>(null);
   const [inventorySourceMode, setInventorySourceMode] = useState<InventorySourceMode>('live');
   const [activeTab, setActiveTab] = useState<PrimaryTab>('home');
   const [skillSearchQuery, setSkillSearchQuery] = useState('');
   const [mcpSearchQuery, setMcpSearchQuery] = useState('');
+  const [subagentSearchQuery, setSubagentSearchQuery] = useState('');
   const [agentSearchQuery, setAgentSearchQuery] = useState('');
   const [pluginSearchQuery, setPluginSearchQuery] = useState('');
   const [auditSearchQuery, setAuditSearchQuery] = useState('');
@@ -155,8 +171,10 @@ export default function App() {
   const [selectedPluginKey, setSelectedPluginKey] = useState<string | null>(null);
   const [skillStatusFilter, setSkillStatusFilter] = useState<SkillStatusFilter>('all');
   const [mcpStatusFilter, setMcpStatusFilter] = useState<McpStatusFilter>('all');
+  const [subagentStatusFilter, setSubagentStatusFilter] = useState<SubagentStatusFilter>('all');
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
   const [selectedMcpName, setSelectedMcpName] = useState<string | null>(null);
+  const [selectedSubagentName, setSelectedSubagentName] = useState<string | null>(null);
   const [customScanPathInput, setCustomScanPathInput] = useState('');
   const [preferredCanonicalSourcePathInput, setPreferredCanonicalSourcePathInput] = useState('');
   const [, setSettingsMessage] = useState<string | null>(null);
@@ -171,8 +189,11 @@ export default function App() {
     id: number;
     tone: 'error' | 'success';
     title: string;
+    trace?: string;
     undoOperationId?: string;
   } | null>(null);
+  const [expandedToastTraceId, setExpandedToastTraceId] = useState<number | null>(null);
+  const [toastTraceCopyState, setToastTraceCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [isUndoingToastOperation, setIsUndoingToastOperation] = useState(false);
   const [pendingInventoryOperation, setPendingInventoryOperation] = useState<PendingInventoryOperation | null>(null);
   const [isAutoResolving, setIsAutoResolving] = useState(false);
@@ -186,14 +207,13 @@ export default function App() {
   const [selectedSkillVariantPath, setSelectedSkillVariantPath] = useState<string | null>(null);
   const [selectedMcpProblemKey, setSelectedMcpProblemKey] = useState<McpIssueReason | null>(null);
   const [selectedMcpVariantPath, setSelectedMcpVariantPath] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [selectedSubagentProblemKey, setSelectedSubagentProblemKey] = useState<SubagentIssueReason | null>(null);
+  const [selectedSubagentVariantPath, setSelectedSubagentVariantPath] = useState<string | null>(null);
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus>({ phase: 'disabled' });
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const didRequestUpdateInstallRef = useRef(false);
   const [isPreviewingOnboarding, setIsPreviewingOnboarding] = useState(false);
   const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false);
-  const [onboardingErrorMessage, setOnboardingErrorMessage] = useState<string | null>(null);
-  const [onboardingErrorTrace, setOnboardingErrorTrace] = useState<string | null>(null);
 
   const applyInventorySnapshot = useCallback(
     (nextInventorySnapshot: SkillInventorySnapshot, preferredSkillName?: string | null) => {
@@ -234,16 +254,35 @@ export default function App() {
     description: string,
     undoOperation?: AuditOperation | null,
     tone: 'error' | 'success' = 'success',
+    trace?: string | null,
   ) => {
     appToastIdRef.current += 1;
+    setExpandedToastTraceId(null);
+    setToastTraceCopyState('idle');
     setAppToast({
       id: appToastIdRef.current,
       tone,
       title,
       description,
+      trace: trace ? normalizeTraceText(trace) : undefined,
       undoOperationId: undoOperation?.undoState === 'available' ? undoOperation.id : undefined,
     });
   }, []);
+
+  const showErrorToast = useCallback((
+    title: string,
+    error: unknown,
+    fallbackMessage = 'Unknown preload error',
+    traceOverride?: string | null,
+  ): string => {
+    const description = typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : fallbackMessage;
+    showAppToast(title, description, null, 'error', traceOverride ?? getErrorTrace(error));
+    return description;
+  }, [showAppToast]);
 
   const showAppToastWithLatestUndo = useCallback(async (
     title: string,
@@ -266,9 +305,6 @@ export default function App() {
     const runId = mcpConnectivityRunIdRef.current + 1;
     mcpConnectivityRunIdRef.current = runId;
     setIsTestingMcpConnectivity(true);
-    setErrorMessage((currentMessage) =>
-      currentMessage === mcpConnectivityErrorMessageRef.current ? null : currentMessage);
-    mcpConnectivityErrorMessageRef.current = null;
 
     void desktopApi.testMcpConnectivity()
       .then((nextInventorySnapshot) => {
@@ -276,17 +312,13 @@ export default function App() {
           return;
         }
         applyInventorySnapshot(nextInventorySnapshot);
-        setErrorMessage((currentMessage) =>
-          currentMessage === mcpConnectivityErrorMessageRef.current ? null : currentMessage);
       })
       .catch((error) => {
         if (runId !== mcpConnectivityRunIdRef.current) {
           return;
         }
 
-        const message = error instanceof Error ? error.message : 'Unknown preload error';
-        mcpConnectivityErrorMessageRef.current = message;
-        setErrorMessage(message);
+        showErrorToast('MCP connectivity failed', error);
       })
       .finally(() => {
         if (runId !== mcpConnectivityRunIdRef.current) {
@@ -294,21 +326,17 @@ export default function App() {
         }
         setIsTestingMcpConnectivity(false);
       });
-  }, [applyInventorySnapshot, desktopApi]);
+  }, [applyInventorySnapshot, desktopApi, showErrorToast]);
 
   const cancelMcpConnectivityTest = useCallback(() => {
-    const previousConnectivityError = mcpConnectivityErrorMessageRef.current;
     mcpConnectivityRunIdRef.current += 1;
-    mcpConnectivityErrorMessageRef.current = null;
     setIsTestingMcpConnectivity(false);
-    setErrorMessage((currentMessage) =>
-      currentMessage === previousConnectivityError ? null : currentMessage);
 
     void desktopApi.cancelMcpConnectivityTest()
       .catch((error) => {
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        showErrorToast('MCP connectivity cancellation failed', error);
       });
-  }, [desktopApi]);
+  }, [desktopApi, showErrorToast]);
 
   const triggerRescan = useCallback(async ({
     pendingOperation = null,
@@ -339,7 +367,6 @@ export default function App() {
         verifyMcpConnectivity === undefined ? undefined : { verifyMcpConnectivity },
       );
       applyInventorySnapshot(nextInventorySnapshot);
-      setErrorMessage(null);
       if (showSuccessToast) {
         showAppToast('Inventory refreshed', 'Manual rescan completed successfully.');
       }
@@ -348,7 +375,7 @@ export default function App() {
       if (showSuccessToast) {
         setAppToast(null);
       }
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      showErrorToast('Inventory refresh failed', error);
       return false;
     } finally {
       setIsRescanning(false);
@@ -356,7 +383,7 @@ export default function App() {
         setPendingInventoryOperation(null);
       }
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToast]);
+  }, [applyInventorySnapshot, desktopApi, showAppToast, showErrorToast]);
 
   const triggerManualRescan = useCallback(async () => {
     const didRescan = await triggerRescan({
@@ -373,15 +400,32 @@ export default function App() {
     if (!appToast) {
       return;
     }
+    if (appToast.trace && expandedToastTraceId === appToast.id) {
+      return;
+    }
 
     const timeoutId = window.setTimeout(() => {
       setAppToast((currentToast) => (currentToast?.id === appToast.id ? null : currentToast));
-    }, 2800);
+    }, appToast.trace ? 8000 : 2800);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [appToast]);
+  }, [appToast, expandedToastTraceId]);
+
+  useEffect(() => {
+    if (toastTraceCopyState === 'idle') {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setToastTraceCopyState('idle');
+    }, toastTraceCopyState === 'copied' ? 1800 : 2400);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [toastTraceCopyState]);
 
   useEffect(() => {
     if (!inventorySnapshot?.scannedAt) {
@@ -423,7 +467,7 @@ export default function App() {
           return;
         }
 
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        showErrorToast('Startup failed', error);
       } finally {
         if (isMounted) {
           setHasLoadedStartupState(true);
@@ -455,7 +499,7 @@ export default function App() {
           return;
         }
 
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        showErrorToast('Inventory cache failed', error);
       }
 
       try {
@@ -466,13 +510,12 @@ export default function App() {
         }
 
         applyInventorySnapshot(nextInventorySnapshot);
-        setErrorMessage(null);
       } catch (error) {
         if (!isMounted) {
           return;
         }
 
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        showErrorToast('Inventory load failed', error);
       }
     };
 
@@ -482,17 +525,15 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, [applyInventorySnapshot, desktopApi, devApi]);
+  }, [applyInventorySnapshot, desktopApi, devApi, showErrorToast]);
 
   useEffect(() => {
     return desktopApi.onInventoryUpdated((nextInventorySnapshot) => {
       applyInventorySnapshot(nextInventorySnapshot);
       setIsResolvingIssue(false);
       setIsDismissingDrift(false);
-      setErrorMessage(null);
     });
   }, [applyInventorySnapshot, desktopApi]);
-
   useEffect(() => {
     let isMounted = true;
     void desktopApi.readUpdateStatus()
@@ -557,13 +598,13 @@ export default function App() {
         await showAppToastWithLatestUndo('Settings updated', successMessage);
       } catch (error) {
         setSettingsMessage(null);
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        showErrorToast('Settings update failed', error);
       } finally {
         setIsUpdatingSettings(false);
         setPendingInventoryOperation(null);
       }
     },
-    [inventorySourceMode, showAppToastWithLatestUndo, startMcpConnectivityTest, triggerRescan],
+    [inventorySourceMode, showAppToastWithLatestUndo, showErrorToast, startMcpConnectivityTest, triggerRescan],
   );
 
   const handleAddCustomScanPath = useCallback(
@@ -671,7 +712,6 @@ export default function App() {
     async (visible: boolean) => {
       setIsUpdatingSettings(true);
       setSettingsMessage(null);
-      setErrorMessage(null);
 
       try {
         const nextSettingsState = await desktopApi.setDevSidebarInventorySourceSwitcherVisible(visible);
@@ -683,17 +723,17 @@ export default function App() {
         await showAppToastWithLatestUndo('Settings updated', successMessage);
       } catch (error) {
         setSettingsMessage(null);
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+        showErrorToast('Settings update failed', error);
       } finally {
         setIsUpdatingSettings(false);
       }
     },
-    [desktopApi, showAppToastWithLatestUndo],
+    [desktopApi, showAppToastWithLatestUndo, showErrorToast],
   );
 
   const handleSeedRepresentativeFixtures = useCallback(async () => {
     if (!devApi) {
-      setErrorMessage('Representative sandbox controls are only available in development.');
+      showErrorToast('Sandbox reset unavailable', 'Representative sandbox controls are only available in development.');
       return;
     }
 
@@ -705,7 +745,6 @@ export default function App() {
       detail: 'Rebuilding fixtures and rescanning the representative sandbox.',
     });
     setSettingsMessage(null);
-    setErrorMessage(null);
 
     try {
       const seededFixtures = await devApi.seedRepresentativeFixtures();
@@ -717,21 +756,19 @@ export default function App() {
       await showAppToastWithLatestUndo('Sandbox reset', 'Representative fixtures were reset.');
     } catch (error) {
       setSettingsMessage(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      showErrorToast('Sandbox reset failed', error);
     } finally {
       setIsSeedingFixtures(false);
       setPendingInventoryOperation(null);
     }
-  }, [applyInventorySnapshot, desktopApi, devApi, showAppToastWithLatestUndo]);
+  }, [applyInventorySnapshot, desktopApi, devApi, showAppToastWithLatestUndo, showErrorToast]);
 
   const handleAddSkill = useCallback(async (request: AddSkillRequest) => {
     setIsAddingSkill(true);
-    setErrorMessage(null);
 
     try {
       const nextInventorySnapshot = await desktopApi.addSkill(request);
       applyInventorySnapshot(nextInventorySnapshot);
-      setErrorMessage(null);
       await showAppToastWithLatestUndo(
         'Skill added',
         request.sourceType === 'markdown'
@@ -739,32 +776,28 @@ export default function App() {
           : 'The skill install completed.',
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown preload error';
-      setErrorMessage(message);
+      const message = showErrorToast('Skill add failed', error);
       throw error instanceof Error ? error : new Error(message);
     } finally {
       setIsAddingSkill(false);
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo]);
+  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast]);
 
   const handleAddMcpServer = useCallback(async (request: AddMcpServerRequest) => {
     setIsAddingMcpServer(true);
-    setErrorMessage(null);
 
     try {
       const nextInventorySnapshot = await desktopApi.addMcpServer(request);
       applyInventorySnapshot(nextInventorySnapshot);
       setSelectedMcpName(request.name.trim());
-      setErrorMessage(null);
       await showAppToastWithLatestUndo('MCP server added', `${request.name.trim()} was added.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown preload error';
-      setErrorMessage(message);
+      const message = showErrorToast('MCP server add failed', error);
       throw error instanceof Error ? error : new Error(message);
     } finally {
       setIsAddingMcpServer(false);
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo]);
+  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast]);
 
   const sourceIndex = useMemo(
     () => new Map(inventorySnapshot?.sources.map((source) => [source.id, source]) ?? []),
@@ -792,6 +825,14 @@ export default function App() {
   const mcpRows = useMemo(
     () => filterMcpRows(filterMcpRowsByStatus(allMcpRows, mcpStatusFilter), mcpSearchQuery),
     [allMcpRows, mcpSearchQuery, mcpStatusFilter],
+  );
+  const allSubagentRows = useMemo(
+    () => (inventorySnapshot ? getSubagentTableRows(inventorySnapshot) : []),
+    [inventorySnapshot],
+  );
+  const subagentRows = useMemo(
+    () => filterSubagentRows(filterSubagentRowsByStatus(allSubagentRows, subagentStatusFilter), subagentSearchQuery),
+    [allSubagentRows, subagentSearchQuery, subagentStatusFilter],
   );
   const agentRows = useMemo(
     () => filterAgentRows((inventorySnapshot?.agents ?? []).slice().sort(compareAgentsForTable), agentSearchQuery),
@@ -843,6 +884,19 @@ export default function App() {
       : null,
     [agentIndex, selectedMcp, selectedMcpProblemKey, selectedMcpVariantPath],
   );
+  const selectedSubagent = useMemo(
+    () => inventorySnapshot?.subagents?.find((subagent) => subagent.name === selectedSubagentName) ?? null,
+    [inventorySnapshot?.subagents, selectedSubagentName],
+  );
+  const selectedSubagentInspectorModel = useMemo(
+    () => selectedSubagent
+      ? buildSubagentInspectorModel(selectedSubagent, {
+        selectedProblemKey: selectedSubagentProblemKey,
+        selectedVariantPath: selectedSubagentVariantPath,
+      }, agentIndex)
+      : null,
+    [agentIndex, selectedSubagent, selectedSubagentProblemKey, selectedSubagentVariantPath],
+  );
   useEffect(() => {
     setSelectedSkillProblemKey(null);
     setSelectedSkillVariantPath(null);
@@ -852,6 +906,11 @@ export default function App() {
     setSelectedMcpProblemKey(null);
     setSelectedMcpVariantPath(null);
   }, [selectedMcpName]);
+
+  useEffect(() => {
+    setSelectedSubagentProblemKey(null);
+    setSelectedSubagentVariantPath(null);
+  }, [selectedSubagentName]);
 
   useEffect(() => {
     if (!selectionOverrideSkillName) {
@@ -896,48 +955,57 @@ export default function App() {
     }
   }, [activeTab, inventorySnapshot?.mcps, selectedMcpName]);
 
+  useEffect(() => {
+    if (activeTab !== 'subagents' || !selectedSubagentName) {
+      return;
+    }
+
+    const subagentStillExists = inventorySnapshot?.subagents?.some((subagent) => subagent.name === selectedSubagentName) ?? false;
+    if (!subagentStillExists) {
+      setSelectedSubagentName(null);
+    }
+  }, [activeTab, inventorySnapshot?.subagents, selectedSubagentName]);
+
   const handleResolveIssue = useCallback(
     async (request: ResolveIssueRequest) => {
       const skillName = request.entity === 'skill' ? request.skillName : null;
       setIsResolvingIssue(true);
       setPendingDriftTransitionSkillName(skillName);
-      setErrorMessage(null);
 
       try {
         const nextInventorySnapshot = await desktopApi.resolveIssue(request);
         applyInventorySnapshot(nextInventorySnapshot, skillName ?? undefined);
         if (request.entity === 'skill') {
           await showAppToastWithLatestUndo('Skill updated', `${request.skillName} was updated.`);
-        } else {
+        } else if (request.entity === 'mcp') {
           await showAppToastWithLatestUndo('MCP server updated', `${request.mcpName} was updated.`);
+        } else {
+          await showAppToastWithLatestUndo('Subagent updated', `${request.subagentName} was updated.`);
         }
       } catch (error) {
         setPendingDriftTransitionSkillName(null);
-        const message = error instanceof Error ? error.message : 'Unknown preload error';
-        setErrorMessage(message);
-        showAppToast('Resolution failed', message, null, 'error');
+        showErrorToast('Resolution failed', error);
       } finally {
         await waitForResolvePendingPaintWindow();
         setIsResolvingIssue(false);
       }
     },
-    [applyInventorySnapshot, desktopApi, showAppToast, showAppToastWithLatestUndo],
+    [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast],
   );
 
   const handleCapabilityAction = useCallback(async (request: CapabilityActionRequest) => {
     setIsApplyingCapabilityAction(true);
-    setErrorMessage(null);
 
     try {
       const nextInventorySnapshot = await desktopApi.applyCapabilityAction(request);
       applyInventorySnapshot(nextInventorySnapshot);
       await showAppToastWithLatestUndo('Capability updated', `${request.skillName} metadata was updated.`);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      showErrorToast('Capability update failed', error);
     } finally {
       setIsApplyingCapabilityAction(false);
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo]);
+  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast]);
 
   const handleDismissDrift = useCallback(
     async (request: DismissDriftRequest) => {
@@ -947,23 +1015,26 @@ export default function App() {
       if (skillName) {
         setSelectionOverrideSkillName(skillName);
       }
-      setErrorMessage(null);
 
       try {
-      const nextInventorySnapshot = await desktopApi.dismissDrift(request);
-      applyInventorySnapshot(nextInventorySnapshot, skillName ?? undefined);
-      await showAppToastWithLatestUndo(
-        'Dismissal updated',
-        skillName ? `${skillName} dismissal state changed.` : `${request.mcpName} dismissal state changed.`,
-      );
-    } catch (error) {
-      setPendingDriftTransitionSkillName(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
-    } finally {
-      setIsDismissingDrift(false);
-    }
-  },
-    [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo],
+        const nextInventorySnapshot = await desktopApi.dismissDrift(request);
+        applyInventorySnapshot(nextInventorySnapshot, skillName ?? undefined);
+        await showAppToastWithLatestUndo(
+          'Dismissal updated',
+          skillName
+            ? `${skillName} dismissal state changed.`
+            : 'mcpName' in request
+              ? `${request.mcpName} dismissal state changed.`
+              : `${request.subagentName} dismissal state changed.`,
+        );
+      } catch (error) {
+        setPendingDriftTransitionSkillName(null);
+        showErrorToast('Dismissal failed', error);
+      } finally {
+        setIsDismissingDrift(false);
+      }
+    },
+    [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast],
   );
 
   const handleAutoResolve = useCallback(async () => {
@@ -979,7 +1050,6 @@ export default function App() {
     const plannedRepairCount = remainingRequests.length;
 
     setIsAutoResolving(true);
-    setErrorMessage(null);
 
     try {
       const attemptedRequestKeys = new Set<string>();
@@ -1000,13 +1070,11 @@ export default function App() {
         { includeUndo: plannedRepairCount === 1 },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown preload error';
-      setErrorMessage(message);
-      showAppToast('Repairs failed', message, null, 'error');
+      showErrorToast('Repairs failed', error);
     } finally {
       setIsAutoResolving(false);
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToast, showAppToastWithLatestUndo]);
+  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast]);
 
   const resetSkillSelection = useCallback(() => {
     setSelectedSkillName(null);
@@ -1021,9 +1089,14 @@ export default function App() {
     setSelectedMcpVariantPath(null);
   }, []);
 
+  const resetSubagentSelection = useCallback(() => {
+    setSelectedSubagentName(null);
+    setSelectedSubagentProblemKey(null);
+    setSelectedSubagentVariantPath(null);
+  }, []);
+
   const handleUndoToastOperation = useCallback(async (operationId: string) => {
     setIsUndoingToastOperation(true);
-    setErrorMessage(null);
 
     try {
       const result = await desktopApi.undoAuditOperation(operationId);
@@ -1036,16 +1109,16 @@ export default function App() {
       }
       const operation = result.auditLog.find((candidate) => candidate.id === operationId);
       if (operation?.status === 'undo-blocked' || operation?.status === 'undo-failed' || operation?.undoState === 'blocked') {
-        showAppToast('Undo blocked', 'The last change could not be undone because the current state has changed.');
+        showAppToast('Undo blocked', 'The last change could not be undone because the current state has changed.', null, 'error');
       } else {
         showAppToast('Undo applied', 'The last change was undone.');
       }
     } catch (error) {
-      showAppToast('Undo blocked', error instanceof Error ? error.message : 'The last change could not be undone.');
+      showErrorToast('Undo blocked', error, 'The last change could not be undone.');
     } finally {
       setIsUndoingToastOperation(false);
     }
-  }, [applyInventorySnapshot, desktopApi, showAppToast]);
+  }, [applyInventorySnapshot, desktopApi, showAppToast, showErrorToast]);
 
   const openPluginFromProvenance = useCallback((
     action: NonNullable<InspectorProvenanceSummaryRow['action']>,
@@ -1055,7 +1128,7 @@ export default function App() {
       && candidate.pluginId === action.pluginId
       && (!action.version || candidate.version === action.version));
     if (!plugin) {
-      setErrorMessage(`Could not find plugin ${action.pluginId} in the current inventory.`);
+      showErrorToast('Plugin not found', `Could not find plugin ${action.pluginId} in the current inventory.`);
       return;
     }
 
@@ -1063,8 +1136,9 @@ export default function App() {
     setSelectedPluginKey(getPluginSelectionKey(plugin));
     resetSkillSelection();
     resetMcpSelection();
+    resetSubagentSelection();
     setActiveTab('plugins');
-  }, [inventorySnapshot?.plugins, resetMcpSelection, resetSkillSelection]);
+  }, [inventorySnapshot?.plugins, resetMcpSelection, resetSkillSelection, resetSubagentSelection, showErrorToast]);
 
   const handleInventorySourceModeChange = useCallback(async (nextMode: InventorySourceMode) => {
     if (nextMode === inventorySourceMode) {
@@ -1078,9 +1152,9 @@ export default function App() {
       kind: 'switch-inventory-source',
       detail: `Refreshing inventory before showing ${nextMode === 'live' ? 'live agent locations' : 'sandbox fixtures'}.`,
     });
-    setErrorMessage(null);
     resetSkillSelection();
     resetMcpSelection();
+    resetSubagentSelection();
 
     try {
       await devApi?.setInventoryMode(nextMode);
@@ -1101,19 +1175,20 @@ export default function App() {
         startMcpConnectivityTest();
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown preload error');
+      showErrorToast('Inventory source switch failed', error);
     } finally {
       setPendingInventoryOperation(null);
     }
-  }, [desktopApi, devApi, inventorySourceMode, resetMcpSelection, resetSkillSelection, startMcpConnectivityTest, triggerRescan]);
+  }, [desktopApi, devApi, inventorySourceMode, resetMcpSelection, resetSkillSelection, resetSubagentSelection, showErrorToast, startMcpConnectivityTest, triggerRescan]);
 
   const navigateToSkills = useCallback(() => {
     resetSkillSelection();
     resetMcpSelection();
+    resetSubagentSelection();
     setSkillSearchQuery('');
     setSkillStatusFilter('active');
     setActiveTab('skills');
-  }, [resetMcpSelection, resetSkillSelection]);
+  }, [resetMcpSelection, resetSkillSelection, resetSubagentSelection]);
 
   const openSkillFromHome = useCallback((skillName: string) => {
     setSkillSearchQuery('');
@@ -1134,18 +1209,29 @@ export default function App() {
     setActiveTab('mcps');
   }, []);
 
+  const openSubagentFromHome = useCallback((subagentName: string) => {
+    setSubagentSearchQuery('');
+    setSubagentStatusFilter('all');
+    setSelectedSubagentProblemKey(null);
+    setSelectedSubagentVariantPath(null);
+    setSelectedSubagentName(subagentName);
+    setActiveTab('subagents');
+  }, []);
+
   const focusActiveSearch = useCallback(() => {
     const activeSearchInput = activeTab === 'skills'
       ? skillSearchInputRef.current
       : activeTab === 'mcps'
         ? mcpSearchInputRef.current
-      : activeTab === 'agents'
-        ? agentSearchInputRef.current
-        : activeTab === 'plugins'
-          ? pluginSearchInputRef.current
-          : activeTab === 'audit'
-            ? auditSearchInputRef.current
-          : null;
+        : activeTab === 'subagents'
+          ? subagentSearchInputRef.current
+          : activeTab === 'agents'
+            ? agentSearchInputRef.current
+            : activeTab === 'plugins'
+              ? pluginSearchInputRef.current
+              : activeTab === 'audit'
+                ? auditSearchInputRef.current
+                : null;
 
     if (!activeSearchInput) {
       return false;
@@ -1161,13 +1247,15 @@ export default function App() {
       ? skillSearchInputRef.current
       : activeTab === 'mcps'
         ? mcpSearchInputRef.current
-      : activeTab === 'agents'
-        ? agentSearchInputRef.current
-        : activeTab === 'plugins'
-          ? pluginSearchInputRef.current
-          : activeTab === 'audit'
-            ? auditSearchInputRef.current
-          : null;
+        : activeTab === 'subagents'
+          ? subagentSearchInputRef.current
+          : activeTab === 'agents'
+            ? agentSearchInputRef.current
+            : activeTab === 'plugins'
+              ? pluginSearchInputRef.current
+              : activeTab === 'audit'
+                ? auditSearchInputRef.current
+                : null;
 
     if (!activeSearchInput || document.activeElement !== activeSearchInput) {
       return false;
@@ -1209,8 +1297,23 @@ export default function App() {
       return true;
     }
 
+    if (activeTab === 'subagents') {
+      const nextSubagentName = getNavigatedInventoryName(
+        subagentRows.map((subagent) => subagent.name),
+        selectedSubagent?.name ?? null,
+        direction,
+        step,
+      );
+      if (!nextSubagentName) {
+        return false;
+      }
+
+      setSelectedSubagentName(nextSubagentName);
+      return true;
+    }
+
     return false;
-  }, [activeTab, mcpRows, selectedMcp?.name, selectedSkill?.name, skillRows]);
+  }, [activeTab, mcpRows, selectedMcp?.name, selectedSkill?.name, selectedSubagent?.name, skillRows, subagentRows]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1273,6 +1376,14 @@ export default function App() {
         tone: 'attention' as const,
       },
       {
+        tab: 'subagents' as const,
+        label: 'Subagents',
+        icon: 'subagents' as const,
+        badge: inventorySnapshot?.subagentCounts?.attentionSubagents ?? 0,
+        meta: inventorySnapshot?.subagentCounts?.totalSubagents ?? 0,
+        tone: 'attention' as const,
+      },
+      {
         tab: 'plugins' as const,
         label: 'Plugins',
         icon: 'plugins' as const,
@@ -1292,14 +1403,17 @@ export default function App() {
       inventorySnapshot?.mcpCounts?.attentionMcps,
       inventorySnapshot?.mcpCounts?.totalMcps,
       inventorySnapshot?.plugins?.length,
+      inventorySnapshot?.subagentCounts?.attentionSubagents,
+      inventorySnapshot?.subagentCounts?.totalSubagents,
     ],
   );
 
   const handleTabChange = useCallback((nextTab: PrimaryTab) => {
     resetSkillSelection();
     resetMcpSelection();
+    resetSubagentSelection();
     setActiveTab(nextTab);
-  }, [resetMcpSelection, resetSkillSelection]);
+  }, [resetMcpSelection, resetSkillSelection, resetSubagentSelection]);
 
   const handleInstallUpdate = useCallback(async () => {
     if (didRequestUpdateInstallRef.current) {
@@ -1314,9 +1428,9 @@ export default function App() {
     } catch (error) {
       didRequestUpdateInstallRef.current = false;
       setIsInstallingUpdate(false);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to install update.');
+      showErrorToast('Update install failed', error, 'Failed to install update.');
     }
-  }, [desktopApi]);
+  }, [desktopApi, showErrorToast]);
 
   useEffect(() => {
     if (autoUpdateStatus.phase !== 'ready' || didRequestUpdateInstallRef.current) {
@@ -1336,19 +1450,15 @@ export default function App() {
   }, [autoUpdateStatus.phase]);
 
   const chooseOnboardingPreferredSource = useCallback(async () => {
-    setOnboardingErrorMessage(null);
-    setOnboardingErrorTrace(null);
     try {
       return await desktopApi.chooseDirectory({
         title: 'Choose a preferred skills source',
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to open the folder picker.';
-      setOnboardingErrorMessage(message);
-      setOnboardingErrorTrace(getErrorTrace(error));
+      showErrorToast('Folder picker failed', error, 'Failed to open the folder picker.');
       return null;
     }
-  }, [desktopApi]);
+  }, [desktopApi, showErrorToast]);
 
   const readLatestFailedAuditTrace = useCallback(async () => {
     try {
@@ -1365,9 +1475,6 @@ export default function App() {
     preferredSourcePath,
   }: OnboardingPreferredSourceSelection) => {
     setIsCompletingOnboarding(true);
-    setOnboardingErrorMessage(null);
-    setOnboardingErrorTrace(null);
-    setErrorMessage(null);
     let failureTrace: string | null = null;
 
     try {
@@ -1394,20 +1501,15 @@ export default function App() {
       setSettingsState(nextSettingsState);
       setIsPreviewingOnboarding(false);
       applyInventorySnapshot(nextInventorySnapshot);
-      setErrorMessage(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to complete onboarding.';
-      setOnboardingErrorMessage(message);
-      setOnboardingErrorTrace(failureTrace ?? getErrorTrace(error));
-      setErrorMessage(message);
+      showErrorToast('Onboarding failed', error, 'Failed to complete onboarding.', failureTrace);
     } finally {
       setIsCompletingOnboarding(false);
     }
-  }, [applyInventorySnapshot, desktopApi, devApi, readLatestFailedAuditTrace, shellState?.devTools]);
+  }, [applyInventorySnapshot, desktopApi, devApi, readLatestFailedAuditTrace, shellState?.devTools, showErrorToast]);
 
   const openOnboardingFromDevelopment = useCallback(() => {
-    setOnboardingErrorMessage(null);
-    setOnboardingErrorTrace(null);
+    setAppToast(null);
     setIsPreviewingOnboarding(true);
   }, []);
 
@@ -1426,7 +1528,6 @@ export default function App() {
       mainContent = (
         <HomeDashboard
           autoResolvableRequests={autoResolvableRequests}
-          errorMessage={errorMessage}
           homeSummary={homeSummary}
           inventorySnapshot={inventorySnapshot}
           isAutoResolving={isAutoResolving}
@@ -1437,6 +1538,7 @@ export default function App() {
           onSelectMcp={openMcpFromHome}
           onRescan={triggerManualRescan}
           onSelectSkill={openSkillFromHome}
+          onSelectSubagent={openSubagentFromHome}
         />
       );
       break;
@@ -1444,7 +1546,6 @@ export default function App() {
       mainContent = (
         <SkillsWorkspaceView
           isAddingSkill={isAddingSkill}
-          errorMessage={errorMessage}
           inventorySnapshot={inventorySnapshot}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
@@ -1479,7 +1580,6 @@ export default function App() {
     case 'mcps':
       mainContent = (
         <McpWorkspaceView
-          errorMessage={errorMessage}
           inventorySnapshot={inventorySnapshot}
           isAddingMcpServer={isAddingMcpServer}
           isDismissingDrift={isDismissingDrift}
@@ -1506,10 +1606,37 @@ export default function App() {
         />
       );
       break;
+    case 'subagents':
+      mainContent = (
+        <SubagentsWorkspaceView
+          inventorySnapshot={inventorySnapshot}
+          isDismissingDrift={isDismissingDrift}
+          isResolvingIssue={isResolvingIssue}
+          isRescanning={isRescanActionBusy}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
+          onClearSelection={resetSubagentSelection}
+          onDismissDrift={handleDismissDrift}
+          onResolveIssue={handleResolveIssue}
+          onRescan={triggerManualRescan}
+          onSearchQueryChange={setSubagentSearchQuery}
+          onSelectProblem={setSelectedSubagentProblemKey}
+          onSelectSubagent={setSelectedSubagentName}
+          onSelectVariant={setSelectedSubagentVariantPath}
+          onStatusFilterChange={setSubagentStatusFilter}
+          rows={subagentRows}
+          sandboxRoot={shellState?.devTools?.sandboxRoot ?? null}
+          searchInputRef={subagentSearchInputRef}
+          searchQuery={subagentSearchQuery}
+          selectedSubagent={selectedSubagent}
+          selectedSubagentInspectorModel={selectedSubagentInspectorModel}
+          selectedSubagentProblemKey={selectedSubagentProblemKey}
+          statusFilter={subagentStatusFilter}
+        />
+      );
+      break;
     case 'agents':
       mainContent = (
         <AgentsWorkspaceView
-          errorMessage={errorMessage}
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
@@ -1524,7 +1651,6 @@ export default function App() {
     case 'plugins':
       mainContent = (
         <PluginsWorkspaceView
-          errorMessage={errorMessage}
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
@@ -1535,6 +1661,7 @@ export default function App() {
             setSelectedPluginKey(getPluginSelectionKey(plugin));
           }}
           onSelectSkillAsset={openSkillFromHome}
+          onSelectSubagentAsset={openSubagentFromHome}
           onClearSelection={() => {
             setSelectedPluginKey(null);
           }}
@@ -1568,7 +1695,6 @@ export default function App() {
       mainContent = (
         <SettingsWorkspaceView
           customScanPathInput={customScanPathInput}
-          errorMessage={errorMessage}
           handleAddCustomScanPath={handleAddCustomScanPath}
           handleClearPreferredCanonicalSourcePath={handleClearPreferredCanonicalSourcePath}
           inventorySourceMode={inventorySourceMode}
@@ -1598,12 +1724,98 @@ export default function App() {
       break;
   }
 
+  const appToastTrace = appToast?.trace && appToast.trace !== appToast.description ? appToast.trace : null;
+  const appToastTraceElementId = appToast ? `app-toast-trace-${appToast.id}` : undefined;
+  const isAppToastTraceExpanded = Boolean(appToast && expandedToastTraceId === appToast.id);
+  const copyAppToastTrace = (trace: string) => {
+    if (!navigator.clipboard?.writeText) {
+      setToastTraceCopyState('failed');
+      return;
+    }
+
+    void navigator.clipboard.writeText(trace)
+      .then(() => setToastTraceCopyState('copied'))
+      .catch(() => setToastTraceCopyState('failed'));
+  };
+
+  const appToastRegion = appToast ? (
+    <div aria-live="polite" className="app-toast-region" role="status">
+      <section className={`app-toast app-toast--${appToast.tone}`} aria-label={appToast.title}>
+        <div className="app-toast-icon" aria-hidden="true">
+          <span>{appToast.tone === 'error' ? '!' : '✓'}</span>
+        </div>
+        <div className="app-toast-copy">
+          <strong>{appToast.title}</strong>
+          <p>{appToast.description}</p>
+          {appToastTrace && appToastTraceElementId ? (
+            <div className="app-toast-trace-actions">
+              <button
+                aria-expanded={isAppToastTraceExpanded}
+                aria-label={isAppToastTraceExpanded ? 'Hide failure trace' : 'Show failure trace'}
+                aria-controls={appToastTraceElementId}
+                className="app-toast-trace-button"
+                title={isAppToastTraceExpanded ? 'Hide failure trace' : 'Show failure trace'}
+                type="button"
+                onClick={() => {
+                  setExpandedToastTraceId(isAppToastTraceExpanded ? null : appToast.id);
+                }}
+              >
+                {isAppToastTraceExpanded
+                  ? <ChevronUp aria-hidden="true" size={13} />
+                  : <ChevronDown aria-hidden="true" size={13} />}
+                <span>{isAppToastTraceExpanded ? 'Hide trace' : 'Show trace'}</span>
+              </button>
+              <button
+                aria-label={toastTraceCopyState === 'copied'
+                  ? 'Failure trace copied'
+                  : toastTraceCopyState === 'failed'
+                    ? 'Copy failure trace failed'
+                    : 'Copy failure trace'}
+                className={[
+                  'audit-copy-trace-button',
+                  'app-toast-copy-trace-button',
+                  toastTraceCopyState === 'copied' ? 'audit-copy-trace-button--copied' : '',
+                  toastTraceCopyState === 'failed' ? 'audit-copy-trace-button--failed' : '',
+                ].filter(Boolean).join(' ')}
+                title="Copy failure trace"
+                type="button"
+                onClick={() => copyAppToastTrace(appToastTrace)}
+              >
+                <span className="audit-copy-trace-button__icon" aria-hidden="true">
+                  <Copy className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--copy" strokeWidth={2} />
+                  <Check className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--check" strokeWidth={2.3} />
+                </span>
+                <span>{toastTraceCopyState === 'failed' ? 'Copy failed' : 'Copy trace'}</span>
+              </button>
+            </div>
+          ) : null}
+          {appToastTrace && appToastTraceElementId && isAppToastTraceExpanded ? (
+            <pre className="app-toast-trace" id={appToastTraceElementId}>{appToastTrace}</pre>
+          ) : null}
+        </div>
+        {appToast.undoOperationId ? (
+          <button
+            className="app-toast-action"
+            disabled={isUndoingToastOperation}
+            type="button"
+            onClick={() => {
+              if (appToast.undoOperationId) {
+                void handleUndoToastOperation(appToast.undoOperationId);
+              }
+            }}
+          >
+            <Undo2 className="app-toast-action-icon" aria-hidden="true" strokeWidth={2} />
+            <span>{isUndoingToastOperation ? 'Undoing...' : 'Undo'}</span>
+          </button>
+        ) : null}
+      </section>
+    </div>
+  ) : null;
+
   if (shouldShowOnboarding) {
     return (
       <>
         <OnboardingFlow
-          errorMessage={onboardingErrorMessage}
-          errorTrace={onboardingErrorTrace}
           isCompleting={isCompletingOnboarding}
           universalSkillsPath={CANONICAL_USER_SKILLS_DISPLAY_PATH}
           onChoosePreferredSource={chooseOnboardingPreferredSource}
@@ -1614,6 +1826,7 @@ export default function App() {
           isInstallingUpdate={isInstallingUpdate}
           status={autoUpdateStatus}
         />
+        {appToastRegion}
       </>
     );
   }
@@ -1656,34 +1869,7 @@ export default function App() {
         <div className="app-main">{mainContent}</div>
       </div>
 
-      {appToast ? (
-        <div aria-live="polite" className="app-toast-region" role="status">
-          <section className={`app-toast app-toast--${appToast.tone}`} aria-label={appToast.title}>
-            <div className="app-toast-icon" aria-hidden="true">
-              <span>{appToast.tone === 'error' ? '!' : '✓'}</span>
-            </div>
-            <div className="app-toast-copy">
-              <strong>{appToast.title}</strong>
-              <p>{appToast.description}</p>
-            </div>
-            {appToast.undoOperationId ? (
-              <button
-                className="app-toast-action"
-                disabled={isUndoingToastOperation}
-                type="button"
-                onClick={() => {
-                  if (appToast.undoOperationId) {
-                    void handleUndoToastOperation(appToast.undoOperationId);
-                  }
-                }}
-              >
-                <Undo2 className="app-toast-action-icon" aria-hidden="true" strokeWidth={2} />
-                <span>{isUndoingToastOperation ? 'Undoing...' : 'Undo'}</span>
-              </button>
-            ) : null}
-          </section>
-        </div>
-      ) : null}
+      {appToastRegion}
 
       <AutoUpdateDialog
         appName={shellState?.appName ?? APP_NAME}

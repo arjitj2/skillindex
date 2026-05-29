@@ -5,6 +5,9 @@ import type {
   AgentMcpSupportedTransport,
   AgentMcpWriteDialect,
   AgentMetadataSource,
+  AgentSubagentConfigKind,
+  AgentSubagentParserKind,
+  AgentSubagentWriteDialect,
 } from './contracts';
 import {
   UPSTREAM_AGENT_FAMILIES,
@@ -36,11 +39,17 @@ export interface KnownAgentFamilyDefinition {
   mcpParserKind?: AgentMcpParserKind;
   mcpWriteDialect?: AgentMcpWriteDialect;
   mcpSupportedTransports?: AgentMcpSupportedTransport[];
+  subagentConfigKind?: AgentSubagentConfigKind;
+  subagentParserKind?: AgentSubagentParserKind;
+  subagentWriteDialect?: AgentSubagentWriteDialect;
+  subagentGlobalDirRelativeParts?: string[];
+  subagentProjectDir?: string;
   metadataSources?: AgentMetadataSource[];
   icon?: AgentIconRecord;
   resolveLiveSkillsDir: (context?: UpstreamAgentResolutionContext) => string;
   resolveLiveMcpConfigPath?: (context?: UpstreamAgentResolutionContext) => string;
   resolveLiveAgentConfigPath?: (context?: UpstreamAgentResolutionContext) => string;
+  resolveLiveSubagentsDir?: (context?: UpstreamAgentResolutionContext) => string;
   detectInstalled: (context?: UpstreamAgentResolutionContext) => boolean;
 }
 
@@ -87,11 +96,17 @@ export const KNOWN_AGENT_FAMILIES: readonly KnownAgentFamilyDefinition[] = (UPST
     mcpParserKind: override.mcpParserKind,
     mcpWriteDialect: override.mcpWriteDialect,
     mcpSupportedTransports: override.mcpSupportedTransports,
+    subagentConfigKind: override.subagentConfigKind,
+    subagentParserKind: override.subagentParserKind,
+    subagentWriteDialect: override.subagentWriteDialect,
+    subagentGlobalDirRelativeParts: override.subagentGlobalDirRelativeParts,
+    subagentProjectDir: override.subagentProjectDir,
     metadataSources,
     icon: override.icon,
     resolveLiveSkillsDir: upstreamFamily.resolveGlobalSkillsDir,
     resolveLiveMcpConfigPath: override.resolveLiveMcpConfigPathOverride,
     resolveLiveAgentConfigPath: override.resolveLiveAgentConfigPathOverride,
+    resolveLiveSubagentsDir: override.resolveLiveSubagentsDirOverride,
     detectInstalled: upstreamFamily.detectInstalled,
   };
 });

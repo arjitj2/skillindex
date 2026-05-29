@@ -160,6 +160,7 @@ describe('ensureSkillIndexLayout', () => {
           onboardingCompletedAt: null,
           dismissedDriftSignatures: [],
           dismissedMcpSignatures: [],
+          dismissedSubagentSignatures: [],
           skillUniversalDecisions: [],
         },
         null,

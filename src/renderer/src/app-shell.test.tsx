@@ -219,6 +219,14 @@ describe('App shell inventory views', () => {
     });
   }
 
+  async function openSubagents() {
+    fireEvent.click(within(await getPrimaryNavAsync()).getByRole('button', { name: /^Subagents/i }));
+    await screen.findByRole('heading', { name: /^Subagents$/i, level: 2 });
+    await waitFor(() => {
+      expect(screen.queryByText(/Scanning your subagent inventory/i)).not.toBeInTheDocument();
+    });
+  }
+
   function getMcpTable() {
     return screen.getByRole('region', { name: /^MCP list$/i });
   }
@@ -230,6 +238,15 @@ describe('App shell inventory views', () => {
   function getMcpRow(name: string) {
     const pattern = new RegExp(name, 'i');
     return within(getMcpTable()).getByRole('button', { name: pattern });
+  }
+
+  function getSubagentTable() {
+    return screen.getByRole('region', { name: /^Subagent list$/i });
+  }
+
+  function getSubagentRow(name: string) {
+    const pattern = new RegExp(name, 'i');
+    return within(getSubagentTable()).getByRole('button', { name: pattern });
   }
 
   function getHomeAttentionSection() {
@@ -262,7 +279,7 @@ describe('App shell inventory views', () => {
     return row as HTMLElement;
   }
 
-  it('launches into Home with five primary tabs and keeps Audit Log above Settings', async () => {
+  it('launches into Home with six primary tabs and keeps Audit Log above Settings', async () => {
     readAuditLogMock.mockResolvedValue(createAuditOperations());
     render(<App />);
 
@@ -273,17 +290,19 @@ describe('App shell inventory views', () => {
 
     const installedAgentCount = createInventorySnapshot().agentCounts?.installedAgents ?? 0;
 
-    expect(within(primaryNav).getAllByRole('button')).toHaveLength(5);
+    expect(within(primaryNav).getAllByRole('button')).toHaveLength(6);
     expect(within(primaryNav).getAllByRole('button').map((button) => button.textContent?.replace(/\s+/g, ''))).toEqual([
       'Home',
       'Skills38',
       'MCPs16',
+      'Subagents0',
       'Plugins0',
       `Agents${installedAgentCount}`,
     ]);
     expect(within(primaryNav).getByRole('button', { name: /^Home$/i })).toHaveTextContent(/^Home$/);
     expect(within(primaryNav).getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills38$/);
     expect(within(primaryNav).getByRole('button', { name: /^MCPs/i })).toHaveTextContent(/^MCPs16$/);
+    expect(within(primaryNav).getByRole('button', { name: /^Subagents/i })).toHaveTextContent(/^Subagents0$/);
     expect(within(primaryNav).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
       new RegExp(`^Agents${installedAgentCount}$`),
     );
@@ -369,7 +388,9 @@ describe('App shell inventory views', () => {
       expect(rescanInventoryMock).toHaveBeenCalledTimes(1);
     });
     expect(completeOnboardingMock).not.toHaveBeenCalled();
-    expect(await screen.findByRole('alert')).toHaveTextContent('Scan failed during onboarding.');
+    const toast = await screen.findByRole('status');
+    expect(within(toast).getByText('Onboarding failed')).toBeInTheDocument();
+    expect(within(toast).getByText('Scan failed during onboarding.')).toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: /Primary/i })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^Where your skills live$/i, level: 1 })).toBeInTheDocument();
   });
@@ -1640,6 +1661,30 @@ describe('App shell inventory views', () => {
     await waitFor(() => {
       expect(dismissDriftMock).toHaveBeenCalledWith({ mcpName: 'broken-mcp' });
     });
+  });
+
+  it('shows subagent dismissal failures as toasts instead of inline banners', async () => {
+    const snapshot = structuredClone(representativeInventorySnapshot);
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+    dismissDriftMock.mockRejectedValueOnce(new Error('Subagent dismissal is not supported yet.'));
+
+    render(<App />);
+    await openSubagents();
+
+    fireEvent.click(getSubagentRow('reviewer'));
+    expect(await screen.findByRole('heading', { name: 'reviewer', level: 3 })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Dismiss issues with this subagent$/i }));
+
+    await waitFor(() => {
+      expect(dismissDriftMock).toHaveBeenCalledWith({ subagentName: 'reviewer' });
+    });
+
+    const toast = await screen.findByRole('status');
+    expect(toast).toHaveTextContent('Dismissal failed');
+    expect(toast).toHaveTextContent('Subagent dismissal is not supported yet.');
+    expect(document.querySelector('.inline-error-banner')).toBeNull();
   });
 
   it('starts with a selected source for diverged canonicalization and lets you switch it on the skill detail page', async () => {
@@ -3602,6 +3647,19 @@ function createMcpOnlyAutoResolvableInventorySnapshot(): SkillInventorySnapshot 
     identicalDriftSkills: 0,
     divergedDriftSkills: 0,
     dismissedDriftSkills: 0,
+  };
+  snapshot.subagents = (snapshot.subagents ?? []).map((subagent) => ({
+    ...subagent,
+    status: 'healthy',
+    presentation: 'none',
+    issueReasons: [],
+    missingLocations: [],
+  }));
+  snapshot.subagentCounts = {
+    totalSubagents: snapshot.subagents.length,
+    attentionSubagents: 0,
+    healthySubagents: snapshot.subagents.length,
+    dismissedAttentionSubagents: 0,
   };
   delete snapshot.homeSummary;
   snapshot.homeSummary = getHomeSummary(snapshot);

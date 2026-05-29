@@ -33,7 +33,6 @@ import {
 } from '../components/ui';
 
 export function McpWorkspaceView({
-  errorMessage,
   inventorySnapshot,
   isAddingMcpServer,
   isDismissingDrift,
@@ -58,7 +57,6 @@ export function McpWorkspaceView({
   searchQuery,
   statusFilter,
 }: {
-  errorMessage: string | null;
   inventorySnapshot: SkillInventorySnapshot | null;
   isAddingMcpServer: boolean;
   isDismissingDrift: boolean;
@@ -147,7 +145,6 @@ export function McpWorkspaceView({
 
           <div className={`split-workspace split-workspace--detail${mcp ? '' : ' split-workspace--detail-collapsed'}`}>
             <section className="master-list-panel" aria-label="MCP list">
-              {errorMessage ? <p className="inline-error-banner">{errorMessage}</p> : null}
               {inventorySnapshot ? (
                 sections.length > 0 ? (
                   sections.map((section) => (
@@ -182,7 +179,6 @@ export function McpWorkspaceView({
 
             {mcp ? (
               <McpDetailPanel
-                errorMessage={errorMessage}
                 isDismissingDrift={isDismissingDrift}
                 isResolvingIssue={isResolvingIssue}
                 inventorySnapshot={inventorySnapshot}
@@ -513,7 +509,6 @@ function parseKeyValueLines(raw: string): Record<string, string> | undefined {
 }
 
 function McpDetailPanel({
-  errorMessage,
   isDismissingDrift,
   isResolvingIssue,
   inventorySnapshot,
@@ -526,7 +521,6 @@ function McpDetailPanel({
   onSelectProblem,
   onSelectVariant,
 }: {
-  errorMessage: string | null;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
@@ -549,7 +543,6 @@ function McpDetailPanel({
     <DetailInspectorPanel
       ariaLabel="MCP detail"
       entityKind="mcp"
-      errorMessage={errorMessage}
       footerActions={[
         ...(mcpInspectorModel.activeProblem.primaryActionLabel
           ? [{

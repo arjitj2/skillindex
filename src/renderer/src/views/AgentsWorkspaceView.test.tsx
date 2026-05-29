@@ -37,7 +37,6 @@ function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 function renderAgentsView(rows: AgentRecord[], options: { isRescanning?: boolean } = {}) {
   return render(
     <AgentsWorkspaceView
-      errorMessage={null}
       inventorySnapshot={{} as SkillInventorySnapshot}
       isRescanning={options.isRescanning ?? false}
       onRescan={vi.fn(() => Promise.resolve())}
@@ -75,7 +74,6 @@ describe('AgentsWorkspaceView', () => {
 
     const { container } = render(
       <AgentsWorkspaceView
-        errorMessage={null}
         inventorySnapshot={{} as SkillInventorySnapshot}
         isRescanning={false}
         onRescan={vi.fn(() => Promise.resolve())}
@@ -200,7 +198,6 @@ describe('AgentsWorkspaceView', () => {
 
     rerender(
       <AgentsWorkspaceView
-        errorMessage={null}
         inventorySnapshot={{} as SkillInventorySnapshot}
         isRescanning={false}
         onRescan={vi.fn(() => Promise.resolve())}

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot } from '@shared/contracts';
+import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SubagentRecord } from '@shared/contracts';
 
 import { getHomeSummary } from '../inventory-view-model';
 import { representativeInventorySnapshot } from '../representative-preview-data';
@@ -38,14 +38,13 @@ describe('HomeDashboard', () => {
     expect(brokenMcpRow).toHaveTextContent('Invalid Definition');
   });
 
-  it('renders the healthy repair state and keeps errors visible', () => {
+  it('renders the healthy repair state without inline error banners', () => {
     renderDashboard({
-      errorMessage: 'Rescan failed',
       inventorySnapshot: createNoAttentionSnapshot(),
     });
 
     expect(screen.getByText('Everything looks good')).toBeInTheDocument();
-    expect(screen.getByText('Rescan failed')).toBeInTheDocument();
+    expect(screen.queryByText('Rescan failed')).not.toBeInTheDocument();
   });
 
   it('renders clean attention table states when skills and MCPs are healthy', () => {
@@ -80,15 +79,76 @@ describe('HomeDashboard', () => {
     const onNavigateToSkills = vi.fn();
     renderDashboard({
       autoResolvableRequests: [],
-      errorMessage: 'Repair failed',
       onNavigateToSkills,
     });
 
     expect(screen.getByText(/No safe auto-fixes available/i)).toBeInTheDocument();
-    expect(screen.getByText('Repair failed')).toBeInTheDocument();
+    expect(screen.queryByText('Repair failed')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Skills tab$/i }));
     expect(onNavigateToSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat subagent-only manual attention as healthy', () => {
+    const inventorySnapshot = createNoAttentionSnapshot();
+    const onSelectSubagent = vi.fn();
+    const subagent: SubagentRecord = {
+      name: 'manual-subagent',
+      displayName: 'manual-subagent',
+      description: 'Requires a manual definition choice.',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['definition-mismatch'],
+      locations: [
+        {
+          agentId: 'sandbox-agents-subagents',
+          agentLabel: 'Sandbox .agents',
+          scope: 'sandbox',
+          path: '/tmp/.agents/agents/manual-subagent.md',
+          directoryPath: '/tmp/.agents/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-29T00:00:00.000Z',
+          canonical: true,
+          format: 'markdown-frontmatter',
+          definitionComparisonKey: 'canonical',
+          definitionText: '---\nname: manual-subagent\n---\nCanonical prompt.',
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          path: '/tmp/.claude/agents/manual-subagent.md',
+          directoryPath: '/tmp/.claude/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-29T00:00:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          definitionComparisonKey: 'claude',
+          definitionText: '---\nname: manual-subagent\n---\nClaude prompt.',
+        },
+      ],
+    };
+    inventorySnapshot.subagents = [subagent];
+    inventorySnapshot.subagentCounts = {
+      totalSubagents: 1,
+      healthySubagents: 0,
+      attentionSubagents: 1,
+      dismissedAttentionSubagents: 0,
+    };
+    inventorySnapshot.homeSummary = getHomeSummary(inventorySnapshot);
+
+    renderDashboard({
+      autoResolvableRequests: [],
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+      onSelectSubagent,
+    });
+
+    expect(screen.getByText(/No safe auto-fixes available/i)).toBeInTheDocument();
+    expect(screen.queryByText('Everything looks good')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Subagents tab$/i }));
+    expect(onSelectSubagent).toHaveBeenCalledWith('manual-subagent');
   });
 
   it('expands, collapses, and applies safe repair requests accessibly', () => {
@@ -116,7 +176,7 @@ describe('HomeDashboard', () => {
     expect(screen.queryByText('Review planned fixes')).not.toBeInTheDocument();
   });
 
-  it('describes mixed skill and MCP safe repairs as items', () => {
+  it('describes mixed skill, MCP, and subagent safe repairs by entity and issue', () => {
     renderDashboard({
       autoResolvableRequests: [
         safeRepairRequest,
@@ -125,15 +185,23 @@ describe('HomeDashboard', () => {
           issue: 'missing-from-agents',
           mcpName: 'missing-from-agents-mcp',
         },
+        {
+          entity: 'subagent',
+          issue: 'broken-symlink',
+          subagentName: 'broken-symlink-subagent',
+        },
       ],
     });
 
-    const toggle = screen.getByRole('button', { name: /Review 2 safe repairs for 2 items/i });
+    const toggle = screen.getByRole('button', { name: /Review 3 safe repairs for 3 items/i });
     fireEvent.click(toggle);
 
-    expect(screen.getAllByText('Missing From Agents').length).toBeGreaterThan(0);
+    expect(screen.getByText('Skills • Identical Copies')).toBeInTheDocument();
+    expect(screen.getByText('MCPs • Missing From Agents')).toBeInTheDocument();
+    expect(screen.getByText('Subagents • Broken Symlink')).toBeInTheDocument();
     expect(screen.getByText('Add to missing agents')).toBeInTheDocument();
-    expect(screen.getByText(/2 repairs · 2 items affected/i)).toBeInTheDocument();
+    expect(screen.getByText('Relink to canonical')).toBeInTheDocument();
+    expect(screen.getByText(/3 repairs · 3 items affected/i)).toBeInTheDocument();
   });
 
   it('shows how many active issues will still need manual review', () => {
@@ -311,7 +379,6 @@ describe('HomeDashboard', () => {
 function renderDashboard(overrides: Partial<ComponentProps<typeof HomeDashboard>> = {}) {
   const props: ComponentProps<typeof HomeDashboard> = {
     autoResolvableRequests: [],
-    errorMessage: null,
     homeSummary: getHomeSummary(overrides.inventorySnapshot ?? representativeInventorySnapshot),
     inventorySnapshot: representativeInventorySnapshot,
     isAutoResolving: false,
@@ -321,6 +388,7 @@ function renderDashboard(overrides: Partial<ComponentProps<typeof HomeDashboard>
     onRescan: vi.fn(() => Promise.resolve()),
     onSelectMcp: vi.fn(),
     onSelectSkill: vi.fn(),
+    onSelectSubagent: vi.fn(),
     ...overrides,
   };
 
@@ -333,7 +401,6 @@ function rerenderDashboard(
 ) {
   const props: ComponentProps<typeof HomeDashboard> = {
     autoResolvableRequests: [],
-    errorMessage: null,
     homeSummary: getHomeSummary(overrides.inventorySnapshot ?? representativeInventorySnapshot),
     inventorySnapshot: representativeInventorySnapshot,
     isAutoResolving: false,
@@ -343,6 +410,7 @@ function rerenderDashboard(
     onRescan: vi.fn(() => Promise.resolve()),
     onSelectMcp: vi.fn(),
     onSelectSkill: vi.fn(),
+    onSelectSubagent: vi.fn(),
     ...overrides,
   };
 
@@ -357,6 +425,7 @@ function createNoAttentionSnapshot(): SkillInventorySnapshot {
     isDrifted: false,
   }));
   snapshot.mcps = [];
+  snapshot.subagents = [];
   snapshot.counts = {
     ...snapshot.counts,
     driftedSkills: 0,
@@ -368,6 +437,12 @@ function createNoAttentionSnapshot(): SkillInventorySnapshot {
     healthyMcps: 0,
     attentionMcps: 0,
     dismissedAttentionMcps: 0,
+  };
+  snapshot.subagentCounts = {
+    totalSubagents: 0,
+    healthySubagents: 0,
+    attentionSubagents: 0,
+    dismissedAttentionSubagents: 0,
   };
   delete snapshot.homeSummary;
   snapshot.homeSummary = getHomeSummary(snapshot);

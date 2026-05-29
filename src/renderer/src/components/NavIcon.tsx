@@ -1,6 +1,6 @@
-import { Bot, House, PackageCheck, RefreshCw, ScrollText, Server, Settings, Star } from 'lucide-react';
+import { Bot, BrainCircuit, House, PackageCheck, RefreshCw, ScrollText, Server, Settings, Star } from 'lucide-react';
 
-export type NavIconName = 'home' | 'skills' | 'mcps' | 'agents' | 'plugins' | 'audit' | 'settings' | 'rescan';
+export type NavIconName = 'home' | 'skills' | 'mcps' | 'subagents' | 'agents' | 'plugins' | 'audit' | 'settings' | 'rescan';
 
 export function NavIcon({ icon }: { icon: NavIconName }) {
   switch (icon) {
@@ -10,6 +10,8 @@ export function NavIcon({ icon }: { icon: NavIconName }) {
       return <Star strokeWidth={1.8} />;
     case 'mcps':
       return <Server strokeWidth={1.8} />;
+    case 'subagents':
+      return <BrainCircuit strokeWidth={1.8} />;
     case 'agents':
       return <Bot strokeWidth={1.8} />;
     case 'plugins':

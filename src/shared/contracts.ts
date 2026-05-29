@@ -225,6 +225,12 @@ export interface PluginMcpRef {
   sourceId: string;
 }
 
+export interface PluginSubagentRef {
+  name: string;
+  path: string;
+  sourceId: string;
+}
+
 export interface PluginUnsupportedAssetRef {
   kind: 'hook';
   name: string;
@@ -244,6 +250,7 @@ export interface PluginRecord {
   skillRoots?: string[];
   bundledSkills: PluginSkillRef[];
   bundledMcps: PluginMcpRef[];
+  bundledSubagents?: PluginSubagentRef[];
   unsupportedAssets?: PluginUnsupportedAssetRef[];
   unsupportedHooksCount?: number;
   source?: {
@@ -428,6 +435,26 @@ export interface AgentIconRecord {
   note?: string;
 }
 
+export type AgentSubagentConfigKind = 'directory' | 'agent-config' | 'plugin-only' | 'account-managed' | 'none' | 'unknown';
+export type AgentSubagentParserKind =
+  | 'markdown-frontmatter'
+  | 'codex-toml'
+  | 'json'
+  | 'jsonc'
+  | 'toml'
+  | 'yaml'
+  | 'none'
+  | 'unknown';
+export type AgentSubagentWriteDialect =
+  | 'markdown-frontmatter'
+  | 'codex-toml'
+  | 'json'
+  | 'jsonc'
+  | 'toml'
+  | 'yaml'
+  | 'none'
+  | 'unknown';
+
 export interface AgentRecord {
   id: string;
   family: string;
@@ -442,10 +469,14 @@ export interface AgentRecord {
   mcpParserKind?: AgentMcpParserKind;
   mcpWriteDialect?: AgentMcpWriteDialect;
   mcpSupportedTransports?: AgentMcpSupportedTransport[];
+  subagentConfigKind?: AgentSubagentConfigKind;
+  subagentParserKind?: AgentSubagentParserKind;
+  subagentWriteDialect?: AgentSubagentWriteDialect;
   metadataSources?: AgentMetadataSource[];
   icon?: AgentIconRecord;
   skillsLocation: AgentLocationRecord;
   mcpConfigLocation: AgentLocationRecord;
+  subagentsLocation?: AgentLocationRecord;
   configLocation?: AgentLocationRecord;
   executableLocation?: AgentLocationRecord;
 }
@@ -552,6 +583,70 @@ export interface McpInventoryCounts {
   dismissedAttentionMcps: number;
 }
 
+export type SubagentIssueReason =
+  | 'missing-universal'
+  | 'missing-from-agents'
+  | 'definition-mismatch'
+  | 'identical-copies'
+  | 'broken-symlink'
+  | 'wrong-symlink-target'
+  | 'invalid-definition';
+export type SubagentStatus = 'healthy' | 'needs-attention';
+export type SubagentPresentation = 'none' | 'active' | 'dismissed';
+
+export interface SubagentLocationRecord {
+  agentId: string;
+  agentLabel: string;
+  scope: SkillSourceScope;
+  path: string;
+  directoryPath: string;
+  fileType: SkillLocationType;
+  modifiedAt: string;
+  canonical: boolean;
+  format: AgentSubagentParserKind;
+  description?: string | null;
+  definitionText?: string;
+  definitionComparisonKey?: string;
+  localExtrasKeys?: string[];
+  invalidDetails?: string[];
+  resolvedPath?: string;
+  symlinkTarget?: string;
+  provenance?: SkillProvenance;
+  canonicalRole?: CanonicalRole;
+  mutability?: Mutability;
+}
+
+export interface SubagentExpectedLocationRecord {
+  agentId: string;
+  agentLabel: string;
+  scope: SkillSourceScope;
+  directoryPath?: string;
+  path?: string;
+  format?: AgentSubagentParserKind;
+  supportStatus?: 'supported' | 'unsupported';
+  unsupportedReason?: 'not-documented' | 'unsupported-format' | 'account-managed';
+}
+
+export interface SubagentRecord {
+  name: string;
+  displayName?: string | null;
+  description?: string | null;
+  status: SubagentStatus;
+  presentation: SubagentPresentation;
+  locations: SubagentLocationRecord[];
+  expectedLocations?: SubagentExpectedLocationRecord[];
+  missingLocations?: SubagentExpectedLocationRecord[];
+  issueReasons: SubagentIssueReason[];
+  signature?: string;
+}
+
+export interface SubagentInventoryCounts {
+  totalSubagents: number;
+  attentionSubagents: number;
+  healthySubagents: number;
+  dismissedAttentionSubagents: number;
+}
+
 export interface HomeSummaryMetric {
   total: number;
   healthy: number;
@@ -573,6 +668,8 @@ export interface SkillInventorySnapshot {
   counts: SkillInventoryCounts;
   mcps?: McpRecord[];
   mcpCounts?: McpInventoryCounts;
+  subagents?: SubagentRecord[];
+  subagentCounts?: SubagentInventoryCounts;
   agents?: AgentRecord[];
   agentCounts?: AgentInventoryCounts;
   homeSummary?: HomeSummary;
@@ -601,6 +698,13 @@ export type SkillResolvableIssue =
   | 'wrong-symlink-target';
 
 export type McpResolvableIssue = 'definition-mismatch' | 'missing-from-agents';
+export type SubagentResolvableIssue =
+  | 'missing-universal'
+  | 'missing-from-agents'
+  | 'definition-mismatch'
+  | 'identical-copies'
+  | 'broken-symlink'
+  | 'wrong-symlink-target';
 
 export type ResolveIssueRequest =
   | {
@@ -616,6 +720,15 @@ export type ResolveIssueRequest =
     issue: McpResolvableIssue;
     selectedVariantPath?: string;
     skillName?: never;
+    subagentName?: never;
+  }
+  | {
+    entity: 'subagent';
+    subagentName: string;
+    issue: SubagentResolvableIssue;
+    selectedVariantPath?: string;
+    skillName?: never;
+    mcpName?: never;
   };
 
 export type CapabilityActionRequest = {
@@ -631,10 +744,17 @@ export type DismissDriftRequest =
   | {
     skillName: string;
     mcpName?: never;
+    subagentName?: never;
   }
   | {
     mcpName: string;
     skillName?: never;
+    subagentName?: never;
+  }
+  | {
+    subagentName: string;
+    skillName?: never;
+    mcpName?: never;
   };
 
 export interface SeededFixtureExpectation {
@@ -687,6 +807,7 @@ export type AddMcpServerRequest =
 export type AuditOperationKind =
   | 'resolve-skill-issue'
   | 'resolve-mcp-issue'
+  | 'resolve-subagent-issue'
   | 'add-skill'
   | 'add-mcp-server'
   | 'settings-update'
@@ -786,7 +907,7 @@ export interface AuditOperation {
   status: AuditOperationStatus;
   actor: 'app';
   sourceMode: InventorySourceMode;
-  entity?: { type: 'skill' | 'mcp' | 'settings' | 'sandbox'; name?: string };
+  entity?: { type: 'skill' | 'mcp' | 'subagent' | 'settings' | 'sandbox'; name?: string };
   failure?: AuditFailureDiagnostic;
   undoState: AuditUndoState;
   actionCount: number;

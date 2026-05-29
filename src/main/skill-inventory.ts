@@ -47,6 +47,8 @@ import type {
   SkillStructuralState,
   SkillUniversalAlternate,
   SkillUniversalDecision,
+  SubagentInventoryCounts,
+  SubagentRecord,
 } from '@shared/contracts';
 import { buildTextDiffLines } from '@shared/text-diff';
 import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
@@ -72,6 +74,7 @@ import {
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
 import { verifyMcpConnection } from '@main/mcp-connectivity';
 import { buildPluginSkillScanSources, scanPluginInventory } from '@main/plugin-inventory';
+import { collectSubagentRecords, countSubagents } from '@main/subagent-inventory';
 
 export interface ScanSkillInventoryOptions extends ScanInventoryOptions, ResolveSkillIndexPathOptions {
   paths?: SkillIndexPaths;
@@ -190,6 +193,14 @@ export async function scanSkillInventory(options: ScanSkillInventoryOptions = {}
   const mcps = (await collectMcpRecords(agents, sources, plugins, scanOptions)).map((mcp) =>
     applyMcpPresentation(mcp, config.dismissedMcpSignatures)).sort(compareMcps);
   const mcpCounts = countMcps(mcps);
+  const subagents = collectSubagentRecords({
+    agents,
+    plugins,
+    paths,
+    includeLiveSources: scanOptions.includeLiveSources,
+    includeSandboxSources: scanOptions.includeSandboxSources,
+  }).map((subagent) => applySubagentPresentation(subagent, config.dismissedSubagentSignatures));
+  const subagentCounts = countSubagents(subagents);
   const agentCounts = countAgents(agents);
 
   const snapshot: SkillInventorySnapshot = {
@@ -201,6 +212,8 @@ export async function scanSkillInventory(options: ScanSkillInventoryOptions = {}
     counts: countSkills(skills),
     mcps,
     mcpCounts,
+    subagents,
+    subagentCounts,
     agents,
     agentCounts,
     homeSummary: buildHomeSummary(countSkills(skills), mcpCounts, agentCounts),
@@ -241,6 +254,7 @@ export async function readCachedSkillInventory(
     config.skillUniversalDecisions ?? [],
     config.dismissedDriftSignatures,
     config.dismissedMcpSignatures,
+    config.dismissedSubagentSignatures,
   );
 }
 
@@ -279,6 +293,7 @@ export function readCachedSkillInventorySync(
     config.skillUniversalDecisions ?? [],
     config.dismissedDriftSignatures,
     config.dismissedMcpSignatures,
+    config.dismissedSubagentSignatures,
   );
 }
 
@@ -326,6 +341,35 @@ export async function dismissSkillDrift(
       ...snapshot,
       scannedAt: new Date().toISOString(),
     }, dismissedDriftSignatures, snapshot.sources);
+    await writeSkillInventoryCache(paths.cacheFile, nextSnapshot);
+
+    return nextSnapshot;
+  }
+
+  if ('subagentName' in request) {
+    const subagent = (snapshot.subagents ?? []).find((candidate) => candidate.name === request.subagentName);
+
+    if (!subagent || subagent.status !== 'needs-attention' || !subagent.signature) {
+      throw new Error(`Only attention subagents can be dismissed or undismissed: ${request.subagentName}`);
+    }
+
+    const dismissedSubagentSignatures = subagent.presentation === 'dismissed'
+      ? config.dismissedSubagentSignatures.filter((signature) => signature !== subagent.signature)
+      : [...new Set([...config.dismissedSubagentSignatures, subagent.signature])];
+
+    await writeSkillIndexConfig(paths.configFile, {
+      ...config,
+      dismissedSubagentSignatures,
+    });
+
+    const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+    const subagentCounts = countSubagents(subagents);
+    const nextSnapshot: SkillInventorySnapshot = {
+      ...snapshot,
+      scannedAt: new Date().toISOString(),
+      subagents,
+      subagentCounts,
+    };
     await writeSkillInventoryCache(paths.cacheFile, nextSnapshot);
 
     return nextSnapshot;
@@ -1236,6 +1280,24 @@ function applyDismissedMcpState(mcps: McpRecord[], dismissedMcpSignatures: strin
   return mcps.map((mcp) => applyMcpPresentation(mcp, dismissedMcpSignatures));
 }
 
+function applySubagentPresentation(subagent: SubagentRecord, dismissedSubagentSignatures: string[]): SubagentRecord {
+  if (subagent.status !== 'needs-attention' || !subagent.signature) {
+    return subagent;
+  }
+
+  return {
+    ...subagent,
+    presentation: dismissedSubagentSignatures.includes(subagent.signature) ? 'dismissed' : 'active',
+  };
+}
+
+function applyDismissedSubagentState(
+  subagents: SubagentRecord[],
+  dismissedSubagentSignatures: string[],
+): SubagentRecord[] {
+  return subagents.map((subagent) => applySubagentPresentation(subagent, dismissedSubagentSignatures));
+}
+
 function countMcps(mcps: McpRecord[]): McpInventoryCounts {
   return mcps.reduce<McpInventoryCounts>(
     (counts, mcp) => {
@@ -1662,6 +1724,7 @@ function reconcileSkillInventorySnapshot(
   universalDecisions: SkillUniversalDecision[],
   dismissedDriftSignatures: string[],
   dismissedMcpSignatures: string[],
+  dismissedSubagentSignatures: string[],
 ): SkillInventorySnapshot {
   const activeSources = sources ?? registeredSources;
   const activeAgents = agents ?? [];
@@ -1672,12 +1735,16 @@ function reconcileSkillInventorySnapshot(
   ) {
     const mcps = applyDismissedMcpState(snapshot.mcps ?? [], dismissedMcpSignatures);
     const mcpCounts = countMcps(mcps);
+    const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+    const subagentCounts = countSubagents(subagents);
     const agentCounts = countAgents(activeAgents);
 
     return applyDismissedDriftState({
       ...snapshot,
       mcps,
       mcpCounts,
+      subagents,
+      subagentCounts,
       agents: activeAgents,
       plugins,
       agentCounts,
@@ -3913,6 +3980,8 @@ function isSkillInventorySnapshot(value: unknown): value is SkillInventorySnapsh
     && isSkillInventoryCounts(value.counts)
     && (value.mcps === undefined || (Array.isArray(value.mcps) && value.mcps.every(isMcpRecord)))
     && (value.mcpCounts === undefined || isMcpInventoryCounts(value.mcpCounts))
+    && (value.subagents === undefined || (Array.isArray(value.subagents) && value.subagents.every(isSubagentRecord)))
+    && (value.subagentCounts === undefined || isSubagentInventoryCounts(value.subagentCounts))
     && (value.agents === undefined || (Array.isArray(value.agents) && value.agents.every(isAgentRecord)))
     && (value.agentCounts === undefined || isAgentInventoryCounts(value.agentCounts))
     && (value.homeSummary === undefined || isHomeSummary(value.homeSummary));
@@ -3958,6 +4027,13 @@ function isPluginRecord(value: unknown): value is PluginRecord {
       && isString(mcp.name)
       && isString(mcp.configPath)
       && isString(mcp.sourceId))
+    && (value.bundledSubagents === undefined
+      || (Array.isArray(value.bundledSubagents)
+        && value.bundledSubagents.every((subagent) =>
+          isRecord(subagent)
+          && isString(subagent.name)
+          && isString(subagent.path)
+          && isString(subagent.sourceId))))
     && (value.unsupportedHooksCount === undefined || isNumber(value.unsupportedHooksCount))
     && (value.source === undefined
       || (isRecord(value.source)
@@ -4122,6 +4198,31 @@ function isAgentRecord(value: unknown): value is AgentRecord {
       || value.mcpWriteDialect === 'yaml-typed'
       || value.mcpWriteDialect === 'none'
       || value.mcpWriteDialect === 'unknown')
+    && (value.subagentConfigKind === undefined
+      || value.subagentConfigKind === 'directory'
+      || value.subagentConfigKind === 'agent-config'
+      || value.subagentConfigKind === 'plugin-only'
+      || value.subagentConfigKind === 'account-managed'
+      || value.subagentConfigKind === 'none'
+      || value.subagentConfigKind === 'unknown')
+    && (value.subagentParserKind === undefined
+      || value.subagentParserKind === 'markdown-frontmatter'
+      || value.subagentParserKind === 'codex-toml'
+      || value.subagentParserKind === 'json'
+      || value.subagentParserKind === 'jsonc'
+      || value.subagentParserKind === 'toml'
+      || value.subagentParserKind === 'yaml'
+      || value.subagentParserKind === 'none'
+      || value.subagentParserKind === 'unknown')
+    && (value.subagentWriteDialect === undefined
+      || value.subagentWriteDialect === 'markdown-frontmatter'
+      || value.subagentWriteDialect === 'codex-toml'
+      || value.subagentWriteDialect === 'json'
+      || value.subagentWriteDialect === 'jsonc'
+      || value.subagentWriteDialect === 'toml'
+      || value.subagentWriteDialect === 'yaml'
+      || value.subagentWriteDialect === 'none'
+      || value.subagentWriteDialect === 'unknown')
     && (value.metadataSources === undefined
       || (Array.isArray(value.metadataSources)
         && value.metadataSources.every((source) => isRecord(source) && isString(source.url) && (source.note === undefined || isString(source.note)))))
@@ -4133,6 +4234,7 @@ function isAgentRecord(value: unknown): value is AgentRecord {
         && (value.icon.note === undefined || isString(value.icon.note))))
     && isAgentLocationRecord(value.skillsLocation)
     && isAgentLocationRecord(value.mcpConfigLocation)
+    && (value.subagentsLocation === undefined || isAgentLocationRecord(value.subagentsLocation))
     && (value.configLocation === undefined || isAgentLocationRecord(value.configLocation))
     && (value.executableLocation === undefined || isAgentLocationRecord(value.executableLocation));
 }
@@ -4217,6 +4319,89 @@ function isMcpInventoryCounts(value: unknown): value is McpInventoryCounts {
     && isNumber(value.attentionMcps)
     && isNumber(value.healthyMcps)
     && isNumber(value.dismissedAttentionMcps);
+}
+
+function isSubagentLocationRecord(value: unknown): value is SubagentRecord['locations'][number] {
+  return isRecord(value)
+    && isString(value.agentId)
+    && isString(value.agentLabel)
+    && (value.scope === 'sandbox' || value.scope === 'live' || value.scope === 'custom')
+    && isString(value.path)
+    && isString(value.directoryPath)
+    && (value.fileType === 'real-file' || value.fileType === 'symlink')
+    && isString(value.modifiedAt)
+    && typeof value.canonical === 'boolean'
+    && isSubagentParserKind(value.format)
+    && (value.description === undefined || value.description === null || isString(value.description))
+    && (value.definitionText === undefined || isString(value.definitionText))
+    && (value.definitionComparisonKey === undefined || isString(value.definitionComparisonKey))
+    && (value.localExtrasKeys === undefined || (Array.isArray(value.localExtrasKeys) && value.localExtrasKeys.every(isString)))
+    && (value.invalidDetails === undefined || (Array.isArray(value.invalidDetails) && value.invalidDetails.every(isString)))
+    && (value.resolvedPath === undefined || isString(value.resolvedPath))
+    && (value.symlinkTarget === undefined || isString(value.symlinkTarget))
+    && (value.provenance === undefined || isSkillProvenance(value.provenance))
+    && (value.canonicalRole === undefined || isCanonicalRole(value.canonicalRole))
+    && (value.mutability === undefined || isMutability(value.mutability));
+}
+
+function isSubagentExpectedLocationRecord(value: unknown): value is NonNullable<SubagentRecord['expectedLocations']>[number] {
+  return isRecord(value)
+    && isString(value.agentId)
+    && isString(value.agentLabel)
+    && (value.scope === 'sandbox' || value.scope === 'live' || value.scope === 'custom')
+    && (value.directoryPath === undefined || isString(value.directoryPath))
+    && (value.path === undefined || isString(value.path))
+    && (value.format === undefined || isSubagentParserKind(value.format))
+    && (value.supportStatus === undefined || value.supportStatus === 'supported' || value.supportStatus === 'unsupported')
+    && (value.unsupportedReason === undefined
+      || value.unsupportedReason === 'not-documented'
+      || value.unsupportedReason === 'unsupported-format'
+      || value.unsupportedReason === 'account-managed');
+}
+
+function isSubagentRecord(value: unknown): value is SubagentRecord {
+  return isRecord(value)
+    && isString(value.name)
+    && (value.displayName === undefined || value.displayName === null || isString(value.displayName))
+    && (value.description === undefined || value.description === null || isString(value.description))
+    && (value.status === 'healthy' || value.status === 'needs-attention')
+    && (value.presentation === 'none' || value.presentation === 'active' || value.presentation === 'dismissed')
+    && Array.isArray(value.locations)
+    && value.locations.every(isSubagentLocationRecord)
+    && (value.expectedLocations === undefined || (Array.isArray(value.expectedLocations) && value.expectedLocations.every(isSubagentExpectedLocationRecord)))
+    && (value.missingLocations === undefined || (Array.isArray(value.missingLocations) && value.missingLocations.every(isSubagentExpectedLocationRecord)))
+    && Array.isArray(value.issueReasons)
+    && value.issueReasons.every(isSubagentIssueReason)
+    && (value.signature === undefined || isString(value.signature));
+}
+
+function isSubagentInventoryCounts(value: unknown): value is SubagentInventoryCounts {
+  return isRecord(value)
+    && isNumber(value.totalSubagents)
+    && isNumber(value.attentionSubagents)
+    && isNumber(value.healthySubagents)
+    && isNumber(value.dismissedAttentionSubagents);
+}
+
+function isSubagentParserKind(value: unknown): boolean {
+  return value === 'markdown-frontmatter'
+    || value === 'codex-toml'
+    || value === 'json'
+    || value === 'jsonc'
+    || value === 'toml'
+    || value === 'yaml'
+    || value === 'none'
+    || value === 'unknown';
+}
+
+function isSubagentIssueReason(value: unknown): boolean {
+  return value === 'missing-universal'
+    || value === 'missing-from-agents'
+    || value === 'definition-mismatch'
+    || value === 'identical-copies'
+    || value === 'broken-symlink'
+    || value === 'wrong-symlink-target'
+    || value === 'invalid-definition';
 }
 
 function isHomeSummaryMetric(value: unknown): boolean {

@@ -8,7 +8,13 @@ import type {
   SkillRecord,
   SkillResolvableIssue,
   SkillScanSource,
+  SubagentRecord,
+  SubagentResolvableIssue,
 } from '@shared/contracts';
+import {
+  isMarkdownSubagentSymlinkCompatible,
+  isSupportedSubagentDirectoryFormat,
+} from '@shared/subagent-format-policy';
 
 import type { InspectorModel } from './detail-inspector-model';
 import { getDisplaySkillIssueReasons } from './inventory-presentation';
@@ -31,6 +37,15 @@ const SKILL_RESOLVABLE_ISSUES = new Set([
 const MCP_RESOLVABLE_ISSUES = new Set([
   'definition-mismatch',
   'missing-from-agents',
+] as const);
+
+const SUBAGENT_RESOLVABLE_ISSUES = new Set([
+  'missing-universal',
+  'missing-from-agents',
+  'definition-mismatch',
+  'identical-copies',
+  'broken-symlink',
+  'wrong-symlink-target',
 ] as const);
 
 export function getSkillResolveActionState(
@@ -138,6 +153,56 @@ export function getMcpResolveActionState(
   };
 }
 
+export function getSubagentResolveActionState(
+  subagent: SubagentRecord,
+  inspectorModel: InspectorModel | null,
+  snapshot: SkillInventorySnapshot | null,
+): ResolveActionState {
+  const activeProblem = inspectorModel?.activeProblem ?? null;
+  if (!activeProblem || !activeProblem.primaryActionLabel || !isSubagentResolvableIssue(activeProblem.key)) {
+    return {
+      disabledReason: null,
+      request: null,
+    };
+  }
+
+  if (!snapshot) {
+    return {
+      disabledReason: 'Subagent inventory is still loading.',
+      request: null,
+    };
+  }
+
+  const selectedVariantPath = getSubagentSelectedVariantPath(
+    subagent,
+    inspectorModel?.selectedVariantPath ?? null,
+  );
+  if (!selectedVariantPath) {
+    return {
+      disabledReason: 'Choose a subagent definition before resolving this issue.',
+      request: null,
+    };
+  }
+
+  const targetabilityBlocker = getSubagentTargetabilityBlocker(subagent, activeProblem.key, selectedVariantPath, snapshot);
+  if (targetabilityBlocker) {
+    return {
+      disabledReason: targetabilityBlocker,
+      request: null,
+    };
+  }
+
+  return {
+    disabledReason: null,
+    request: {
+      entity: 'subagent',
+      issue: activeProblem.key,
+      subagentName: subagent.name,
+      selectedVariantPath,
+    },
+  };
+}
+
 function isWritableSupportedMcpTarget(
   location: McpRecord['locations'][number] | NonNullable<McpRecord['missingLocations']>[number],
   snapshot: SkillInventorySnapshot,
@@ -158,6 +223,111 @@ function isWritableSupportedMcpTarget(
     && agent.mcpConfigLocation.state === 'available'
     && SUPPORTED_MCP_PARSER_KINDS.has((agent.mcpParserKind ?? 'json-servers') as never),
   );
+}
+
+type SubagentResolutionTarget =
+  | SubagentRecord['locations'][number]
+  | NonNullable<SubagentRecord['missingLocations']>[number];
+
+function getSubagentTargetabilityBlocker(
+  subagent: SubagentRecord,
+  issue: SubagentResolvableIssue,
+  selectedVariantPath: string,
+  snapshot: SkillInventorySnapshot,
+): string | null {
+  const targetLocations = getSubagentResolutionTargets(subagent, issue, selectedVariantPath, snapshot);
+  if (targetLocations.length === 0) {
+    return null;
+  }
+
+  const allTargetsWritable = targetLocations.every((location) =>
+    isWritableSupportedSubagentTarget(location, snapshot));
+  return allTargetsWritable
+    ? null
+    : 'This subagent can only be resolved when every target location is writable and uses a supported format.';
+}
+
+function getSubagentResolutionTargets(
+  subagent: SubagentRecord,
+  issue: SubagentResolvableIssue,
+  selectedVariantPath: string,
+  snapshot: SkillInventorySnapshot,
+): SubagentResolutionTarget[] {
+  const canonicalLocation = subagent.locations.find((location) =>
+    location.canonical
+    && location.fileType === 'real-file'
+    && (location.invalidDetails?.length ?? 0) === 0);
+  const selectedLocation = subagent.locations.find((location) => location.path === selectedVariantPath);
+
+  switch (issue) {
+    case 'missing-universal':
+      return [];
+    case 'missing-from-agents':
+      return subagent.missingLocations ?? [];
+    case 'identical-copies':
+      return subagent.locations.filter((location) =>
+        location.fileType === 'real-file'
+        && !location.canonical
+        && location.format === 'markdown-frontmatter'
+        && isMarkdownSubagentSymlinkCompatible(findSubagentAgent(snapshot, location.agentId)?.family)
+        && !hasSubagentLocalExtras(location)
+        && location.definitionComparisonKey === canonicalLocation?.definitionComparisonKey);
+    case 'broken-symlink':
+      return subagent.locations.filter((location) =>
+        location.fileType === 'symlink'
+        && !location.canonical
+        && location.resolvedPath === undefined);
+    case 'wrong-symlink-target':
+      return subagent.locations.filter((location) =>
+        location.fileType === 'symlink'
+        && !location.canonical
+        && location.resolvedPath !== undefined
+        && canonicalLocation
+        && location.resolvedPath !== canonicalLocation.path);
+    case 'definition-mismatch':
+      return subagent.locations.filter((location) =>
+        location.fileType === 'real-file'
+        && !location.canonical
+        && location.path !== selectedVariantPath
+        && location.definitionComparisonKey !== selectedLocation?.definitionComparisonKey);
+  }
+}
+
+function isWritableSupportedSubagentTarget(
+  location: SubagentResolutionTarget,
+  snapshot: SkillInventorySnapshot,
+): boolean {
+  if (!location.path) {
+    return false;
+  }
+
+  const format = location.format ?? findSubagentAgent(snapshot, location.agentId)?.subagentParserKind ?? 'unknown';
+  if (!isSupportedSubagentDirectoryFormat(format)) {
+    return false;
+  }
+
+  if ('fileType' in location) {
+    if (location.canonical) {
+      return true;
+    }
+    return location.mutability === 'writable' && !location.agentId.startsWith('plugin:');
+  }
+
+  const agent = findSubagentAgent(snapshot, location.agentId);
+  return Boolean(
+    agent
+    && agent.writable
+    && agent.subagentsLocation?.state === 'available'
+    && agent.subagentsLocation.path,
+  );
+}
+
+function findSubagentAgent(snapshot: SkillInventorySnapshot, agentId: string) {
+  return (snapshot.agents ?? []).find((entry) => entry.id === agentId);
+}
+
+function hasSubagentLocalExtras(location: { localExtrasKeys?: string[] }): boolean {
+  return (location.localExtrasKeys?.length ?? 0) > 0;
 }
 
 function hasCanonicalRealFile(skill: SkillRecord): boolean {
@@ -234,6 +404,33 @@ function getMcpSelectedVariantPath(mcp: McpRecord, selectedVariantPath: string |
   return getDistinctMcpVariantCount(mcp) === 1 ? mcp.locations[0]?.configPath ?? null : null;
 }
 
+function getSubagentSelectedVariantPath(subagent: SubagentRecord, selectedVariantPath: string | null): string | null {
+  if (selectedVariantPath && subagent.locations.some((location) =>
+    location.path === selectedVariantPath
+    && location.fileType === 'real-file'
+    && (location.invalidDetails?.length ?? 0) === 0)) {
+    return selectedVariantPath;
+  }
+
+  const selectableLocations = subagent.locations.filter((location) =>
+    location.fileType === 'real-file'
+    && (location.invalidDetails?.length ?? 0) === 0);
+  const canonicalLocation = selectableLocations.find((location) => location.canonical && location.fileType === 'real-file');
+  if (canonicalLocation) {
+    return canonicalLocation.path;
+  }
+
+  const groups = new Map<string, string[]>();
+  for (const location of selectableLocations) {
+    const key = location.definitionComparisonKey ?? location.definitionText ?? `path:${location.path}`;
+    const existing = groups.get(key) ?? [];
+    existing.push(location.path);
+    groups.set(key, existing);
+  }
+
+  return groups.size === 1 ? selectableLocations[0]?.path ?? null : null;
+}
+
 function getDistinctMcpVariantCount(mcp: McpRecord): number {
   return new Set(mcp.locations.map((location) =>
     location.definitionComparisonKey ?? location.definitionText ?? `path:${location.configPath}`)).size;
@@ -259,6 +456,10 @@ function isSkillResolvableIssue(value: string): value is SkillResolvableIssue {
 
 function isMcpResolvableIssue(value: string): value is McpResolvableIssue {
   return MCP_RESOLVABLE_ISSUES.has(value as McpResolvableIssue);
+}
+
+function isSubagentResolvableIssue(value: string): value is SubagentResolvableIssue {
+  return SUBAGENT_RESOLVABLE_ISSUES.has(value as SubagentResolvableIssue);
 }
 
 const AUTO_RESOLVABLE_ISSUES: Set<SkillIssueReason> = new Set([
@@ -353,6 +554,49 @@ export function getAutoResolvableMcpRequests(
   return requests;
 }
 
+const AUTO_RESOLVABLE_SUBAGENT_ISSUES: Set<SubagentResolvableIssue> = new Set([
+  'missing-universal',
+  'missing-from-agents',
+  'identical-copies',
+  'broken-symlink',
+]);
+
+export function getAutoResolvableSubagentRequests(
+  snapshot: SkillInventorySnapshot,
+): ResolveIssueRequest[] {
+  const requests: ResolveIssueRequest[] = [];
+
+  for (const subagent of snapshot.subagents ?? []) {
+    if (subagent.presentation !== 'active' || hasPluginSubagentLocation(subagent)) {
+      continue;
+    }
+
+    for (const reason of subagent.issueReasons) {
+      if (!AUTO_RESOLVABLE_SUBAGENT_ISSUES.has(reason as SubagentResolvableIssue)) {
+        continue;
+      }
+
+      const selectedVariantPath = getSubagentSelectedVariantPath(subagent, null);
+      if (!selectedVariantPath) {
+        continue;
+      }
+
+      if (getSubagentTargetabilityBlocker(subagent, reason as SubagentResolvableIssue, selectedVariantPath, snapshot)) {
+        continue;
+      }
+
+      requests.push({
+        entity: 'subagent',
+        issue: reason as SubagentResolvableIssue,
+        subagentName: subagent.name,
+        selectedVariantPath,
+      });
+    }
+  }
+
+  return requests;
+}
+
 function hasPluginMcpLocation(
   mcp: McpRecord,
   sourceIndex: Map<string, SkillScanSource>,
@@ -360,4 +604,10 @@ function hasPluginMcpLocation(
   return mcp.locations.some((location) =>
     location.provenance?.kind === 'plugin'
     || sourceIndex.get(location.agentId)?.kind === 'plugin');
+}
+
+function hasPluginSubagentLocation(subagent: SubagentRecord): boolean {
+  return subagent.locations.some((location) =>
+    location.agentId.startsWith('plugin:')
+    || location.provenance?.kind === 'plugin');
 }

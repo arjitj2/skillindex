@@ -6,10 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { McpRecord } from '@shared/contracts';
 
 import { representativeInventorySnapshot } from '../representative-preview-data';
-import { buildMcpInspectorModel, buildSkillInspectorModel } from '../lib/detail-inspector-model';
+import { buildMcpInspectorModel, buildSkillInspectorModel, buildSubagentInspectorModel } from '../lib/detail-inspector-model';
 import { McpWorkspaceView } from './McpWorkspaceView';
 import { PluginsWorkspaceView } from './PluginsWorkspaceView';
 import { SkillsWorkspaceView } from './SkillsWorkspaceView';
+import { SubagentsWorkspaceView } from './SubagentsWorkspaceView';
 
 function renderSkillsWorkspaceView({
   inventorySnapshot = representativeInventorySnapshot,
@@ -27,7 +28,6 @@ function renderSkillsWorkspaceView({
   return render(
     <SkillsWorkspaceView
       isAddingSkill={false}
-      errorMessage={null}
       inventorySnapshot={inventorySnapshot}
       isDismissingDrift={false}
       isApplyingCapabilityAction={false}
@@ -72,11 +72,10 @@ function renderMcpWorkspaceView({
   onSelectMcp?: (name: string | null) => void;
   rows?: NonNullable<typeof representativeInventorySnapshot.mcps>;
   searchQuery?: string;
-  statusFilter?: 'all' | 'active' | 'none';
+  statusFilter?: 'all' | 'active' | 'dismissed' | 'none';
 } = {}) {
   render(
     <McpWorkspaceView
-      errorMessage={null}
       inventorySnapshot={inventorySnapshot}
       isAddingMcpServer={false}
       isDismissingDrift={false}
@@ -103,20 +102,67 @@ function renderMcpWorkspaceView({
   );
 }
 
+function renderSubagentsWorkspaceView({
+  inventorySnapshot = representativeInventorySnapshot,
+  isRescanning = false,
+  rows = representativeInventorySnapshot.subagents ?? [],
+  searchQuery = '',
+  selectedSubagent = null,
+  selectedSubagentInspectorModel = null,
+  selectedSubagentProblemKey = null,
+  statusFilter = 'all',
+}: {
+  inventorySnapshot?: typeof representativeInventorySnapshot;
+  isRescanning?: boolean;
+  rows?: NonNullable<typeof representativeInventorySnapshot.subagents>;
+  searchQuery?: string;
+  selectedSubagent?: NonNullable<typeof representativeInventorySnapshot.subagents>[number] | null;
+  selectedSubagentInspectorModel?: ReturnType<typeof buildSubagentInspectorModel> | null;
+  selectedSubagentProblemKey?: NonNullable<typeof representativeInventorySnapshot.subagents>[number]['issueReasons'][number] | null;
+  statusFilter?: 'all' | 'active' | 'dismissed' | 'none';
+} = {}) {
+  render(
+    <SubagentsWorkspaceView
+      inventorySnapshot={inventorySnapshot}
+      isDismissingDrift={false}
+      isResolvingIssue={false}
+      isRescanning={isRescanning}
+      onClearSelection={vi.fn()}
+      onDismissDrift={vi.fn(() => Promise.resolve())}
+      onResolveIssue={vi.fn(() => Promise.resolve())}
+      onRescan={vi.fn(() => Promise.resolve())}
+      onSearchQueryChange={vi.fn()}
+      onSelectProblem={vi.fn()}
+      onSelectSubagent={vi.fn()}
+      onSelectVariant={vi.fn()}
+      onStatusFilterChange={vi.fn()}
+      rows={rows}
+      sandboxRoot={null}
+      searchInputRef={createRef<HTMLInputElement>()}
+      searchQuery={searchQuery}
+      selectedSubagent={selectedSubagent}
+      selectedSubagentInspectorModel={selectedSubagentInspectorModel}
+      selectedSubagentProblemKey={selectedSubagentProblemKey}
+      statusFilter={statusFilter}
+    />,
+  );
+}
+
 function renderPluginsWorkspaceView({
   onSelectMcpAsset = vi.fn(),
   onSelectSkillAsset = vi.fn(),
+  onSelectSubagentAsset = vi.fn(),
   sandboxRoot = null,
 }: {
   onSelectMcpAsset?: (mcpName: string) => void;
   onSelectSkillAsset?: (skillName: string) => void;
+  onSelectSubagentAsset?: (subagentName: string) => void;
   sandboxRoot?: string | null;
 } = {}) {
   const selectedPlugin = representativeInventorySnapshot.plugins?.[0] ?? null;
 
   return render(
     <PluginsWorkspaceView
-      errorMessage={null}
       inventorySnapshot={representativeInventorySnapshot}
       isRescanning={false}
       onClearSelection={vi.fn()}
@@ -125,6 +171,7 @@ function renderPluginsWorkspaceView({
       onSelectMcpAsset={onSelectMcpAsset}
       onSelectPlugin={vi.fn()}
       onSelectSkillAsset={onSelectSkillAsset}
+      onSelectSubagentAsset={onSelectSubagentAsset}
       rows={representativeInventorySnapshot.plugins ?? []}
       sandboxRoot={sandboxRoot}
       searchInputRef={createRef<HTMLInputElement>()}
@@ -165,6 +212,38 @@ describe('inventory view chrome', () => {
     expect(screen.queryByRole('button', { name: 'Filter' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /broken-mcp/i }).querySelector('p')).toBeNull();
     expect(screen.getByRole('button', { name: /healthy-mcp/i }).querySelector('p')).toBeNull();
+  });
+
+  it('renders Subagent details with the shared inspector chrome used by Skills', () => {
+    const selectedSubagent = representativeInventorySnapshot.subagents?.find((subagent) => subagent.name === 'reviewer');
+    expect(selectedSubagent).toBeDefined();
+    const agentIndex = new Map((representativeInventorySnapshot.agents ?? []).map((agent) => [agent.id, agent]));
+
+    renderSubagentsWorkspaceView({
+      selectedSubagent: selectedSubagent ?? null,
+      selectedSubagentInspectorModel: selectedSubagent
+        ? buildSubagentInspectorModel(selectedSubagent, {
+          selectedProblemKey: 'missing-from-agents',
+          selectedVariantPath: null,
+        }, agentIndex)
+        : null,
+      selectedSubagentProblemKey: 'missing-from-agents',
+    });
+
+    const detail = screen.getByRole('complementary', { name: 'Subagent detail' });
+    expect(detail).toHaveClass('detail-inspector-panel', 'detail-inspector-panel--subagent');
+    expect(detail).not.toHaveClass('plugin-detail-panel');
+    expect(within(detail).getByRole('tab', { name: /Problems/i })).toBeInTheDocument();
+    expect(within(detail).getByRole('tab', { name: /Locations/i })).toBeInTheDocument();
+    expect(within(detail).getByRole('tab', { name: /Definition/i })).toBeInTheDocument();
+    expect(within(detail).getByRole('button', { name: /Add to Agents/i })).toBeInTheDocument();
+  });
+
+  it('uses rescan loading copy in the Subagents workspace', () => {
+    renderSubagentsWorkspaceView({ isRescanning: true });
+
+    expect(screen.getByRole('button', { name: 'Rescanning…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Testing MCP connectivity…' })).not.toBeInTheDocument();
   });
 
   it('uses rescan loading copy in the MCP workspace', () => {
@@ -285,10 +364,11 @@ describe('inventory view chrome', () => {
       throw new Error('Expected representative plugin fixture to include a plugin.');
     }
     const onSelectSkillAsset = vi.fn();
-    renderPluginsWorkspaceView({ onSelectSkillAsset });
+    const onSelectSubagentAsset = vi.fn();
+    renderPluginsWorkspaceView({ onSelectSkillAsset, onSelectSubagentAsset });
 
     const tabs = within(screen.getByRole('tablist', { name: /sandbox-plugin-pack detail sections/i })).getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Bundled Assets2', 'Metadata']);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Bundled Assets3', 'Metadata']);
     expect(screen.getByRole('tab', { name: /Bundled Assets/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('tab', { name: /Overview/i })).not.toBeInTheDocument();
     expect(screen.queryByText(selectedPlugin.bundledSkills[0].path)).not.toBeInTheDocument();
@@ -299,8 +379,10 @@ describe('inventory view chrome', () => {
     expect(screen.queryByText(unsupportedHookPath)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^mixed-plugin-skill$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^deployment-expert$/i }));
 
     expect(onSelectSkillAsset).toHaveBeenCalledWith('mixed-plugin-skill');
+    expect(onSelectSubagentAsset).toHaveBeenCalledWith('sandbox-plugin-pack:deployment-expert');
     const unsupportedSection = screen.getByText('Unsupported assets').closest('.plugin-detail-panel__asset-section');
     expect(unsupportedSection).not.toBeNull();
     expect(within(unsupportedSection as HTMLElement).getByText('session-start')).toBeInTheDocument();
@@ -353,7 +435,6 @@ describe('inventory view chrome', () => {
   it('renders one status pill per issue and orders active rows by issue count', () => {
     render(
       <McpWorkspaceView
-        errorMessage={null}
         inventorySnapshot={representativeInventorySnapshot}
         isAddingMcpServer={false}
         isDismissingDrift={false}
@@ -471,18 +552,32 @@ describe('inventory view chrome', () => {
     expect(screen.queryByText('No MCPs were found in the agent configs Skill Index scanned.')).not.toBeInTheDocument();
   });
 
-  it('shows undismiss actions in dismissed detail panes for skills and MCPs', () => {
+  it('shows filter-specific empty states for subagents when a non-empty inventory has no matches for the active filter', () => {
+    renderSubagentsWorkspaceView({ rows: [], statusFilter: 'dismissed' });
+
+    expect(screen.getByText('No dismissed subagents found.')).toBeInTheDocument();
+    expect(screen.queryByText('No subagents were found in the agent folders Skill Index scanned.')).not.toBeInTheDocument();
+  });
+
+  it('shows undismiss actions in dismissed detail panes for skills, MCPs, and subagents', () => {
     const sourceIndex = new Map(representativeInventorySnapshot.sources.map((source) => [source.id, source]));
     const agentIndex = new Map((representativeInventorySnapshot.agents ?? []).map((agent) => [agent.id, agent]));
     const dismissedSkill = representativeInventorySnapshot.skills.find((skill) => skill.name === 'dismissed-drift-skill');
     const dismissedMcp = representativeInventorySnapshot.mcps?.find((mcp) => mcp.name === 'muted-mcp');
+    const activeSubagent = representativeInventorySnapshot.subagents?.find((subagent) => subagent.name === 'reviewer');
+    const dismissedSubagent = activeSubagent
+      ? {
+        ...activeSubagent,
+        presentation: 'dismissed' as const,
+      }
+      : null;
     expect(dismissedSkill).toBeDefined();
     expect(dismissedMcp).toBeDefined();
+    expect(dismissedSubagent).toBeDefined();
 
     const { rerender } = render(
       <SkillsWorkspaceView
         isAddingSkill={false}
-        errorMessage={null}
         inventorySnapshot={representativeInventorySnapshot}
         isDismissingDrift={false}
         isApplyingCapabilityAction={false}
@@ -520,7 +615,6 @@ describe('inventory view chrome', () => {
 
     rerender(
       <McpWorkspaceView
-        errorMessage={null}
         inventorySnapshot={representativeInventorySnapshot}
         isAddingMcpServer={false}
         isDismissingDrift={false}
@@ -550,5 +644,36 @@ describe('inventory view chrome', () => {
     );
 
     expect(screen.getAllByRole('button', { name: 'Undismiss issues with this MCP' }).length).toBeGreaterThan(0);
+
+    rerender(
+      <SubagentsWorkspaceView
+        inventorySnapshot={representativeInventorySnapshot}
+        isDismissingDrift={false}
+        isResolvingIssue={false}
+        isRescanning={false}
+        selectedSubagent={dismissedSubagent}
+        selectedSubagentInspectorModel={dismissedSubagent ? buildSubagentInspectorModel(dismissedSubagent, {
+          selectedProblemKey: 'missing-from-agents',
+          selectedVariantPath: null,
+        }, agentIndex) : null}
+        selectedSubagentProblemKey="missing-from-agents"
+        sandboxRoot={null}
+        onClearSelection={vi.fn()}
+        onDismissDrift={vi.fn(() => Promise.resolve())}
+        onResolveIssue={vi.fn(() => Promise.resolve())}
+        onRescan={vi.fn(() => Promise.resolve())}
+        onSearchQueryChange={vi.fn()}
+        onSelectProblem={vi.fn()}
+        onSelectSubagent={vi.fn()}
+        onSelectVariant={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        rows={representativeInventorySnapshot.subagents ?? []}
+        searchInputRef={createRef<HTMLInputElement>()}
+        searchQuery=""
+        statusFilter="all"
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Undismiss issues with this subagent' })).toBeInTheDocument();
   });
 });

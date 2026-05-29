@@ -8,7 +8,6 @@ import { AgentStatusRow, EmptyStatePanel, HeaderSearch, InventorySectionBlock, P
 type AgentStatusFilter = 'all' | AgentInstallState;
 
 export function AgentsWorkspaceView({
-  errorMessage,
   inventorySnapshot,
   isRescanning,
   onCancelMcpConnectivityTest,
@@ -18,7 +17,6 @@ export function AgentsWorkspaceView({
   searchInputRef,
   searchQuery,
 }: {
-  errorMessage: string | null;
   inventorySnapshot: SkillInventorySnapshot | null;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
@@ -39,6 +37,7 @@ export function AgentsWorkspaceView({
         <div className="agent-section-columns" aria-hidden="true">
           <span className="agent-section-column-label">Skills source</span>
           <span className="agent-section-column-label">MCP / config</span>
+          <span className="agent-section-column-label">Subagents</span>
         </div>
       ),
       rows: installedAgents,
@@ -51,6 +50,7 @@ export function AgentsWorkspaceView({
         <div className="agent-section-columns" aria-hidden="true">
           <span className="agent-section-column-label">Skills source</span>
           <span className="agent-section-column-label">MCP / config</span>
+          <span className="agent-section-column-label">Subagents</span>
         </div>
       ),
       rows: missingAgents,
@@ -90,7 +90,6 @@ export function AgentsWorkspaceView({
           onFilterChange={setStatusFilter}
         />
         <section aria-label="Agents list" className="master-list-panel agent-group-stack--scroll">
-          {errorMessage ? <p className="inline-error-banner">{errorMessage}</p> : null}
           {inventorySnapshot ? (
             visibleSections.length > 0 ? (
               visibleSections.map((section) => (

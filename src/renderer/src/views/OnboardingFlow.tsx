@@ -1,5 +1,5 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
-import { ArrowRight, Check, ChevronDown, ChevronUp, Copy, Folder, GitBranch, Info, X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { ArrowRight, Check, Folder, GitBranch, Info, X } from 'lucide-react';
 
 import skillIndexMarkCream from '../assets/skill-index-mark-cream.svg';
 
@@ -9,15 +9,11 @@ export interface OnboardingPreferredSourceSelection {
 }
 
 export function OnboardingFlow({
-  errorMessage,
-  errorTrace,
   isCompleting,
   onChoosePreferredSource,
   onComplete,
   universalSkillsPath,
 }: {
-  errorMessage: string | null;
-  errorTrace: string | null;
   isCompleting: boolean;
   onChoosePreferredSource: () => Promise<string | null>;
   onComplete: (selection: OnboardingPreferredSourceSelection) => Promise<void>;
@@ -57,8 +53,6 @@ export function OnboardingFlow({
             <StepOne onContinue={() => setStep(2)} />
           ) : (
             <StepTwo
-              errorMessage={errorMessage}
-              errorTrace={errorTrace}
               isChoosingPreferredSource={isChoosingPreferredSource}
               isCompleting={isCompleting}
               preferredSourcePath={preferredSourcePath}
@@ -157,8 +151,6 @@ function StepOne({ onContinue }: { onContinue: () => void }) {
 }
 
 function StepTwo({
-  errorMessage,
-  errorTrace,
   isChoosingPreferredSource,
   isCompleting,
   preferredSourcePath,
@@ -168,8 +160,6 @@ function StepTwo({
   onClearPreferredSource,
   onComplete,
 }: {
-  errorMessage: string | null;
-  errorTrace: string | null;
   isChoosingPreferredSource: boolean;
   isCompleting: boolean;
   preferredSourcePath: string | null;
@@ -263,8 +253,6 @@ function StepTwo({
         <span>Manage these later in <strong>Settings {'->'} Custom scan paths</strong>. Skill Index never moves files without your approval.</span>
       </div>
 
-      {errorMessage ? <OnboardingError message={errorMessage} trace={errorTrace} /> : null}
-
       <div className="onboarding-pane-spacer" />
 
       <footer className="onboarding-footer">
@@ -279,102 +267,6 @@ function StepTwo({
       </footer>
     </>
   );
-}
-
-function OnboardingError({ message, trace }: { message: string; trace: string | null }) {
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [isTraceExpanded, setIsTraceExpanded] = useState(false);
-  const traceId = useId();
-  const normalizedTrace = trace ? normalizeTraceText(trace) : null;
-
-  useEffect(() => {
-    setCopyState('idle');
-    setIsTraceExpanded(false);
-  }, [trace]);
-
-  useEffect(() => {
-    if (copyState === 'idle') {
-      return undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setCopyState('idle');
-    }, copyState === 'copied' ? 1800 : 2400);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [copyState]);
-
-  const copyTrace = () => {
-    if (!normalizedTrace) {
-      return;
-    }
-    if (!navigator.clipboard?.writeText) {
-      setCopyState('failed');
-      return;
-    }
-
-    void navigator.clipboard.writeText(normalizedTrace)
-      .then(() => setCopyState('copied'))
-      .catch(() => setCopyState('failed'));
-  };
-
-  return (
-    <div className="onboarding-error" role="alert">
-      <div className="onboarding-error-header">
-        <span className="onboarding-error-message">{message}</span>
-        {normalizedTrace ? (
-          <span className="onboarding-error-actions">
-            <button
-              aria-expanded={isTraceExpanded}
-              aria-label={isTraceExpanded ? 'Hide failure trace' : 'Show failure trace'}
-              aria-controls={traceId}
-              className="onboarding-trace-toggle-button"
-              title={isTraceExpanded ? 'Hide failure trace' : 'Show failure trace'}
-              type="button"
-              onClick={() => setIsTraceExpanded((currentValue) => !currentValue)}
-            >
-              {isTraceExpanded ? <ChevronUp aria-hidden="true" size={13} /> : <ChevronDown aria-hidden="true" size={13} />}
-              <span>{isTraceExpanded ? 'Hide trace' : 'Show trace'}</span>
-            </button>
-            <button
-              aria-label={copyState === 'copied'
-                ? 'Failure trace copied'
-                : copyState === 'failed'
-                  ? 'Copy failure trace failed'
-                  : 'Copy failure trace'}
-              className={[
-                'audit-copy-trace-button',
-                'onboarding-copy-trace-button',
-                copyState === 'copied' ? 'audit-copy-trace-button--copied' : '',
-                copyState === 'failed' ? 'audit-copy-trace-button--failed' : '',
-              ].filter(Boolean).join(' ')}
-              title="Copy failure trace"
-              type="button"
-              onClick={copyTrace}
-            >
-              <span className="audit-copy-trace-button__icon" aria-hidden="true">
-                <Copy className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--copy" strokeWidth={2} />
-                <Check className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--check" strokeWidth={2.3} />
-              </span>
-              <span>{copyState === 'failed' ? 'Copy failed' : 'Copy trace'}</span>
-            </button>
-          </span>
-        ) : null}
-      </div>
-      {normalizedTrace && isTraceExpanded ? (
-        <pre className="onboarding-error-trace" id={traceId}>{normalizedTrace}</pre>
-      ) : null}
-    </div>
-  );
-}
-
-function normalizeTraceText(trace: string): string {
-  return trace
-    .replace(/\\r\\n/g, '\n')
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t');
 }
 
 function StepHeader({

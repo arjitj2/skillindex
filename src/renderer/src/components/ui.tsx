@@ -16,6 +16,7 @@ import { NavIcon, type NavIconName } from './NavIcon';
 
 export const PLUGIN_SKILL_TOOLTIP = 'This skill was installed via one or more plugins';
 export const PLUGIN_MCP_TOOLTIP = PLUGIN_SKILL_TOOLTIP;
+export const PLUGIN_SUBAGENT_TOOLTIP = 'This subagent was installed via one or more plugins';
 
 const PLUGIN_TOOLTIP_MARGIN = 12;
 const PLUGIN_TOOLTIP_FALLBACK_WIDTH = 360;
@@ -490,6 +491,8 @@ export function AgentStatusRow({
   const isAccountManagedSkills = agent.skillsLocation.reason === 'account-managed';
   const mcpConfigPath = getAgentConfigDisplayPath(agent);
   const mcpConfigTitle = getAgentConfigTitle(agent);
+  const subagentsPath = getAgentSubagentsDisplayPath(agent);
+  const subagentsTitle = getAgentSubagentsTitle(agent);
 
   return (
     <div className="agent-status-row">
@@ -509,6 +512,9 @@ export function AgentStatusRow({
       </div>
       <div className="agent-location-column">
         <code className="agent-location-path" title={mcpConfigTitle}>{mcpConfigPath}</code>
+      </div>
+      <div className="agent-location-column">
+        <code className="agent-location-path" title={subagentsTitle}>{subagentsPath}</code>
       </div>
     </div>
   );
@@ -614,6 +620,30 @@ function getAgentConfigTitle(agent: AgentRecord): string {
   return agent.mcpConfigLocation.path
     ?? agent.configLocation?.path
     ?? getAgentConfigDisplayPath(agent);
+}
+
+function getAgentSubagentsDisplayPath(agent: AgentRecord): string {
+  if (agent.subagentsLocation?.displayPath) {
+    return agent.subagentsLocation.displayPath;
+  }
+
+  if (agent.subagentsLocation?.path) {
+    return agent.subagentsLocation.path;
+  }
+
+  if (agent.subagentsLocation?.reason === 'account-managed') {
+    return 'Cloud account managed';
+  }
+
+  return '-';
+}
+
+function getAgentSubagentsTitle(agent: AgentRecord): string {
+  if (agent.subagentsLocation?.reason === 'account-managed') {
+    return "Subagents are managed through this agent's cloud account; Skill Index cannot scan or install local subagent files for it.";
+  }
+
+  return agent.subagentsLocation?.path ?? getAgentSubagentsDisplayPath(agent);
 }
 
 export function SettingsCard({

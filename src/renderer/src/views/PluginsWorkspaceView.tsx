@@ -2,6 +2,7 @@ import type {
   PluginMcpRef,
   PluginRecord,
   PluginSkillRef,
+  PluginSubagentRef,
   PluginUnsupportedAssetRef,
   SkillInventorySnapshot,
 } from '@shared/contracts';
@@ -18,7 +19,6 @@ import {
 import { formatInspectorDisplayPath } from '../lib/inventory-presentation';
 
 export function PluginsWorkspaceView({
-  errorMessage,
   inventorySnapshot,
   isRescanning,
   onCancelMcpConnectivityTest,
@@ -27,6 +27,7 @@ export function PluginsWorkspaceView({
   onSelectMcpAsset,
   onSelectPlugin,
   onSelectSkillAsset,
+  onSelectSubagentAsset,
   onClearSelection,
   rows,
   sandboxRoot,
@@ -35,7 +36,6 @@ export function PluginsWorkspaceView({
   selectedPlugin,
   selectedPluginKey,
 }: {
-  errorMessage: string | null;
   inventorySnapshot: SkillInventorySnapshot | null;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
@@ -44,6 +44,7 @@ export function PluginsWorkspaceView({
   onSelectMcpAsset: (mcpName: string) => void;
   onSelectPlugin: (plugin: PluginRecord) => void;
   onSelectSkillAsset: (skillName: string) => void;
+  onSelectSubagentAsset: (subagentName: string) => void;
   onClearSelection: () => void;
   rows: PluginRecord[];
   sandboxRoot: string | null;
@@ -80,7 +81,6 @@ export function PluginsWorkspaceView({
       <div className="page-scroll page-scroll--split">
         <div className={`split-workspace split-workspace--detail${selectedPlugin ? '' : ' split-workspace--detail-collapsed'}`}>
           <section aria-label="Plugins list" className="master-list-panel">
-            {errorMessage ? <p className="inline-error-banner">{errorMessage}</p> : null}
             {inventorySnapshot ? (
               sections.length > 0 ? (
                 sections.map((section) => (
@@ -117,6 +117,7 @@ export function PluginsWorkspaceView({
               onClose={onClearSelection}
               onSelectMcpAsset={onSelectMcpAsset}
               onSelectSkillAsset={onSelectSkillAsset}
+              onSelectSubagentAsset={onSelectSubagentAsset}
               plugin={selectedPlugin}
             />
           ) : null}
@@ -139,6 +140,7 @@ function PluginInventoryRow({
 }) {
   const displayPath = formatInspectorDisplayPath(plugin.rootPath, { sandboxRoot });
   const unsupportedHooksCount = plugin.unsupportedHooksCount ?? 0;
+  const bundledSubagentsCount = plugin.bundledSubagents?.length ?? 0;
 
   return (
     <button
@@ -166,6 +168,10 @@ function PluginInventoryRow({
           <strong>{plugin.bundledMcps.length}</strong>
           <span>MCPs</span>
         </span>
+        <span className="plugin-inventory-row__stat">
+          <strong>{bundledSubagentsCount}</strong>
+          <span>subagents</span>
+        </span>
         <span className={`plugin-inventory-row__stat${unsupportedHooksCount > 0 ? ' plugin-inventory-row__stat--warn' : ''}`}>
           <strong>{unsupportedHooksCount}</strong>
           <span>hooks</span>
@@ -182,16 +188,19 @@ function PluginDetailPanel({
   onClose,
   onSelectMcpAsset,
   onSelectSkillAsset,
+  onSelectSubagentAsset,
   plugin,
 }: {
   inventorySnapshot: SkillInventorySnapshot | null;
   onClose: () => void;
   onSelectMcpAsset: (mcpName: string) => void;
   onSelectSkillAsset: (skillName: string) => void;
+  onSelectSubagentAsset: (subagentName: string) => void;
   plugin: PluginRecord;
 }) {
   const [activeTab, setActiveTab] = useState<PluginDetailTab>('assets');
   const unsupportedHooksCount = plugin.unsupportedHooksCount ?? 0;
+  const bundledSubagents = plugin.bundledSubagents ?? [];
 
   useEffect(() => {
     setActiveTab('assets');
@@ -207,8 +216,9 @@ function PluginDetailPanel({
               {plugin.version ? <span>{plugin.version}</span> : null}
             </h3>
             <p>
-              Bundles {plugin.bundledSkills.length} {pluralize('skill', plugin.bundledSkills.length)}
-              {' '}and {plugin.bundledMcps.length} {pluralize('MCP', plugin.bundledMcps.length)}.
+              Bundles {plugin.bundledSkills.length} {pluralize('skill', plugin.bundledSkills.length)},{' '}
+              {plugin.bundledMcps.length} {pluralize('MCP', plugin.bundledMcps.length)}, and{' '}
+              {bundledSubagents.length} {pluralize('subagent', bundledSubagents.length)}.
             </p>
           </div>
           <button className="detail-inspector-panel__close-button" type="button" onClick={onClose}>
@@ -226,7 +236,7 @@ function PluginDetailPanel({
           onClick={() => setActiveTab('assets')}
         >
           Bundled Assets
-          <span>{plugin.bundledSkills.length + plugin.bundledMcps.length}</span>
+          <span>{plugin.bundledSkills.length + plugin.bundledMcps.length + bundledSubagents.length}</span>
         </button>
         <button
           aria-selected={activeTab === 'overview'}
@@ -278,6 +288,15 @@ function PluginDetailPanel({
                 onSelect: () => onSelectMcpAsset(resolveBundledMcpName(inventorySnapshot, mcp)),
               }))}
               title="Bundled MCPs"
+            />
+            <PluginAssetList
+              emptyLabel="No bundled subagents found."
+              items={bundledSubagents.map((subagent) => ({
+                key: `${subagent.sourceId}:${subagent.path}:${subagent.name}`,
+                label: subagent.name,
+                onSelect: () => onSelectSubagentAsset(resolveBundledSubagentName(inventorySnapshot, subagent)),
+              }))}
+              title="Bundled subagents"
             />
             <div className="plugin-detail-panel__asset-section plugin-detail-panel__asset-section--unsupported">
               <div className="plugin-detail-panel__section-label">
@@ -427,6 +446,12 @@ function resolveBundledMcpName(snapshot: SkillInventorySnapshot | null, asset: P
     mcp.locations.some((location) =>
       location.agentId === asset.sourceId
       && location.configPath === asset.configPath))?.name
+    ?? asset.name;
+}
+
+function resolveBundledSubagentName(snapshot: SkillInventorySnapshot | null, asset: PluginSubagentRef): string {
+  return snapshot?.subagents?.find((subagent) =>
+    subagent.locations.some((location) => location.path === asset.path))?.name
     ?? asset.name;
 }
 

@@ -13,7 +13,6 @@ import {
 export function SettingsWorkspaceView({
   customScanPathInput,
   devToolsEnabled,
-  errorMessage,
   handleAddCustomScanPath,
   handleClearPreferredCanonicalSourcePath,
   handleInventorySourceModeChange,
@@ -40,7 +39,6 @@ export function SettingsWorkspaceView({
 }: {
   customScanPathInput: string;
   devToolsEnabled: boolean;
-  errorMessage: string | null;
   handleAddCustomScanPath: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   handleClearPreferredCanonicalSourcePath: () => Promise<void>;
   handleInventorySourceModeChange: (mode: InventorySourceMode) => Promise<void>;
@@ -80,8 +78,6 @@ export function SettingsWorkspaceView({
       />
 
       <div className="page-scroll">
-        {errorMessage ? <p className="inline-error-banner">{errorMessage}</p> : null}
-
         <div className="settings-card-stack">
           <section className="settings-card">
             <SettingsGroupHeader
