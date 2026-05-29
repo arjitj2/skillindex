@@ -518,19 +518,19 @@ export function HomeDashboard({
       severity: 'alert',
     },
     {
-      key: 'subagents',
-      label: 'Subagents',
-      total: subagentSummary.total,
-      unit: 'on disk',
-      needsAttention: subagentSummary.needsAttention,
-      severity: 'warn',
-    },
-    {
       key: 'mcps',
       label: 'MCPs',
       total: homeSummary.mcps.total,
       unit: 'servers',
       needsAttention: homeSummary.mcps.needsAttention,
+      severity: 'warn',
+    },
+    {
+      key: 'subagents',
+      label: 'Subagents',
+      total: subagentSummary.total,
+      unit: 'on disk',
+      needsAttention: subagentSummary.needsAttention,
       severity: 'warn',
     },
   ];

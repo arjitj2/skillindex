@@ -29,13 +29,15 @@ describe('HomeDashboard', () => {
     expect(heading.parentElement).toHaveTextContent(/^Home$/);
   });
 
-  it('renders three inventory stat boxes without the future Commands box', () => {
+  it('renders Skills, MCPs, and Subagents inventory stat boxes in order', () => {
     renderDashboard();
 
     const metrics = screen.getByLabelText('Home inventory metrics');
-    expect(within(metrics).getByText('Skills')).toBeInTheDocument();
-    expect(within(metrics).getByText('Subagents')).toBeInTheDocument();
-    expect(within(metrics).getByText('MCPs')).toBeInTheDocument();
+    expect(within(metrics).getAllByText(/^(Skills|MCPs|Subagents)$/).map((label) => label.textContent)).toEqual([
+      'Skills',
+      'MCPs',
+      'Subagents',
+    ]);
     expect(within(metrics).queryByText('Commands')).not.toBeInTheDocument();
   });
 
