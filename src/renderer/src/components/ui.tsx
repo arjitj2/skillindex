@@ -1,5 +1,5 @@
 import type { AgentRecord } from '@shared/contracts';
-import { Check, Plug, Search, X } from 'lucide-react';
+import { Plug, Search, X } from 'lucide-react';
 import {
   useEffect,
   useId,
@@ -365,92 +365,6 @@ export function CalloutCard({
 
 export function StaticSwitch({ active }: { active: boolean }) {
   return <span className={`static-switch${active ? ' static-switch--active' : ''}`} aria-hidden="true" />;
-}
-
-export function AttentionGroupCard({
-  actionLabel,
-  count,
-  emptyState,
-  emptyMessage,
-  items,
-  onAction,
-  title,
-}: {
-  actionLabel: string;
-  count: number;
-  emptyState?: {
-    description: string;
-    title: string;
-  };
-  emptyMessage: string;
-  items: Array<{
-    badges: Array<{
-      label: string;
-      tone: 'attention' | 'warning' | 'healthy' | 'muted';
-    }>;
-    description?: string;
-    isLocked?: boolean;
-    key: string;
-    label: string;
-    lockedTooltip?: string;
-    onClick: () => void;
-  }>;
-  onAction: () => void;
-  title: string;
-}) {
-  const isEmpty = items.length === 0;
-
-  return (
-    <section className={`attention-card${isEmpty && emptyState ? ' attention-card--clean' : ''}`}>
-      <div className="attention-card-header">
-        <div className="attention-card-title">
-          <h3>{title}</h3>
-          {count > 0 ? <span>{count}</span> : null}
-        </div>
-        {items.length > 0 ? (
-          <button className="attention-card-link" type="button" onClick={onAction}>
-            {actionLabel}
-          </button>
-        ) : null}
-      </div>
-
-      {!isEmpty ? (
-        <div className="attention-card-list">
-          {items.map((item) => (
-            <button className="attention-card-row" key={item.key} type="button" onClick={item.onClick}>
-              <div className="attention-card-copy">
-                <strong>
-                  <span>{item.label}</span>
-                  {item.isLocked ? (
-                    <PluginTooltipIndicator
-                      className="attention-card-row__plugin-indicator"
-                      tooltip={item.lockedTooltip ?? PLUGIN_SKILL_TOOLTIP}
-                    />
-                  ) : null}
-                </strong>
-                {item.description ? <p>{item.description}</p> : null}
-              </div>
-              <div className="attention-card-actions">
-                <StatusPillGroup badges={item.badges} />
-              </div>
-            </button>
-          ))}
-        </div>
-      ) : emptyState ? (
-        <div className="attention-card-clean-state">
-          <div className="attention-card-clean-icon" aria-hidden="true">
-            <Check />
-          </div>
-          <div className="attention-card-clean-copy">
-            <strong>{emptyState.title}</strong>
-            <p>{emptyState.description}</p>
-          </div>
-        </div>
-      ) : (
-        <EmptyStatePanel message={emptyMessage} />
-      )}
-    </section>
-  );
 }
 
 export function InventorySectionBlock({

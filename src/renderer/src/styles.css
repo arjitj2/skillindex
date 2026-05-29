@@ -941,83 +941,6 @@ body {
   color: var(--text-secondary);
 }
 
-.stat-card-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.stat-card {
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 12px 16px;
-  box-shadow: var(--shadow-panel);
-}
-
-.stat-card-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-secondary);
-  margin-bottom: 10px;
-}
-
-.stat-card-label svg {
-  width: 12px;
-  height: 12px;
-}
-
-.stat-card-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.stat-divider {
-  width: 1px;
-  height: 28px;
-  background: var(--border-color);
-  margin: 0 4px;
-  align-self: center;
-  flex-shrink: 0;
-}
-
-.stat-item {
-  flex: 1;
-}
-
-.stat-num {
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  line-height: 1;
-  color: var(--text-strong);
-}
-
-.stat-num--alert {
-  color: var(--attention);
-}
-
-.stat-num--warn {
-  color: #b36a14;
-}
-
-.stat-num--muted {
-  color: var(--text-muted);
-}
-
-.stat-sub {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  margin-top: 3px;
-  line-height: 1.3;
-}
-
 /* Repair surface */
 .repair-surface {
   border: 1px solid var(--border-color);
@@ -1373,7 +1296,6 @@ body {
   color: var(--accent);
 }
 
-.attention-card,
 .agent-group-card,
 .settings-card,
 .master-list-panel,
@@ -1384,15 +1306,6 @@ body {
   box-shadow: var(--shadow-panel);
 }
 
-.attention-card {
-  overflow: hidden;
-}
-
-.attention-card--clean {
-  flex: 0 0 auto;
-}
-
-.attention-card-header,
 .agent-group-header,
 .settings-card-header {
   display: grid;
@@ -1401,7 +1314,6 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
-.attention-card-title,
 .inventory-section-title,
 .agent-group-title,
 .inspector-section-header {
@@ -1410,7 +1322,6 @@ body {
   gap: 12px;
 }
 
-.attention-card-header h3,
 .inventory-section-title h3,
 .agent-group-header h3,
 .settings-card-header h3,
@@ -1420,22 +1331,12 @@ body {
   letter-spacing: -0.02em;
 }
 
-.attention-card-title span,
 .inventory-section-title span,
 .agent-group-title span,
 .inspector-section-header span {
   color: var(--text-tertiary);
 }
 
-.attention-card-link {
-  border: 0;
-  background: transparent;
-  color: #6f685d;
-  font-size: 0.95rem;
-  cursor: pointer;
-}
-
-.attention-card-list,
 .inventory-section-list,
 .agent-group-list,
 .settings-card-body {
@@ -1444,7 +1345,6 @@ body {
   flex-direction: column;
 }
 
-.attention-card-row,
 .master-list-row {
   min-width: 0;
   max-width: 100%;
@@ -1462,25 +1362,21 @@ body {
   cursor: pointer;
 }
 
-.attention-card-row:first-child,
 .master-list-row:first-child {
   border-top: 0;
 }
 
-.attention-card-copy,
 .master-list-row-copy {
   min-width: 0;
   display: grid;
   gap: 6px;
 }
 
-.attention-card-copy strong,
 .master-list-row-copy strong,
 .agent-status-copy strong {
   font-size: 0.99rem;
 }
 
-.attention-card-copy strong,
 .master-list-row-copy strong {
   min-width: 0;
   display: inline-flex;
@@ -1488,13 +1384,11 @@ body {
   gap: 6px;
 }
 
-.attention-card-copy strong > span:first-child,
 .master-list-row-copy strong > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.attention-card-row__plugin-indicator,
 .master-list-row__plugin-indicator,
 .detail-inspector-panel__plugin-indicator {
   flex: 0 0 auto;
@@ -1505,7 +1399,6 @@ body {
   position: relative;
 }
 
-.attention-card-row__plugin-indicator svg,
 .master-list-row__plugin-indicator svg {
   width: 13px;
   height: 13px;
@@ -1560,7 +1453,6 @@ body {
   border-radius: 3px;
 }
 
-.attention-card-copy p,
 .master-list-row-copy p,
 .agent-group-header p,
 .settings-card-header p,
@@ -1572,69 +1464,12 @@ body {
   color: var(--text-secondary);
 }
 
-.attention-card-copy p,
 .master-list-row-copy p {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   overflow-wrap: anywhere;
   word-break: break-word;
-}
-
-.attention-card-actions {
-  min-width: 0;
-  max-width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 0 1 auto;
-  justify-content: flex-end;
-}
-
-.attention-card-clean-state {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 58px;
-  padding: 14px 16px;
-}
-
-.attention-card-clean-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: var(--pill-healthy-bg);
-  color: var(--pill-healthy-text);
-}
-
-.attention-card-clean-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 2.4;
-}
-
-.attention-card-clean-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.attention-card-clean-copy strong {
-  font-size: 13.5px;
-  line-height: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.attention-card-clean-copy p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--text-secondary);
 }
 
 .master-list-row-actions,
@@ -6278,26 +6113,6 @@ body {
   color: var(--text-tertiary);
 }
 
-.stat-card-grid {
-  gap: 8px;
-  margin-bottom: 18px;
-}
-
-.stat-card {
-  padding: 10px 14px;
-  border-radius: 7px;
-  border-color: var(--panel-border);
-  box-shadow: none;
-}
-
-.stat-num {
-  font-size: 22px;
-}
-
-.stat-sub {
-  font-size: 11px;
-}
-
 .home-inventory-bar {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -6679,17 +6494,12 @@ body {
   line-height: 16px;
 }
 
-.attention-card,
 .master-list-panel,
 .settings-card,
 .split-workspace--detail {
   border-radius: 7px;
   border-color: var(--panel-border);
   box-shadow: none;
-}
-
-.attention-card + .attention-card {
-  margin-top: 20px;
 }
 
 .repair-surface {
@@ -6767,29 +6577,6 @@ body {
   font-size: 11px;
 }
 
-.page-scroll--dashboard .attention-card {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
-  min-height: 0;
-}
-
-.page-scroll--dashboard .attention-card--clean {
-  flex: 0 0 auto;
-  min-height: auto;
-}
-
-.attention-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 16px;
-  background: var(--panel-muted-bg);
-  border-bottom: 1px solid var(--panel-border);
-}
-
-.attention-card-title,
 .inventory-section-title,
 .inspector-section-header {
   display: flex;
@@ -6797,7 +6584,6 @@ body {
   gap: 8px;
 }
 
-.attention-card-header h3,
 .inventory-section-title h3,
 .settings-card-header h3,
 .inspector-section-header h4 {
@@ -6806,13 +6592,6 @@ body {
   font-weight: 600;
 }
 
-.attention-card-link {
-  font-size: 12px;
-  line-height: 16px;
-  color: #6f685d;
-}
-
-.page-scroll--dashboard .attention-card-list,
 .page-scroll--dashboard .empty-state-panel {
   flex: 1 1 auto;
   min-height: 0;
@@ -6820,13 +6599,11 @@ body {
   overflow-x: hidden;
 }
 
-.attention-card-row,
 .master-list-row {
   gap: 14px;
   padding: 11px 16px;
 }
 
-.attention-card-copy,
 .master-list-row-copy,
 .location-chip-copy,
 .agent-status-copy,
@@ -6834,7 +6611,6 @@ body {
   gap: 2px;
 }
 
-.attention-card-copy strong,
 .master-list-row-copy strong,
 .agent-status-copy strong,
 .settings-row-copy strong {
@@ -6843,7 +6619,6 @@ body {
   font-weight: 600;
 }
 
-.attention-card-copy p,
 .master-list-row-copy p,
 .agent-group-header p,
 .settings-card-header p,
@@ -6854,15 +6629,6 @@ body {
   font-size: 12px;
   line-height: 16px;
   color: var(--text-secondary);
-}
-
-.attention-card-actions {
-  gap: 8px;
-}
-
-.attention-card-actions .status-pill-group {
-  min-width: 0;
-  flex-wrap: wrap;
 }
 
 .master-list-row-actions,
