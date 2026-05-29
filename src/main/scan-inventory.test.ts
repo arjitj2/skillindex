@@ -7,14 +7,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
-import { KNOWN_AGENT_FAMILIES } from '@shared/known-agent-catalog';
+import { AGENT_CATALOG } from '@shared/agent-catalog';
 import {
-  dismissSkillDrift,
-  readCachedSkillInventory,
-  readCachedSkillInventorySync,
-  reconcileWatchedSkillInventoryEvent,
-  scanSkillInventory,
-} from '@main/skill-inventory';
+  dismissDrift,
+  readCachedInventory,
+  readCachedInventorySync,
+  scanInventory,
+} from '@main/scan-inventory';
+import { reconcileWatchedSkillInventoryEvent } from '@main/skill-inventory';
 import { resolveSandboxSkillIndexPaths, resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 function anyValue(value: ArrayConstructor): unknown {
@@ -59,7 +59,7 @@ describe('representative-agent scan foundation', () => {
       '',
     ].join('\n'), 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -97,7 +97,7 @@ describe('representative-agent scan foundation', () => {
     }, null, 2)}\n`, 'utf8');
     await writeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), 'model = "gpt-5"\n', 'utf8');
 
-    const missingInventory = await scanSkillInventory({
+    const missingInventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -141,7 +141,7 @@ describe('representative-agent scan foundation', () => {
     ].join('\n'), 'utf8');
     await writeFile(claudeDesktopConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`, 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       env,
       includeSandboxSources: true,
@@ -186,7 +186,7 @@ describe('representative-agent scan foundation', () => {
       'Claude',
       'claude_desktop_config.json',
     );
-    const claudeDesktopFamily = KNOWN_AGENT_FAMILIES.find((family) => family.family === 'claude-desktop');
+    const claudeDesktopFamily = AGENT_CATALOG.find((family) => family.family === 'claude-desktop');
     if (!claudeDesktopFamily) {
       throw new Error('Missing Claude Desktop catalog entry.');
     }
@@ -204,7 +204,7 @@ describe('representative-agent scan foundation', () => {
       ].join('\n'), 'utf8');
       await writeFile(claudeDesktopConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`, 'utf8');
 
-      const inventory = await scanSkillInventory({
+      const inventory = await scanInventory({
         paths,
         env,
         includeSandboxSources: true,
@@ -259,7 +259,7 @@ describe('representative-agent scan foundation', () => {
       },
     }, null, 2)}\n`, 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       env: {
         SKILL_INDEX_AGENT_SUBSET: 'opencode',
@@ -309,7 +309,7 @@ describe('representative-agent scan foundation', () => {
       },
     }, null, 2)}\n`, 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -355,7 +355,7 @@ describe('representative-agent scan foundation', () => {
       },
     }, null, 2)}\n`, 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -425,7 +425,7 @@ describe('representative-agent scan foundation', () => {
     }, null, 2)}\n`, 'utf8');
     await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -472,7 +472,7 @@ describe('representative-agent scan foundation', () => {
     }, null, 2)}\n`, 'utf8');
     await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -516,7 +516,7 @@ describe('representative-agent scan foundation', () => {
       '',
     ].join('\n'), 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -551,7 +551,7 @@ describe('representative-agent scan foundation', () => {
     });
 
     const seeded = await seedRepresentativeFixtures({ paths });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -843,7 +843,7 @@ describe('representative-agent scan foundation', () => {
       mcpConfigLocation: { path: path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'mcp_config.json'), state: 'available' },
     });
     expect(inventory.agents?.some((agent) => agent.installState === 'not-installed')).toBe(true);
-    expect(inventory.agentCounts?.totalAgents).toBe(KNOWN_AGENT_FAMILIES.length);
+    expect(inventory.agentCounts?.totalAgents).toBe(AGENT_CATALOG.length);
     expect(inventory.agentCounts?.installedAgents).toBeGreaterThan(0);
     expect(inventory.agentCounts?.notInstalledAgents).toBeGreaterThanOrEqual(0);
     expect(inventory.homeSummary?.installedAgents).toBe(inventory.agentCounts?.installedAgents);
@@ -1148,7 +1148,7 @@ describe('representative-agent scan foundation', () => {
     };
 
     await seedRepresentativeFixtures({ paths, env: matrixEnv });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       env: matrixEnv,
       includeSandboxSources: true,
@@ -1228,7 +1228,7 @@ describe('representative-agent scan foundation', () => {
     };
 
     await seedRepresentativeFixtures({ paths, env: matrixEnv });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       env: matrixEnv,
       includeSandboxSources: true,
@@ -1271,7 +1271,7 @@ describe('representative-agent scan foundation', () => {
       '2026-04-09T00:00:00.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1311,7 +1311,7 @@ describe('representative-agent scan foundation', () => {
       'utf8',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1370,7 +1370,7 @@ describe('representative-agent scan foundation', () => {
       'utf8',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1480,7 +1480,7 @@ describe('representative-agent scan foundation', () => {
       ),
     ]);
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1531,7 +1531,7 @@ describe('representative-agent scan foundation', () => {
       'utf8',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1617,7 +1617,7 @@ describe('representative-agent scan foundation', () => {
       'utf8',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1740,7 +1740,7 @@ describe('representative-agent scan foundation', () => {
     await mkdir(path.join(paths.sandboxRoot, '.factory'), { recursive: true });
     await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1775,7 +1775,7 @@ describe('representative-agent scan foundation', () => {
     });
 
     const seeded = await seedRepresentativeFixtures({ paths });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1974,7 +1974,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2057,7 +2057,7 @@ describe('representative-agent scan foundation', () => {
       },
     }, null, 2)}\n`, 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2153,7 +2153,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2231,7 +2231,7 @@ describe('representative-agent scan foundation', () => {
       '2026-04-09T00:03:00.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2284,7 +2284,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2318,7 +2318,7 @@ describe('representative-agent scan foundation', () => {
 
     await seedRepresentativeFixtures({ paths });
     const sandboxPaths = resolveSandboxSkillIndexPaths({ paths });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths: sandboxPaths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2371,7 +2371,7 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2436,7 +2436,7 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2473,7 +2473,7 @@ describe('representative-agent scan foundation', () => {
     await mkdir(skillDir, { recursive: true });
     await symlink(missingEntrypointTarget, path.join(skillDir, 'SKILL.md'));
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2512,7 +2512,7 @@ describe('representative-agent scan foundation', () => {
     await mkdir(autoplanDir, { recursive: true });
     await symlink(missingNestedEntrypoint, path.join(autoplanDir, 'SKILL.md'));
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       env,
@@ -2574,7 +2574,7 @@ describe('representative-agent scan foundation', () => {
         dismissedMcpSignatures: [],
       });
 
-      const inventory = await scanSkillInventory({
+      const inventory = await scanInventory({
         paths,
         includeSandboxSources: false,
         includeLiveSources: false,
@@ -2615,7 +2615,7 @@ describe('representative-agent scan foundation', () => {
     await mkdir(unreadableSupportDir, { recursive: true });
     await chmod(unreadableSupportDir, 0o000);
     try {
-      const inventory = await scanSkillInventory({
+      const inventory = await scanInventory({
         paths,
         includeSandboxSources: true,
         includeLiveSources: false,
@@ -2663,7 +2663,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: false,
       includeLiveSources: false,
@@ -2699,7 +2699,7 @@ describe('representative-agent scan foundation', () => {
     );
     await symlink(skillDir, path.join(skillDir, 'loop'));
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2745,7 +2745,7 @@ describe('representative-agent scan foundation', () => {
     await symlink(sharedSupportDir, path.join(skillDir, 'alias-a'));
     await symlink(sharedSupportDir, path.join(skillDir, 'alias-b'));
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2780,7 +2780,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-07T00:00:01.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2812,7 +2812,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-08T00:00:01.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2881,7 +2881,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-08T00:00:01.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2960,7 +2960,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-08T00:00:01.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2992,7 +2992,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-08T00:00:00.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -3014,7 +3014,7 @@ describe('representative-agent scan foundation', () => {
     };
     await writeFile(paths.cacheFile, `${JSON.stringify(legacySnapshot, null, 2)}\n`, 'utf8');
 
-    const cachedInventory = await readCachedSkillInventory({
+    const cachedInventory = await readCachedInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -3044,7 +3044,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-09T00:00:01.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -3099,17 +3099,17 @@ describe('representative-agent scan foundation', () => {
 
     await writeSkillFile(paths.sandboxAgentsSkillsDir, 'fresh-launch-skill', '# Fresh launch\n', '2026-01-10T00:00:00.000Z');
 
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toBeNull();
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toBeNull();
     await expect(readFile(paths.cacheFile, 'utf8')).resolves.toBe('{}\n');
     await expect(readFile(paths.configFile, 'utf8')).resolves.toContain('"customScanPaths": []');
 
-    const liveSnapshot = await scanSkillInventory({
+    const liveSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
     });
 
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(liveSnapshot);
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(liveSnapshot);
   });
 
   it('hydrates custom scan path inventory from config and drops it again after the path is removed from config', async () => {
@@ -3131,7 +3131,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const inventoryWithCustomPath = await scanSkillInventory({
+    const inventoryWithCustomPath = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -3142,7 +3142,7 @@ describe('representative-agent scan foundation', () => {
       ['base-skill', 'diverged-drift', 2],
       ['custom-only-skill', 'single-source-noncanonical', 1],
     ]);
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(inventoryWithCustomPath);
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(inventoryWithCustomPath);
 
     await writeSkillIndexConfig(paths.configFile, {
       customScanPaths: [],
@@ -3151,7 +3151,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const cachedAfterRemoval = await readCachedSkillInventory({
+    const cachedAfterRemoval = await readCachedInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -3162,7 +3162,7 @@ describe('representative-agent scan foundation', () => {
       ['base-skill', 'healthy', 1],
     ]);
 
-    const rescannedAfterRemoval = await scanSkillInventory({
+    const rescannedAfterRemoval = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -3193,7 +3193,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const scannedSnapshot = await scanSkillInventory({
+    const scannedSnapshot = await scanInventory({
       paths,
       homeDir,
       includeSandboxSources: true,
@@ -3206,7 +3206,7 @@ describe('representative-agent scan foundation', () => {
     ]);
 
     await expect(
-      readCachedSkillInventory({
+      readCachedInventory({
         paths,
         homeDir,
         includeSandboxSources: true,
@@ -3255,7 +3255,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const snapshot = await scanSkillInventory({
+    const snapshot = await scanInventory({
       paths,
       homeDir,
       includeSandboxSources: false,
@@ -3330,7 +3330,7 @@ describe('representative-agent scan foundation', () => {
     await mkdir(path.join(homeDir, '.factory'), { recursive: true });
     await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3397,7 +3397,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-08T00:00:01.000Z',
     );
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3479,7 +3479,7 @@ describe('representative-agent scan foundation', () => {
       await symlink(missingPluginPath, staleLinkPath);
     }
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3587,7 +3587,7 @@ describe('representative-agent scan foundation', () => {
       }],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3615,7 +3615,7 @@ describe('representative-agent scan foundation', () => {
       issueReasons: [],
     });
 
-    const cachedInventory = await readCachedSkillInventory({
+    const cachedInventory = await readCachedInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3707,7 +3707,7 @@ describe('representative-agent scan foundation', () => {
       }],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3788,7 +3788,7 @@ describe('representative-agent scan foundation', () => {
       }],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3852,7 +3852,7 @@ describe('representative-agent scan foundation', () => {
     await symlink(pluginSkillPath, factoryPath);
     await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3937,7 +3937,7 @@ describe('representative-agent scan foundation', () => {
       }],
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -3998,7 +3998,7 @@ describe('representative-agent scan foundation', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
     } as const;
-    const snapshot = await scanSkillInventory(scanOptions);
+    const snapshot = await scanInventory(scanOptions);
 
     const skill = snapshot.skills.find((candidate) => candidate.name === 'shared-agents-backed-skill');
     expect(skill).toMatchObject({
@@ -4009,7 +4009,7 @@ describe('representative-agent scan foundation', () => {
       },
     });
 
-    const cachedSnapshot = await readCachedSkillInventory(scanOptions);
+    const cachedSnapshot = await readCachedInventory(scanOptions);
     expect(cachedSnapshot?.skills.find((candidate) => candidate.name === 'shared-agents-backed-skill')).toMatchObject({
       structuralState: 'healthy',
       issueReasons: [],
@@ -4080,7 +4080,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const snapshot = await scanSkillInventory({
+    const snapshot = await scanInventory({
       paths,
       homeDir,
       includeSandboxSources: false,
@@ -4137,18 +4137,18 @@ describe('representative-agent scan foundation', () => {
     });
 
     const initialSnapshot = await seedRepresentativeFixtures({ paths }).then(() =>
-      scanSkillInventory({
+      scanInventory({
         paths,
         includeSandboxSources: true,
         includeLiveSources: false,
       }),
     );
 
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(initialSnapshot);
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(initialSnapshot);
 
     await rm(path.join(paths.sandboxRoot, '.factory', 'skills', 'identical-drift-skill'), { recursive: true, force: true });
 
-    const reconciledSnapshot = await scanSkillInventory({
+    const reconciledSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -4160,7 +4160,7 @@ describe('representative-agent scan foundation', () => {
       isDrifted: true,
       driftPresentation: 'active',
     });
-    const cachedSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const cachedSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     expect(cachedSnapshot).toEqual(reconciledSnapshot);
     expect(cachedSnapshot?.skills.find((skill) => skill.name === 'identical-drift-skill')?.locations).toHaveLength(3);
   });
@@ -4174,7 +4174,7 @@ describe('representative-agent scan foundation', () => {
     });
 
     const initialSnapshot = await seedRepresentativeFixtures({ paths }).then(() =>
-      scanSkillInventory({
+      scanInventory({
         paths,
         includeSandboxSources: true,
         includeLiveSources: false,
@@ -4183,7 +4183,7 @@ describe('representative-agent scan foundation', () => {
 
     expect(initialSnapshot.skills.find((skill) => skill.name === 'identical-drift-skill')?.driftPresentation).toBe('active');
 
-    await dismissSkillDrift(
+    await dismissDrift(
       {
         skillName: 'identical-drift-skill',
       },
@@ -4193,7 +4193,7 @@ describe('representative-agent scan foundation', () => {
         includeLiveSources: false,
       },
     );
-    const cachedSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const cachedSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
 
     expect(cachedSnapshot?.sourceIds).toEqual(initialSnapshot.sourceIds);
     expect(cachedSnapshot?.skills.find((skill) => skill.name === 'identical-drift-skill')).toMatchObject({
@@ -4223,7 +4223,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const initialSnapshot = await scanSkillInventory({
+    const initialSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -4236,7 +4236,7 @@ describe('representative-agent scan foundation', () => {
       driftPresentation: 'active',
     });
 
-    const dismissedSnapshot = await dismissSkillDrift(
+    const dismissedSnapshot = await dismissDrift(
       {
         skillName,
       },
@@ -4253,7 +4253,7 @@ describe('representative-agent scan foundation', () => {
 
     await rm(customSkillsDir, { recursive: true, force: true });
 
-    const unavailableSnapshot = await scanSkillInventory({
+    const unavailableSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -4267,7 +4267,7 @@ describe('representative-agent scan foundation', () => {
 
     await writeSkillFile(customSkillsDir, skillName, '# Temporarily unavailable dismissed skill\n', '2026-04-09T00:01:00.000Z');
 
-    const restoredSnapshot = await scanSkillInventory({
+    const restoredSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -4326,14 +4326,14 @@ describe('representative-agent scan foundation', () => {
       includeLiveSources: true,
       includeSandboxSources: false,
     };
-    const initialSnapshot = await scanSkillInventory(scanOptions);
+    const initialSnapshot = await scanInventory(scanOptions);
     expect(initialSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
       structuralState: 'missing-symlinks',
       isDrifted: true,
       driftPresentation: 'active',
     });
 
-    const dismissedSnapshot = await dismissSkillDrift({ skillName }, scanOptions);
+    const dismissedSnapshot = await dismissDrift({ skillName }, scanOptions);
     const dismissedSignature = dismissedSnapshot.skills.find((skill) => skill.name === skillName)?.driftSignature;
     expect(dismissedSnapshot.skills.find((skill) => skill.name === skillName)?.driftPresentation).toBe('dismissed');
 
@@ -4353,7 +4353,7 @@ describe('representative-agent scan foundation', () => {
       '2026-01-08T00:01:00.000Z',
     );
 
-    const rescannedSnapshot = await scanSkillInventory(scanOptions);
+    const rescannedSnapshot = await scanInventory(scanOptions);
     const rescannedSkill = rescannedSnapshot.skills.find((skill) => skill.name === skillName);
     expect(rescannedSkill).toMatchObject({
       structuralState: 'missing-symlinks',
@@ -4377,7 +4377,7 @@ describe('representative-agent scan foundation', () => {
 
     await seedRepresentativeFixtures({ paths });
 
-    const dismissedSnapshot = await dismissSkillDrift(
+    const dismissedSnapshot = await dismissDrift(
       {
         skillName: 'identical-drift-skill',
       },
@@ -4390,7 +4390,7 @@ describe('representative-agent scan foundation', () => {
 
     expect(dismissedSnapshot.skills.find((skill) => skill.name === 'identical-drift-skill')?.driftPresentation).toBe('dismissed');
 
-    const restoredSnapshot = await dismissSkillDrift(
+    const restoredSnapshot = await dismissDrift(
       {
         skillName: 'identical-drift-skill',
       },
@@ -4414,7 +4414,7 @@ describe('representative-agent scan foundation', () => {
 
     await seedRepresentativeFixtures({ paths });
 
-    const dismissedSnapshot = await dismissSkillDrift(
+    const dismissedSnapshot = await dismissDrift(
       {
         mcpName: 'diagnostic-rich-mcp',
       },
@@ -4432,7 +4432,7 @@ describe('representative-agent scan foundation', () => {
     expect(persistedMcpSignature).not.toContain('"transport"');
     expect(persistedMcpSignature).not.toContain('"url"');
 
-    const restoredSnapshot = await dismissSkillDrift(
+    const restoredSnapshot = await dismissDrift(
       {
         mcpName: 'diagnostic-rich-mcp',
       },
@@ -4455,14 +4455,14 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    const initialSnapshot = await scanSkillInventory({
+    const initialSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
     });
 
     await rm(path.join(paths.sandboxRoot, '.factory'), { recursive: true, force: true });
-    const cachedSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const cachedSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
 
     expect(cachedSnapshot?.sourceIds).toEqual(expect.arrayContaining(['sandbox-agents', 'sandbox-claude', 'sandbox-windsurf', 'sandbox-plugin-pack']));
     expect(cachedSnapshot?.sources.map((source) => source.id)).not.toContain('sandbox-factory');
@@ -4493,15 +4493,15 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    const initialSnapshot = await scanSkillInventory({
+    const initialSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
     });
 
     await rm(path.join(paths.sandboxRoot, '.codeium', 'windsurf'), { recursive: true, force: true });
-    const asyncSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
-    const syncSnapshot = readCachedSkillInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const asyncSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const syncSnapshot = readCachedInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
 
     expect(asyncSnapshot).toEqual(syncSnapshot);
     expect(syncSnapshot).not.toBeNull();
@@ -4526,14 +4526,14 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    await scanSkillInventory({
+    await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
     });
     await rm(path.join(paths.sandboxRoot, '.factory'), { recursive: true, force: true });
-    const asyncSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
-    const syncSnapshot = readCachedSkillInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const asyncSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const syncSnapshot = readCachedInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
 
     expect(syncSnapshot).toEqual(asyncSnapshot);
     expect(syncSnapshot?.sourceIds).toEqual(expect.arrayContaining(['sandbox-agents', 'sandbox-claude', 'sandbox-windsurf', 'sandbox-plugin-pack']));
@@ -4549,14 +4549,14 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    await scanSkillInventory({
+    await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
     });
 
     await rm(path.join(paths.sandboxRoot, '.factory'), { recursive: true, force: true });
-    const cachedSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const cachedSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const divergedSkill = cachedSnapshot?.skills.find((skill) => skill.name === 'diverged-drift-skill');
 
     expect(divergedSkill?.diff).toMatchObject({
@@ -4575,14 +4575,14 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    await scanSkillInventory({
+    await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
     });
 
     await rm(path.join(paths.sandboxRoot, '.claude'), { recursive: true, force: true });
-    const cachedSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const cachedSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const diagnosticSkill = cachedSnapshot?.skills.find((skill) => skill.name === 'diagnostic-rich-skill');
 
     expect(diagnosticSkill?.locations.map((location) => location.sourceId)).toEqual([
@@ -4605,7 +4605,7 @@ describe('representative-agent scan foundation', () => {
     });
 
     await seedRepresentativeFixtures({ paths });
-    await scanSkillInventory({
+    await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -4616,7 +4616,7 @@ describe('representative-agent scan foundation', () => {
       rm(path.join(paths.sandboxRoot, '.factory'), { recursive: true, force: true }),
       rm(path.join(paths.sandboxRoot, '.codeium', 'windsurf'), { recursive: true, force: true }),
     ]);
-    const cachedSnapshot = await readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const cachedSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const diagnosticSkill = cachedSnapshot?.skills.find((skill) => skill.name === 'diagnostic-rich-skill');
 
     expect(diagnosticSkill).toMatchObject({
@@ -4664,7 +4664,7 @@ describe('representative-agent scan foundation', () => {
       dismissedMcpSignatures: [],
     });
 
-    const initialSnapshot = await scanSkillInventory({
+    const initialSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -4710,7 +4710,7 @@ describe('representative-agent scan foundation', () => {
       isDrifted: true,
     });
     expect(afterCreate.skills.find((skill) => skill.name === 'watched-skill')?.locations).toHaveLength(2);
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(afterCreate);
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(afterCreate);
 
     await writeSkillFile(
       customSkillsDir,
@@ -4745,7 +4745,7 @@ describe('representative-agent scan foundation', () => {
       isDrifted: true,
     });
     expect(afterEdit.skills.find((skill) => skill.name === 'watched-skill')?.diff?.selectedPath).toBe(path.join(customSkillsDir, 'watched-skill'));
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(afterEdit);
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(afterEdit);
 
     await rm(customSkillPath);
 
@@ -4768,7 +4768,7 @@ describe('representative-agent scan foundation', () => {
     });
     expect(afterDelete.skills.find((skill) => skill.name === 'watched-skill')?.locations).toHaveLength(1);
     expect(afterDelete.counts.driftedSkills).toBe(0);
-    await expect(readCachedSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(afterDelete);
+    await expect(readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false })).resolves.toEqual(afterDelete);
   });
 });
 

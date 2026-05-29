@@ -158,6 +158,27 @@ export function countSubagents(subagents: SubagentRecord[]): SubagentInventoryCo
   );
 }
 
+export function applySubagentPresentation(
+  subagent: SubagentRecord,
+  dismissedSubagentSignatures: string[],
+): SubagentRecord {
+  if (subagent.status !== 'needs-attention' || !subagent.signature) {
+    return subagent;
+  }
+
+  return {
+    ...subagent,
+    presentation: dismissedSubagentSignatures.includes(subagent.signature) ? 'dismissed' : 'active',
+  };
+}
+
+export function applyDismissedSubagentState(
+  subagents: SubagentRecord[],
+  dismissedSubagentSignatures: string[],
+): SubagentRecord[] {
+  return subagents.map((subagent) => applySubagentPresentation(subagent, dismissedSubagentSignatures));
+}
+
 function collectSubagentOwners({
   agents,
   paths,

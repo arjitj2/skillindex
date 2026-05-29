@@ -1,52 +1,50 @@
 import { describe, expect, it } from 'vitest';
 
-import { getRenderableAgentIconOrigins, KNOWN_AGENT_FAMILY_OVERRIDES } from './agent-catalog-overrides';
-import { getKnownAgentFamily } from './known-agent-catalog';
-import { VERIFIED_AGENT_SKILL_DIRECTORIES } from './verified-agent-skill-directories';
+import { AGENT_CATALOG, getAgentCatalogEntry, getRenderableAgentIconOrigins } from './agent-catalog';
 
 function arrayContaining(values: Parameters<typeof expect.arrayContaining>[0]): unknown {
   return expect.arrayContaining(values);
 }
 
-describe('known agent skill directory facts', () => {
+describe('agent catalog skill directory facts', () => {
   it('keeps non-verified native global skill directories in merged data', () => {
-    expect(getKnownAgentFamily('amp')).toMatchObject({
+    expect(getAgentCatalogEntry('amp')).toMatchObject({
       defaultProjectSkillsDir: '.agents/skills',
       defaultGlobalSkillsDir: '~/.config/agents/skills',
       compatibleGlobalSkillsDirs: arrayContaining(['~/.config/agents/skills', '~/.claude/skills']),
       compatibleProjectSkillsDirs: ['.claude/skills'],
     });
-    expect(getKnownAgentFamily('antigravity')).toMatchObject({
+    expect(getAgentCatalogEntry('antigravity')).toMatchObject({
       defaultProjectSkillsDir: '.agents/skills',
       defaultGlobalSkillsDir: '~/.gemini/antigravity/skills',
     });
-    expect(getKnownAgentFamily('windsurf')).toMatchObject({
+    expect(getAgentCatalogEntry('windsurf')).toMatchObject({
       defaultProjectSkillsDir: '.windsurf/skills',
       defaultGlobalSkillsDir: '~/.codeium/windsurf/skills',
     });
   });
 
   it('lets verified primary-doc facts become the merged default global skill dir', () => {
-    expect(getKnownAgentFamily('cursor')).toMatchObject({
+    expect(getAgentCatalogEntry('cursor')).toMatchObject({
       defaultProjectSkillsDir: '.agents/skills',
       defaultGlobalSkillsDir: '~/.agents/skills',
       compatibleGlobalSkillsDirs: arrayContaining(['~/.agents/skills', '~/.cursor/skills']),
-      upstreamDefaultGlobalSkillsDir: '~/.cursor/skills',
+      nativeGlobalSkillsDir: '~/.cursor/skills',
     });
-    expect(getKnownAgentFamily('codex')).toMatchObject({
+    expect(getAgentCatalogEntry('codex')).toMatchObject({
       defaultProjectSkillsDir: '.agents/skills',
       defaultGlobalSkillsDir: '~/.agents/skills',
       compatibleGlobalSkillsDirs: arrayContaining(['~/.agents/skills', '~/.codex/skills']),
-      upstreamDefaultGlobalSkillsDir: '~/.codex/skills',
+      nativeGlobalSkillsDir: '~/.codex/skills',
     });
-    expect(getKnownAgentFamily('opencode')).toMatchObject({
+    expect(getAgentCatalogEntry('opencode')).toMatchObject({
       defaultGlobalSkillsDir: '~/.agents/skills',
       compatibleGlobalSkillsDirs: arrayContaining(['~/.agents/skills', '~/.config/opencode/skills', '~/.claude/skills']),
-      upstreamDefaultGlobalSkillsDir: '~/.config/opencode/skills',
+      nativeGlobalSkillsDir: '~/.config/opencode/skills',
       mcpParserKind: 'jsonc-opencode-mcp',
       mcpWriteDialect: 'json-opencode',
     });
-    expect(getKnownAgentFamily('claude')).toMatchObject({
+    expect(getAgentCatalogEntry('claude')).toMatchObject({
       label: 'Claude Code',
       defaultProjectSkillsDir: '.claude/skills',
       defaultGlobalSkillsDir: '~/.claude/skills',
@@ -54,7 +52,7 @@ describe('known agent skill directory facts', () => {
       mcpParserKind: 'json-mcpServers',
       mcpWriteDialect: 'json-type-url',
     });
-    expect(getKnownAgentFamily('claude-desktop')).toMatchObject({
+    expect(getAgentCatalogEntry('claude-desktop')).toMatchObject({
       label: 'Claude Desktop',
       skillStorageKind: 'account-managed',
       defaultGlobalSkillsDir: 'claude.ai Customize > Skills',
@@ -63,75 +61,73 @@ describe('known agent skill directory facts', () => {
       mcpWriteDialect: 'json-url',
       mcpSupportedTransports: ['stdio'],
     });
-    expect(getKnownAgentFamily('amp')).toMatchObject({
+    expect(getAgentCatalogEntry('amp')).toMatchObject({
       mcpParserKind: 'jsonc-dotted-amp-mcpServers',
       mcpWriteDialect: 'json-url',
     });
-    expect(getKnownAgentFamily('codebuddy')).toMatchObject({
+    expect(getAgentCatalogEntry('codebuddy')).toMatchObject({
       mcpParserKind: 'jsonc-mcpServers',
       mcpWriteDialect: 'json-url',
     });
-    expect(getKnownAgentFamily('gemini-cli')).toMatchObject({
+    expect(getAgentCatalogEntry('gemini-cli')).toMatchObject({
       mcpParserKind: 'json-mcpServers',
       mcpWriteDialect: 'json-http-url',
     });
-    expect(getKnownAgentFamily('mistral-vibe')).toMatchObject({
+    expect(getAgentCatalogEntry('mistral-vibe')).toMatchObject({
       mcpParserKind: 'toml-mcpServers-array',
       mcpWriteDialect: 'toml-transport-array',
     });
-    expect(getKnownAgentFamily('openclaw')).toMatchObject({
+    expect(getAgentCatalogEntry('openclaw')).toMatchObject({
       mcpParserKind: 'jsonc-mcp-servers',
       mcpWriteDialect: 'json-openclaw',
     });
-    expect(getKnownAgentFamily('qwen-code')).toMatchObject({
+    expect(getAgentCatalogEntry('qwen-code')).toMatchObject({
       mcpParserKind: 'json-mcpServers',
       mcpWriteDialect: 'json-http-url',
     });
-    expect(getKnownAgentFamily('zencoder')).toMatchObject({
+    expect(getAgentCatalogEntry('zencoder')).toMatchObject({
       mcpParserKind: 'jsonc-dotted-zencoder-mcpServers',
       mcpWriteDialect: 'json-url',
     });
-    expect(getKnownAgentFamily('replit')).toMatchObject({
+    expect(getAgentCatalogEntry('replit')).toMatchObject({
       mcpConfigKind: 'none',
       mcpParserKind: 'none',
     });
-    expect(getKnownAgentFamily('mcpjam')).toMatchObject({
+    expect(getAgentCatalogEntry('mcpjam')).toMatchObject({
       mcpConfigKind: 'none',
       mcpParserKind: 'none',
     });
-    expect(getKnownAgentFamily('warp')).toMatchObject({
+    expect(getAgentCatalogEntry('warp')).toMatchObject({
       mcpConfigKind: 'none',
       mcpParserKind: 'none',
     });
   });
 
-  it('keeps verified skill directory facts out of Skill Index overrides', () => {
-    expect(VERIFIED_AGENT_SKILL_DIRECTORIES.find((facts) => facts.family === 'cursor')).toMatchObject({
+  it('keeps skill, MCP, subagent, and source facts in the canonical catalog entry', () => {
+    expect(AGENT_CATALOG.find((facts) => facts.family === 'cursor')).toMatchObject({
       defaultGlobalSkillsDir: '~/.agents/skills',
-      compatibleGlobalSkillsDirs: ['~/.cursor/skills'],
+      nativeGlobalSkillsDir: '~/.cursor/skills',
+      compatibleGlobalSkillsDirs: arrayContaining(['~/.agents/skills', '~/.cursor/skills']),
+      mcpConfigRelativeParts: ['.cursor', 'mcp.json'],
+      subagentConfigKind: 'none',
     });
 
-    for (const override of KNOWN_AGENT_FAMILY_OVERRIDES) {
-      expect(override).not.toHaveProperty('defaultGlobalSkillsDir');
-      expect(override).not.toHaveProperty('compatibleGlobalSkillsDirs');
-      expect(override).not.toHaveProperty('upstreamDefaultGlobalSkillsDir');
-    }
+    expect(getAgentCatalogEntry('cursor').metadataSources).toEqual(
+      arrayContaining([
+        expect.objectContaining({
+          url: 'https://cursor.com/docs/skills#skill-directories',
+        }),
+      ]),
+    );
   });
 
-  it('does not let Skill Index overrides rewrite skill dirs or mark agent families canonical', () => {
-    for (const override of KNOWN_AGENT_FAMILY_OVERRIDES) {
-      expect(override).not.toHaveProperty('defaultGlobalSkillsDirOverride');
-      expect(override).not.toHaveProperty('compatibleGlobalSkillsDirOverrides');
-      expect(override).not.toHaveProperty('canonical');
-      expect(override).not.toHaveProperty('universal');
-    }
-
-    expect(getKnownAgentFamily('amp')).not.toHaveProperty('canonical');
-    expect(getKnownAgentFamily('amp')).not.toHaveProperty('universal');
+  it('does not mark agent families canonical or universal', () => {
+    expect(getAgentCatalogEntry('amp')).not.toHaveProperty('canonical');
+    expect(getAgentCatalogEntry('amp')).not.toHaveProperty('universal');
   });
 });
 
-describe('known agent icon metadata', () => {
+describe('agent catalog icon metadata', () => {
   it('derives renderer-safe origins from valid renderable icon URLs', () => {
     const origins = getRenderableAgentIconOrigins();
 
@@ -142,67 +138,67 @@ describe('known agent icon metadata', () => {
   });
 
   it('uses directly renderable square icon assets for the reported agent list regressions', () => {
-    expect(getKnownAgentFamily('adal').icon).toMatchObject({
+    expect(getAgentCatalogEntry('adal').icon).toMatchObject({
       assetUrl: 'https://github.com/SylphAI-Inc.png',
       format: 'png',
     });
-    expect(getKnownAgentFamily('amp').icon).toMatchObject({
+    expect(getAgentCatalogEntry('amp').icon).toMatchObject({
       assetUrl: 'https://ampcode.com/amp-mark-color.svg',
       format: 'svg',
     });
-    expect(getKnownAgentFamily('augment').icon).toMatchObject({
+    expect(getAgentCatalogEntry('augment').icon).toMatchObject({
       assetUrl: 'https://www.augmentcode.com/favicon.svg',
       format: 'svg',
     });
-    expect(getKnownAgentFamily('cline').icon).toMatchObject({
+    expect(getAgentCatalogEntry('cline').icon).toMatchObject({
       assetUrl: 'https://cline.bot/assets/branding/brand/App%20Icons/PNG/APP_ICON_LIGHT.png',
       format: 'png',
     });
-    expect(getKnownAgentFamily('continue').icon).toMatchObject({
+    expect(getAgentCatalogEntry('continue').icon).toMatchObject({
       assetUrl: 'https://www.continue.dev/favicon.png',
       format: 'png',
     });
-    expect(getKnownAgentFamily('cursor').icon).toMatchObject({
+    expect(getAgentCatalogEntry('cursor').icon).toMatchObject({
       assetUrl: 'https://cursor.com/marketing-static/icon-512x512.png',
       format: 'png',
     });
-    expect(getKnownAgentFamily('opencode').icon).toMatchObject({
+    expect(getAgentCatalogEntry('opencode').icon).toMatchObject({
       assetUrl: 'https://opencode.ai/apple-touch-icon-v3.png',
       format: 'png',
     });
-    expect(getKnownAgentFamily('codebuddy').icon).toMatchObject({
+    expect(getAgentCatalogEntry('codebuddy').icon).toMatchObject({
       assetUrl: 'https://cdn.prod.website-files.com/65a6a15ecd9b4909597c6be5/689dfd72095849f4e1693503_Stack-Icon-Thin.svg',
       format: 'svg',
     });
-    expect(getKnownAgentFamily('cortex').icon).toMatchObject({
+    expect(getAgentCatalogEntry('cortex').icon).toMatchObject({
       assetUrl: 'https://www.snowflake.com/etc.clientlibs/snowflake-site/clientlibs/clientlib-react/resources/apple-touch-icon.png?v=3',
       format: 'png',
     });
-    expect(getKnownAgentFamily('deepagents').icon).toMatchObject({
+    expect(getAgentCatalogEntry('deepagents').icon).toMatchObject({
       assetUrl: 'https://deepagents.org/deep_icon.svg',
       format: 'svg',
     });
-    expect(getKnownAgentFamily('github-copilot').icon).toMatchObject({
+    expect(getAgentCatalogEntry('github-copilot').icon).toMatchObject({
       assetUrl: 'https://github.com/github.png',
       format: 'png',
     });
-    expect(getKnownAgentFamily('goose').icon).toMatchObject({
+    expect(getAgentCatalogEntry('goose').icon).toMatchObject({
       assetUrl: 'https://goose-docs.ai/img/favicon.ico',
       format: 'ico',
     });
-    expect(getKnownAgentFamily('kode').icon).toMatchObject({
+    expect(getAgentCatalogEntry('kode').icon).toMatchObject({
       assetUrl: 'https://avatars.githubusercontent.com/u/189210346?v=4',
       format: 'png',
     });
-    expect(getKnownAgentFamily('pi').icon).toMatchObject({
+    expect(getAgentCatalogEntry('pi').icon).toMatchObject({
       assetUrl: 'https://framerusercontent.com/images/Hu7aeJCxpUvwSxyA5mfRMSPAqAU.svg',
       format: 'svg',
     });
-    expect(getKnownAgentFamily('qoder').icon).toMatchObject({
+    expect(getAgentCatalogEntry('qoder').icon).toMatchObject({
       assetUrl: 'https://img.alicdn.com/imgextra/i3/O1CN01KliT1u1jEq947NlKH_!!6000000004517-55-tps-180-180.svg',
       format: 'svg',
     });
-    expect(getKnownAgentFamily('trae-cn').icon).toMatchObject({
+    expect(getAgentCatalogEntry('trae-cn').icon).toMatchObject({
       assetUrl: 'https://lf-cdn.trae.com.cn/obj/trae-com-cn/trae_website_prod_cn/favicon.png',
       format: 'png',
     });

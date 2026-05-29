@@ -250,7 +250,7 @@ describe('createSkillIndexDesktopApi', () => {
     await expect(api.cancelMcpConnectivityTest()).resolves.toBeUndefined();
     await expect(api.addSkill({
       sourceType: 'url',
-      source: 'https://github.com/vercel-labs/agent-skills',
+      source: 'https://github.com/example/agent-skills',
     } satisfies AddSkillRequest)).resolves.toEqual(inventorySnapshot);
     await expect(api.addMcpServer({
       name: 'github',
@@ -318,7 +318,7 @@ describe('createSkillIndexDesktopApi', () => {
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.cancelMcpConnectivityTest);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.addSkill, {
       sourceType: 'url',
-      source: 'https://github.com/vercel-labs/agent-skills',
+      source: 'https://github.com/example/agent-skills',
     });
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.addMcpServer, {
       name: 'github',

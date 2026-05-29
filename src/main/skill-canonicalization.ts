@@ -8,7 +8,7 @@ import {
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
-import { scanSkillInventory, type ScanSkillInventoryOptions } from '@main/skill-inventory';
+import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import { persistSkillUniversalDecisionForSelection } from '@main/skill-universal-decisions';
 
 export interface MakeSkillCanonicalRequest {
@@ -34,7 +34,7 @@ export async function makeSkillCanonical(
   const paths = options.paths ?? resolveSkillIndexPaths(options);
   await ensureSkillIndexLayout(paths);
 
-  const beforeSnapshot = await scanSkillInventory({
+  const beforeSnapshot = await scanInventory({
     ...options,
     paths,
   });
@@ -138,7 +138,7 @@ export async function makeSkillCanonical(
     [...symlinkTargets.values()].map((targetPath) => replaceWithCanonicalSymlink(targetPath, universalTargetPath)),
   );
 
-  return scanSkillInventory({
+  return scanInventory({
     ...options,
     paths,
   });

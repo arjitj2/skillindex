@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveInventoryIssue } from '@main/issue-resolution';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
-import { dismissSkillDrift, scanSkillInventory } from '@main/skill-inventory';
+import { dismissDrift, scanInventory } from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
   renderPortableSubagentDefinition,
@@ -86,7 +86,7 @@ describe('subagent inventory', () => {
     await writeMarkdownSubagent(claudePath, 'reviewer', 'Reviews code changes.', 'Review the diff carefully.');
     await writeCodexSubagent(codexPath, 'reviewer', 'Reviews code changes.', 'Review the diff carefully.');
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const reviewer = inventory.subagents?.find((subagent) => subagent.name === 'reviewer');
 
     expect(reviewer).toMatchObject({
@@ -177,7 +177,7 @@ describe('subagent inventory', () => {
       '',
     ].join('\n'));
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const copilot = inventory.subagents?.find((subagent) => subagent.name === 'copilot-reviewer');
     const augment = inventory.subagents?.find((subagent) => subagent.name === 'augment-planner');
     const mux = inventory.subagents?.find((subagent) => subagent.name === 'mux-runner');
@@ -201,7 +201,7 @@ describe('subagent inventory', () => {
     await mkdir(path.dirname(claudeReviewerPath), { recursive: true });
     await symlink(plannerPath, claudeReviewerPath);
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const reviewer = inventory.subagents?.find((subagent) => subagent.name === 'reviewer');
 
     expect(reviewer?.issueReasons).toContain('wrong-symlink-target');
@@ -230,7 +230,7 @@ describe('subagent inventory', () => {
     await mkdir(path.dirname(claudePath), { recursive: true });
     await symlink(path.join(homeDir, '.agents', 'agents', 'missing-target.md'), claudePath);
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const brokenLink = inventory.subagents?.find((subagent) => subagent.name === 'broken-link');
 
     expect(brokenLink?.issueReasons).toContain('broken-symlink');
@@ -305,7 +305,7 @@ describe('subagent inventory', () => {
       '',
     ].join('\n'));
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const muxRunner = inventory.subagents?.find((subagent) => subagent.name === 'mux-runner');
 
     expect(muxRunner?.issueReasons).not.toContain('definition-mismatch');
@@ -371,7 +371,7 @@ describe('subagent inventory', () => {
       '',
     ].join('\n'));
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const bare = inventory.subagents?.find((subagent) => subagent.name === 'bare');
 
     expect(bare?.issueReasons).toContain('invalid-definition');
@@ -411,7 +411,7 @@ describe('subagent inventory', () => {
     await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin review helper.', 'Use plugin review rules.');
     await writeRawFile(manifestPath, `${JSON.stringify({ name: 'github-tools', version: 'abc123' }, null, 2)}\n`);
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const localReviewer = inventory.subagents?.find((subagent) => subagent.name === 'reviewer');
     const pluginReviewer = inventory.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer');
 
@@ -465,7 +465,7 @@ describe('subagent inventory', () => {
     await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin review helper.', 'Use plugin review rules.');
     await writeRawFile(manifestPath, `${JSON.stringify({ name: 'github-tools', version: 'abc123' }, null, 2)}\n`);
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     expect(inventory.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer')?.issueReasons)
       .toContain('definition-mismatch');
 
@@ -517,7 +517,7 @@ describe('subagent inventory', () => {
 
     await writeMarkdownSubagent(canonicalPath, 'quiet-planner', 'Plans quietly.', 'Prepare the implementation plan.');
 
-    const inventory = await scanSkillInventory(scanOptions);
+    const inventory = await scanInventory(scanOptions);
     const initialSubagent = inventory.subagents?.find((subagent) => subagent.name === 'quiet-planner');
     expect(initialSubagent).toMatchObject({
       status: 'needs-attention',
@@ -525,7 +525,7 @@ describe('subagent inventory', () => {
     });
     expect(initialSubagent?.signature).toBeDefined();
 
-    const dismissedSnapshot = await dismissSkillDrift({ subagentName: 'quiet-planner' }, {
+    const dismissedSnapshot = await dismissDrift({ subagentName: 'quiet-planner' }, {
       ...scanOptions,
       snapshot: inventory,
     });
@@ -539,7 +539,7 @@ describe('subagent inventory', () => {
     const configAfterDismiss = await readSkillIndexConfig(scanOptions.paths.configFile, { homeDir });
     expect(configAfterDismiss.dismissedSubagentSignatures).toContain(initialSubagent?.signature);
 
-    const restoredSnapshot = await dismissSkillDrift({ subagentName: 'quiet-planner' }, {
+    const restoredSnapshot = await dismissDrift({ subagentName: 'quiet-planner' }, {
       ...scanOptions,
       snapshot: dismissedSnapshot,
     });
@@ -560,7 +560,7 @@ describe('subagent inventory', () => {
 
     await seedRepresentativeFixtures({ paths: rootPaths, homeDir });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths: sandboxPaths,
       homeDir,
       includeSandboxSources: true,
@@ -626,7 +626,7 @@ describe('subagent inventory', () => {
 
     await seedRepresentativeFixtures({ paths: rootPaths, homeDir });
 
-    const before = await scanSkillInventory(scanOptions);
+    const before = await scanInventory(scanOptions);
     const beforeSubagent = before.subagents?.find((subagent) => subagent.name === subagentName);
     expect(beforeSubagent?.issueReasons).toEqual(expect.arrayContaining(['definition-mismatch', 'missing-from-agents']));
     expect(beforeSubagent?.missingLocations ?? []).not.toHaveLength(0);
@@ -661,7 +661,7 @@ describe('subagent inventory', () => {
       '',
     ].join('\n'));
 
-    const before = await scanSkillInventory(scanOptions);
+    const before = await scanInventory(scanOptions);
     const beforeSubagent = before.subagents?.find((subagent) => subagent.name === 'colored-reviewer');
     expect(beforeSubagent?.issueReasons).toContain('definition-mismatch');
     expect(beforeSubagent?.locations.find((location) => location.path === claudePath)?.localExtrasKeys).toEqual(['color']);

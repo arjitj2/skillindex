@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 import { buildInventoryAgents, buildRegisteredInventorySources } from '@main/inventory-source-model';
-import { KNOWN_AGENT_FAMILIES } from '@shared/known-agent-catalog';
+import { AGENT_CATALOG } from '@shared/agent-catalog';
 import { resolveSkillIndexPaths } from '@shared/skill-index-paths';
 
 function arrayContaining(values: Parameters<typeof expect.arrayContaining>[0]): unknown {
@@ -190,7 +190,7 @@ describe('buildRegisteredInventorySources', () => {
       includeLiveSources: false,
     });
 
-    expect(agents).toHaveLength(KNOWN_AGENT_FAMILIES.length);
+    expect(agents).toHaveLength(AGENT_CATALOG.length);
     expect(agents.find((agent) => agent.id === 'sandbox-codex')).toMatchObject({
       label: 'Codex',
       writable: true,
@@ -323,7 +323,7 @@ describe('buildRegisteredInventorySources', () => {
     });
   });
 
-  it('uses vendored upstream install detection while keeping live skills on verified default dirs', async () => {
+  it('uses catalog install detection while keeping live skills on canonical default dirs', async () => {
     const homeDir = path.join(tmpdir(), `skillindex-agent-home-${Date.now()}`);
     const codexHome = path.join(homeDir, '.codex-custom');
     const claudeConfigDir = path.join(homeDir, '.claude-custom');

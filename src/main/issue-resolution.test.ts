@@ -9,8 +9,9 @@ import { describe, expect, it } from 'vitest';
 import { applyCapabilityAction } from '@main/capability-actions';
 import { addMcpServer, resolveInventoryIssue } from '@main/issue-resolution';
 import { verifyMcpConnection } from '@main/mcp-connectivity';
+import type { McpConnectivityProbeTarget } from '@main/mcp-inventory';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
-import { dismissSkillDrift, readCachedSkillInventory, scanSkillInventory, type McpConnectivityProbeTarget } from '@main/skill-inventory';
+import { dismissDrift, readCachedInventory, scanInventory } from '@main/scan-inventory';
 import type { McpConnectivityRecord } from '@shared/contracts';
 import { readSkillIndexConfig, resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
@@ -95,7 +96,7 @@ describe('resolveInventoryIssue', () => {
   it('adds a new MCP Server definition to selected writable configs', async () => {
     const paths = await createPaths('skillindex-add-mcp-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const codexConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-codex')?.mcpConfigLocation.path;
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
@@ -370,7 +371,7 @@ describe('resolveInventoryIssue', () => {
   it('adds explicit remote MCP types when copying inferred HTTP definitions into Claude Code', async () => {
     const paths = await createPaths('skillindex-resolve-claude-remote-type-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
     expect(claudeConfigPath).toBeDefined();
@@ -408,7 +409,7 @@ describe('resolveInventoryIssue', () => {
   it('repairs MCP definition mismatches without adding missing agent definitions', async () => {
     const paths = await createPaths('skillindex-resolve-mcp-mixed-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
     const factoryConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-factory')?.mcpConfigLocation.path;
@@ -460,7 +461,7 @@ describe('resolveInventoryIssue', () => {
   it('applies a selected MCP mismatch variant across existing definitions without filling missing agents', async () => {
     const paths = await createPaths('skillindex-resolve-mcp-selected-mixed-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
     const factoryConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-factory')?.mcpConfigLocation.path;
@@ -773,7 +774,7 @@ describe('resolveInventoryIssue', () => {
       'sandbox-agents',
     ]);
 
-    const cachedSnapshot = await readCachedSkillInventory({
+    const cachedSnapshot = await readCachedInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -1051,7 +1052,7 @@ describe('resolveInventoryIssue', () => {
     });
 
     await rm(path.join(pluginRoot, '.claude-plugin'), { recursive: true, force: true });
-    const rescanWithoutPluginSource = await scanSkillInventory({
+    const rescanWithoutPluginSource = await scanInventory({
       paths,
       homeDir,
       includeSandboxSources: false,
@@ -1118,7 +1119,7 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
     };
-    const initialSnapshot = await scanSkillInventory(scanOptions);
+    const initialSnapshot = await scanInventory(scanOptions);
     expect(initialSnapshot.skills.find((skill) => skill.name === dismissedSkillName)).toMatchObject({
       structuralState: 'missing-symlinks',
       driftPresentation: 'active',
@@ -1126,7 +1127,7 @@ describe('resolveInventoryIssue', () => {
     expect(initialSnapshot.skills.find((skill) => skill.name === buildSkillName)?.issueReasons)
       .toContain('broken-symlink');
 
-    const dismissedSnapshot = await dismissSkillDrift({ skillName: dismissedSkillName }, scanOptions);
+    const dismissedSnapshot = await dismissDrift({ skillName: dismissedSkillName }, scanOptions);
     const dismissedSignature = dismissedSnapshot.skills.find((skill) => skill.name === dismissedSkillName)?.driftSignature;
     expect(dismissedSignature).toBeDefined();
 
@@ -2281,7 +2282,7 @@ describe('resolveInventoryIssue', () => {
   it('fills missing MCP agents without rewriting existing mismatched definitions', async () => {
     const paths = await createPaths('skillindex-resolve-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
     const factoryConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-factory')?.mcpConfigLocation.path;
     expect(claudeConfigPath).toBeDefined();
@@ -2320,7 +2321,7 @@ describe('resolveInventoryIssue', () => {
   it('fills missing MCP agents without repairing invalid existing definitions', async () => {
     const paths = await createPaths('skillindex-resolve-mcp-invalid-missing-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
     const factoryConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-factory')?.mcpConfigLocation.path;
@@ -2370,7 +2371,7 @@ describe('resolveInventoryIssue', () => {
   it('creates a missing writable MCP config when filling installed agents', async () => {
     const paths = await createPaths('skillindex-resolve-');
     await seedRepresentativeFixtures({ paths });
-    const inventoryBefore = await scanSkillInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
+    const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const claudeConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-claude')?.mcpConfigLocation.path;
     const factoryConfigPath = inventoryBefore.agents?.find((agent) => agent.id === 'sandbox-factory')?.mcpConfigLocation.path;
     expect(claudeConfigPath).toBeDefined();
@@ -2540,7 +2541,7 @@ describe('resolveInventoryIssue', () => {
     ].join('\n'), 'utf8');
 
     const mcpName = 'signal-tools:signalMap';
-    const beforeSnapshot = await scanSkillInventory({
+    const beforeSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,

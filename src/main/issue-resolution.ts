@@ -39,7 +39,7 @@ import {
 
 import { sanitizeJsonc, sortRecordValue } from '@main/json-utils';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
-import { scanSkillInventory, type ScanSkillInventoryOptions } from '@main/skill-inventory';
+import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
   renderPortableSubagentDefinition,
@@ -94,7 +94,7 @@ export async function resolveInventoryIssue(
   const paths = options.paths ?? resolveSkillIndexPaths(options);
   await ensureSkillIndexLayout(paths);
 
-  const snapshot = await scanSkillInventory({
+  const snapshot = await scanInventory({
     ...options,
     paths,
   });
@@ -115,7 +115,7 @@ export async function resolveInventoryIssue(
     });
   }
 
-  const nextSnapshot = await scanSkillInventory({
+  const nextSnapshot = await scanInventory({
     ...options,
     paths,
   });
@@ -130,7 +130,7 @@ export async function addMcpServer(
   const paths = options.paths ?? resolveSkillIndexPaths(options);
   await ensureSkillIndexLayout(paths);
 
-  const snapshot = await scanSkillInventory({
+  const snapshot = await scanInventory({
     ...options,
     paths,
   });
@@ -159,7 +159,7 @@ export async function addMcpServer(
     }),
   );
 
-  return scanSkillInventory({
+  return scanInventory({
     ...options,
     paths,
   });

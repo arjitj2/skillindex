@@ -22,7 +22,7 @@ import {
   type SkillIndexConfig,
 } from '@shared/skill-index-paths';
 
-import { scanSkillInventory } from './skill-inventory';
+import { scanInventory } from './scan-inventory';
 
 describe('dismissed drift config remediation', () => {
   it('re-reads the latest config before pruning dismissed drift signatures so newer custom paths survive', async () => {
@@ -63,7 +63,7 @@ describe('dismissed drift config remediation', () => {
       .mockResolvedValueOnce(staleConfig)
       .mockResolvedValueOnce(latestConfig);
 
-    const snapshot = await scanSkillInventory({
+    const snapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,

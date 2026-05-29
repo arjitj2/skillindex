@@ -19,7 +19,7 @@ import {
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
-import { scanSkillInventory, type ScanSkillInventoryOptions } from '@main/skill-inventory';
+import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import { resolveInventoryIssue } from '@main/issue-resolution';
 
 export interface CapabilityActionOptions extends ScanSkillInventoryOptions {
@@ -40,7 +40,7 @@ export async function applyCapabilityAction(
 ): Promise<SkillInventorySnapshot> {
   const paths = options.paths ?? resolveSkillIndexPaths(options);
   await ensureSkillIndexLayout(paths);
-  const snapshot = await scanSkillInventory({
+  const snapshot = await scanInventory({
     ...options,
     paths,
   });
@@ -58,7 +58,7 @@ export async function applyCapabilityAction(
     }
   }
 
-  const updatedSnapshot = await scanSkillInventory({
+  const updatedSnapshot = await scanInventory({
     ...options,
     paths,
   });

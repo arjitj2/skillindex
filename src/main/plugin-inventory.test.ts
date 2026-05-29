@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildPluginSkillScanSources, scanPluginInventory } from '@main/plugin-inventory';
 import { applyCapabilityAction } from '@main/capability-actions';
-import { scanSkillInventory } from '@main/skill-inventory';
+import { scanInventory } from '@main/scan-inventory';
 import { resolveSkillIndexPaths } from '@shared/skill-index-paths';
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
@@ -351,7 +351,7 @@ describe('plugin inventory', () => {
       },
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -429,7 +429,7 @@ describe('plugin inventory', () => {
       },
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -485,7 +485,7 @@ describe('plugin inventory', () => {
       },
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: false,
@@ -536,7 +536,7 @@ describe('plugin inventory', () => {
     await mkdir(path.join(codexRoot, 'skills', 'idea-shaping', 'agents'), { recursive: true });
     await writeFile(path.join(codexRoot, 'skills', 'idea-shaping', 'agents', 'sandbox-runner.yaml'), 'name: sandbox-runner\n', 'utf8');
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: true,
@@ -577,7 +577,7 @@ describe('plugin inventory', () => {
       },
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: false,
@@ -644,7 +644,7 @@ describe('plugin inventory', () => {
       version: '1.0.0',
     });
 
-    const inventory = await scanSkillInventory({
+    const inventory = await scanInventory({
       paths,
       homeDir,
       includeLiveSources: false,
