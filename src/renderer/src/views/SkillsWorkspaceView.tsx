@@ -36,7 +36,6 @@ import {
 
 export function SkillsWorkspaceView({
   isAddingSkill,
-  errorMessage,
   inventorySnapshot,
   isDismissingDrift,
   isApplyingCapabilityAction,
@@ -66,7 +65,6 @@ export function SkillsWorkspaceView({
   statusFilter,
 }: {
   isAddingSkill: boolean;
-  errorMessage: string | null;
   inventorySnapshot: SkillInventorySnapshot | null;
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
@@ -166,7 +164,6 @@ export function SkillsWorkspaceView({
 
           <div className={`split-workspace split-workspace--detail${selectedSkill ? '' : ' split-workspace--detail-collapsed'}`}>
             <section className="master-list-panel" aria-label="Skills list">
-              {errorMessage ? <p className="inline-error-banner">{errorMessage}</p> : null}
               {inventorySnapshot ? (
                 sections.length > 0 ? (
                   sections.map((section) => (
@@ -205,7 +202,6 @@ export function SkillsWorkspaceView({
 
             {selectedSkill ? (
               <SkillDetailPanel
-                errorMessage={errorMessage}
                 isDismissingDrift={isDismissingDrift}
                 isApplyingCapabilityAction={isApplyingCapabilityAction}
                 isResolvingIssue={isResolvingIssue}
@@ -275,7 +271,6 @@ function getSkillsEmptyStateMessage({
 }
 
 function SkillDetailPanel({
-  errorMessage,
   isDismissingDrift,
   isApplyingCapabilityAction,
   isResolvingIssue,
@@ -292,7 +287,6 @@ function SkillDetailPanel({
   setSelectedSkillVariantPath,
   sourceIndex,
 }: {
-  errorMessage: string | null;
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
@@ -320,7 +314,6 @@ function SkillDetailPanel({
   return (
     <DetailInspectorPanel
       entityKind="skill"
-      errorMessage={errorMessage}
       footerActions={[
         ...(activeProblem?.primaryActionLabel
           ? [{

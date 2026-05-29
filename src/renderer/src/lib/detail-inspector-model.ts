@@ -21,6 +21,9 @@ import type {
   SkillRecord,
   SkillScanSource,
   SkillUniversalAlternate,
+  SubagentIssueReason,
+  SubagentLocationRecord,
+  SubagentRecord,
 } from '@shared/contracts';
 import { buildTextDiffLines } from '@shared/text-diff';
 import { isMcpDefinitionObject, normalizeMcpDefinitionForComparison } from '@shared/mcp-definition';
@@ -32,12 +35,13 @@ import {
   formatMcpIssueReason,
   formatMcpSupportingCopy,
   formatSkillIssueReason,
+  formatSubagentIssueReason,
   getDisplaySkillIssueReasons,
   getSkillRowDescription,
 } from './inventory-presentation';
-import { getMcpDisplayName, getSkillDisplayName } from '../inventory-view-model';
+import { getMcpDisplayName, getSkillDisplayName, getSubagentDisplayName } from '../inventory-view-model';
 
-type InspectorProblemKey = SkillIssueReason | McpIssueReason;
+type InspectorProblemKey = SkillIssueReason | McpIssueReason | SubagentIssueReason;
 type InspectorSectionTitle = 'Variant resolution' | 'Structural repair';
 
 export const DETAIL_DIFF_TITLE = 'Diff: Selected Version vs Universal';
@@ -46,6 +50,13 @@ const SKILL_ACTION_LABELS = {
   useAsUniversal: 'Use as Universal',
   convertCopiesToSymlinks: 'Convert Copies to Symlinks',
   createMissingSymlinks: 'Create Missing Symlinks',
+  repairSymlinks: 'Repair Symlinks',
+} as const;
+const SUBAGENT_ACTION_LABELS = {
+  addToUniversal: 'Add to Universal',
+  addToAgents: 'Add to Agents',
+  applySelectedDefinition: 'Apply Selected Definition',
+  convertCopiesToSymlinks: 'Convert Copies to Symlinks',
   repairSymlinks: 'Repair Symlinks',
 } as const;
 
@@ -259,6 +270,13 @@ interface McpVariantGroup {
   representative: McpLocationRecord;
 }
 
+interface SubagentVariantGroup {
+  id: string;
+  definitionText?: string;
+  locations: SubagentLocationRecord[];
+  representative: SubagentLocationRecord;
+}
+
 type InternalSkillDiffFileRecord = SkillDiffFileRecord & {
   __displayKind?: InspectorChangedFileModel['displayKind'];
 };
@@ -341,6 +359,50 @@ export function buildMcpInspectorModel(
       label: formatMcpIssueReason(key),
       detail: getMcpProblemDetail(mcp, key, agentIndex),
       summary: getMcpProblemSummary(mcp, key),
+      isActive: key === activeProblem.key,
+    })),
+    problemSections: buildProblemSections(problemKeys),
+    activeProblem,
+    selectedVariantPath,
+    provenanceRows,
+    provenanceSummary,
+  };
+}
+
+export function buildSubagentInspectorModel(
+  subagent: SubagentRecord,
+  selection: {
+    selectedProblemKey?: SubagentIssueReason | null;
+    selectedVariantPath?: string | null;
+  } = {},
+  agentIndex: Map<string, AgentRecord> = new Map(),
+): InspectorModel {
+  const problemKeys: SubagentIssueReason[] = subagent.issueReasons.length > 0 ? subagent.issueReasons : [];
+  const activeProblem = problemKeys.length > 0
+    ? buildSubagentProblemModel(subagent, selectProblemKey(problemKeys, selection.selectedProblemKey), selection.selectedVariantPath, agentIndex)
+    : buildHealthySubagentProblem(subagent);
+  const selectedVariantPath = getPreferredSelectedVariantPath(selection.selectedVariantPath, activeProblem);
+  const referencePath = getActiveProblemBaselineVariantPath(activeProblem) ?? getCanonicalSubagentPath(subagent);
+  const provenanceRows = buildSubagentProvenanceRows(subagent, selectedVariantPath, referencePath, agentIndex);
+  const provenanceSummary = buildSubagentProvenanceSummary(subagent, selectedVariantPath, referencePath);
+  const definition = buildSubagentDefinitionModel(subagent, selectedVariantPath);
+
+  return {
+    header: {
+      title: getSubagentDisplayName(subagent),
+      description: subagent.description ?? null,
+      updatedLabel: `Updated ${formatCompactDate(subagent.locations[0]?.modifiedAt)}`,
+      metadata: buildMcpMetadataRows(provenanceRows, referencePath, subagent.locations.length),
+      isLocked: hasPluginSubagentLocation(subagent),
+    },
+    definition,
+    locations: buildSubagentLocationSections(subagent, agentIndex),
+    problemCountLabel: formatProblemCount(problemKeys.length),
+    problems: problemKeys.map((key) => ({
+      key,
+      label: formatSubagentIssueReason(key),
+      detail: getSubagentProblemDetail(subagent, key, agentIndex),
+      summary: getSubagentProblemSummary(subagent, key),
       isActive: key === activeProblem.key,
     })),
     problemSections: buildProblemSections(problemKeys),
@@ -714,6 +776,132 @@ function buildMcpProblemModel(
   }
 }
 
+function buildSubagentProblemModel(
+  subagent: SubagentRecord,
+  problemKey: SubagentIssueReason,
+  selectedVariantPath: string | null | undefined,
+  agentIndex: Map<string, AgentRecord>,
+): InspectorActiveProblemModel {
+  switch (problemKey) {
+    case 'missing-universal':
+    case 'definition-mismatch':
+      return buildSubagentVariantProblem(subagent, problemKey, selectedVariantPath, agentIndex);
+    case 'missing-from-agents':
+      return {
+        kind: 'structural-repair',
+        key: problemKey,
+        title: formatSubagentIssueReason(problemKey),
+        listTitle: 'Missing Agent Definitions',
+        items: (subagent.missingLocations ?? []).map((location) => ({
+          id: `${location.agentId}:${location.path ?? location.directoryPath ?? 'missing'}`,
+          label: formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path ?? location.directoryPath),
+          path: location.path ?? location.directoryPath ?? 'Missing subagent path',
+          pathExists: location.path ? undefined : false,
+        })),
+        healthySummary: null,
+        primaryActionLabel: SUBAGENT_ACTION_LABELS.addToAgents,
+      };
+    case 'identical-copies':
+      return {
+        kind: 'structural-repair',
+        key: problemKey,
+        title: formatSubagentIssueReason(problemKey),
+        listTitle: 'Matching Copies',
+        items: subagent.locations
+          .filter((location) => location.fileType === 'real-file' && !location.canonical)
+          .sort(compareSubagentLocationsForDisplay)
+          .map((location) => ({
+            id: location.path,
+            label: formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path),
+            path: location.path,
+          })),
+        healthySummary: null,
+        primaryActionLabel: SUBAGENT_ACTION_LABELS.convertCopiesToSymlinks,
+      };
+    case 'invalid-definition':
+      return {
+        kind: 'structural-repair',
+        key: problemKey,
+        title: formatSubagentIssueReason(problemKey),
+        listTitle: 'Definition Issues',
+        items: subagent.locations.flatMap((location) =>
+          (location.invalidDetails ?? []).map((detail, index) => ({
+            id: `${location.path}:${index}`,
+            label: detail,
+            path: location.path,
+            detail: formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path),
+            snippet: getMcpDefinitionIssueSnippet(location.definitionText),
+          }))),
+        healthySummary: null,
+        primaryActionLabel: null,
+      };
+    case 'broken-symlink':
+    case 'wrong-symlink-target':
+      return buildSubagentSymlinkRepairProblem(subagent, problemKey, agentIndex);
+  }
+}
+
+function buildSubagentVariantProblem(
+  subagent: SubagentRecord,
+  problemKey: 'missing-universal' | 'definition-mismatch',
+  selectedVariantPath: string | null | undefined,
+  agentIndex: Map<string, AgentRecord>,
+): VariantResolutionProblemModel {
+  const groupedVariants = groupSubagentVariants(subagent.locations);
+  const baselineVariant = getSubagentBaselineVariant(groupedVariants, getCanonicalSubagentPath(subagent));
+  const orderedVariants = orderSubagentVariantsForInspector(groupedVariants, baselineVariant);
+  const selectedVariant = selectSubagentVariant(orderedVariants, selectedVariantPath, baselineVariant);
+  const selectedModel = selectedVariant ? mapSubagentVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const baselineModel = baselineVariant ? mapSubagentVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const diffLines = selectedVariant
+    ? baselineVariant
+      ? buildTextDiffLines(selectedVariant.definitionText, baselineVariant.definitionText)
+      : buildTextPreviewLines(selectedVariant.definitionText)
+    : [];
+
+  return {
+    kind: 'variant-resolution',
+    key: problemKey,
+    title: formatSubagentIssueReason(problemKey),
+    listTitle: 'Detected Definitions',
+    variants: orderedVariants.map((variant) => mapSubagentVariant(variant, baselineVariant, selectedVariant, agentIndex)),
+    changedFiles: [],
+    selectedVariant: selectedModel,
+    baselineVariant: baselineModel,
+    diffTitle: baselineVariant ? 'Diff: Selected Definition vs Universal' : 'Selected Definition Preview',
+    diffLines,
+    diffPath: selectedVariant?.representative.path ?? null,
+    primaryActionLabel: problemKey === 'missing-universal'
+      ? SUBAGENT_ACTION_LABELS.addToUniversal
+      : SUBAGENT_ACTION_LABELS.applySelectedDefinition,
+  };
+}
+
+function buildSubagentSymlinkRepairProblem(
+  subagent: SubagentRecord,
+  problemKey: 'broken-symlink' | 'wrong-symlink-target',
+  agentIndex: Map<string, AgentRecord>,
+): StructuralRepairProblemModel {
+  const affectedLocations = getAffectedSubagentSymlinkRepairLocations(subagent, problemKey);
+
+  return {
+    kind: 'structural-repair',
+    key: problemKey,
+    title: formatSubagentIssueReason(problemKey),
+    listTitle: formatSubagentIssueReason(problemKey),
+    items: affectedLocations.map((location) => ({
+      id: location.path,
+      label: formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path),
+      path: location.path,
+      detail: problemKey === 'wrong-symlink-target'
+        ? getWrongSubagentSymlinkTargetPath(location)
+        : undefined,
+    })),
+    healthySummary: null,
+    primaryActionLabel: SUBAGENT_ACTION_LABELS.repairSymlinks,
+  };
+}
+
 function buildHealthySkillProblem(skill: SkillRecord): StructuralRepairProblemModel {
   return {
     kind: 'structural-repair',
@@ -739,6 +927,25 @@ function buildHealthyMcpProblem(): StructuralRepairProblemModel {
     listTitle: 'Locations',
     items: [],
     healthySummary: 'Defined in every agent the exact same way.',
+    primaryActionLabel: null,
+  };
+}
+
+function buildHealthySubagentProblem(subagent: SubagentRecord): StructuralRepairProblemModel {
+  return {
+    kind: 'structural-repair',
+    key: 'missing-from-agents',
+    title: 'Healthy',
+    listTitle: 'Locations',
+    items: subagent.locations.map((location) => ({
+      id: location.path,
+      label: location.canonical
+        ? 'Universal'
+        : location.agentLabel,
+      path: location.path,
+      detail: location.fileType === 'symlink' ? 'Symlink' : formatAgeLabel(location.modifiedAt),
+    })),
+    healthySummary: 'Defined in Universal and every supported agent location.',
     primaryActionLabel: null,
   };
 }
@@ -780,6 +987,25 @@ function buildMcpDefinitionModel(
     selectedVariantPath: selectedVariant?.representative.configPath ?? null,
     files: buildMcpDefinitionFiles(mcp, selectedVariant),
     emptySummary: 'No readable definition was found for this MCP.',
+  };
+}
+
+function buildSubagentDefinitionModel(
+  subagent: SubagentRecord,
+  selectedVariantPath: string | null,
+): InspectorDefinitionModel {
+  const groupedVariants = groupSubagentVariants(subagent.locations);
+  const baselineVariant = getSubagentBaselineVariant(groupedVariants, getCanonicalSubagentPath(subagent));
+  const orderedVariants = orderSubagentVariantsForInspector(groupedVariants, baselineVariant);
+  const selectedVariant = selectSubagentVariant(orderedVariants, selectedVariantPath, baselineVariant);
+
+  return {
+    listTitle: 'Detected Definitions',
+    variants: orderedVariants.map((variant) => mapSubagentVariant(variant, baselineVariant, selectedVariant, new Map())),
+    selectedVariant: selectedVariant ? mapSubagentVariant(selectedVariant, baselineVariant, selectedVariant, new Map()) : null,
+    selectedVariantPath: selectedVariant?.representative.path ?? null,
+    files: buildSubagentDefinitionFiles(selectedVariant),
+    emptySummary: 'No readable definition was found for this subagent.',
   };
 }
 
@@ -868,6 +1094,26 @@ function buildMcpDefinitionFiles(
         openPath: null,
         kind: 'text',
         text,
+      }]
+    : [];
+}
+
+function buildSubagentDefinitionFiles(
+  selectedVariant: SubagentVariantGroup | null,
+): InspectorDefinitionFileModel[] {
+  if (!selectedVariant) {
+    return [];
+  }
+
+  const location = selectedVariant.representative;
+  const definitionText = normalizeDefinitionText(location.definitionText);
+
+  return definitionText
+    ? [{
+        relativePath: getPathBasename(location.path),
+        absolutePath: location.path,
+        kind: 'text',
+        text: definitionText,
       }]
     : [];
 }
@@ -988,6 +1234,73 @@ function getMcpProblemDetail(mcp: McpRecord, key: McpIssueReason, agentIndex: Ma
   }
 }
 
+function getSubagentProblemSummary(subagent: SubagentRecord, key: SubagentIssueReason): string {
+  switch (key) {
+    case 'missing-universal':
+      return '1 issue';
+    case 'missing-from-agents': {
+      const count = subagent.missingLocations?.length ?? 0;
+      return `${count} agent${count === 1 ? '' : 's'}`;
+    }
+    case 'definition-mismatch': {
+      const count = groupSubagentVariants(subagent.locations).length;
+      return `${count} definition${count === 1 ? '' : 's'}`;
+    }
+    case 'identical-copies': {
+      const count = subagent.locations.filter((location) => location.fileType === 'real-file' && !location.canonical).length;
+      return `${count} cop${count === 1 ? 'y' : 'ies'}`;
+    }
+    case 'invalid-definition': {
+      const count = subagent.locations.reduce((total, location) => total + (location.invalidDetails?.length ?? 0), 0);
+      return `${count} issue${count === 1 ? '' : 's'}`;
+    }
+    case 'broken-symlink':
+    case 'wrong-symlink-target': {
+      const count = getAffectedSubagentSymlinkRepairLocations(subagent, key).length;
+      return `${count} issue${count === 1 ? '' : 's'}`;
+    }
+  }
+}
+
+function getSubagentProblemDetail(
+  subagent: SubagentRecord,
+  key: SubagentIssueReason,
+  agentIndex: Map<string, AgentRecord>,
+): string {
+  switch (key) {
+    case 'missing-universal':
+      return 'Choose the definition to add to Universal';
+    case 'missing-from-agents': {
+      const count = subagent.missingLocations?.length ?? 0;
+      return `${count} agent${count === 1 ? '' : 's'} need this subagent`;
+    }
+    case 'definition-mismatch':
+      return summarizeSubagentDefinitionMismatch(subagent, agentIndex);
+    case 'identical-copies':
+      return 'Convert matching Markdown copies to symlinks';
+    case 'invalid-definition':
+      return 'One or more detected definitions are invalid';
+    case 'broken-symlink':
+      return 'One or more symlinks need repair';
+    case 'wrong-symlink-target':
+      return 'One or more symlinks point somewhere other than Universal';
+  }
+}
+
+function summarizeSubagentDefinitionMismatch(subagent: SubagentRecord, agentIndex: Map<string, AgentRecord>): string {
+  const labels = subagent.locations.map((location) =>
+    formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path));
+  if (labels.length === 0) {
+    return 'Detected definitions differ across agents';
+  }
+
+  const compactLabels = labels.length > 3
+    ? [...labels.slice(0, 3), `${labels.length - 3} more`]
+    : labels;
+
+  return `Definitions differ across ${compactLabels.join(', ')}`;
+}
+
 function summarizeDefinitionMismatch(mcp: McpRecord, agentIndex: Map<string, AgentRecord>): string {
   const labels = mcp.locations.map((location) =>
     formatMcpAgentLabel(location.agentId, agentIndex, location.agentLabel, location.configPath));
@@ -1070,6 +1383,20 @@ function formatMcpAgentLabel(
 ): string {
   const agent = agentIndex.get(agentId);
   if (configPath && isAgentsPath(configPath)) {
+    return 'Universal';
+  }
+
+  return agent?.label ?? stripScopePrefix(fallbackLabel);
+}
+
+function formatSubagentAgentLabel(
+  agentId: string,
+  agentIndex: Map<string, AgentRecord>,
+  fallbackLabel: string,
+  path?: string,
+): string {
+  const agent = agentIndex.get(agentId);
+  if (path && isAgentsPath(path)) {
     return 'Universal';
   }
 
@@ -1662,6 +1989,218 @@ function getMcpLocationIssueState(
   return { tone: 'healthy' };
 }
 
+function buildSubagentLocationSections(
+  subagent: SubagentRecord,
+  agentIndex: Map<string, AgentRecord>,
+): InspectorLocationSectionModel[] {
+  const universalRows = getSubagentUniversalDirectoryRows(subagent);
+  const pluginRows = subagent.locations
+    .filter((location) => location.provenance?.kind === 'plugin')
+    .map((location) => mapSubagentLocationRow(subagent, location, stripScopePrefix(location.agentLabel)));
+  const installedRows = getSubagentAgentEntries(subagent, agentIndex)
+    .filter((entry) => !entry.path || !isAgentsPath(entry.path))
+    .filter((entry) => entry.location?.provenance?.kind !== 'plugin')
+    .map((entry) => {
+      const issue = getSubagentLocationIssueState(subagent, entry);
+      return {
+        id: `${entry.agentId}:${entry.path ?? 'missing'}`,
+        label: entry.label,
+        path: entry.location?.path ?? entry.path ?? null,
+        pathText: entry.location?.path ?? entry.path ?? 'Not configured',
+        statusLabel: issue.statusLabel,
+        tone: issue.tone,
+      };
+    })
+    .sort(compareInspectorLocationRowsByLabel);
+
+  return [
+    {
+      id: 'universal',
+      title: 'Universal Directory',
+      rows: universalRows,
+    },
+    {
+      id: 'plugin-paths',
+      title: 'Plugin Paths',
+      rows: pluginRows,
+    },
+    {
+      id: 'installed-paths',
+      title: 'Installed Paths',
+      rows: installedRows,
+    },
+  ].filter((section) => section.rows.length > 0 || section.id === 'universal');
+}
+
+function getSubagentUniversalDirectoryRows(subagent: SubagentRecord): InspectorLocationRow[] {
+  const universalLocations = subagent.locations.filter((location) => location.canonical || isAgentsPath(location.path));
+  if (universalLocations.length > 0) {
+    return universalLocations.map((location) =>
+      mapSubagentLocationRow(subagent, location, universalLocations.length > 1 ? 'Universal' : null));
+  }
+
+  const expectedUniversal = [...(subagent.expectedLocations ?? []), ...(subagent.missingLocations ?? [])]
+    .find((location) => location.path && isAgentsPath(location.path));
+
+  return [{
+    id: expectedUniversal?.path ?? 'missing-universal-subagent',
+    label: null,
+    path: expectedUniversal?.path ?? null,
+    pathText: expectedUniversal?.path ?? 'Not found',
+    statusLabel: 'Missing Universal',
+    tone: 'muted',
+  }];
+}
+
+function mapSubagentLocationRow(
+  subagent: SubagentRecord,
+  location: SubagentLocationRecord,
+  label: string | null,
+): InspectorLocationRow {
+  const issue = getSubagentLocationIssueState(subagent, {
+    agentId: location.agentId,
+    label: location.canonical ? 'Universal' : location.agentLabel,
+    path: location.path,
+    location,
+  });
+
+  return {
+    id: location.path,
+    label,
+    path: location.path,
+    pathText: location.path,
+    statusLabel: issue.statusLabel,
+    tone: issue.tone,
+  };
+}
+
+function getSubagentAgentEntries(
+  subagent: SubagentRecord,
+  agentIndex: Map<string, AgentRecord>,
+): Array<{
+  agentId: string;
+  label: string;
+  path?: string;
+  supportStatus?: 'supported' | 'unsupported';
+  unsupportedReason?: 'not-documented' | 'unsupported-format' | 'account-managed';
+  location: SubagentLocationRecord | null;
+}> {
+  const locationsByAgent = new Map(subagent.locations.map((location) => [location.agentId, location]));
+  const entries = new Map<string, {
+    agentId: string;
+    label: string;
+    path?: string;
+    supportStatus?: 'supported' | 'unsupported';
+    unsupportedReason?: 'not-documented' | 'unsupported-format' | 'account-managed';
+    location: SubagentLocationRecord | null;
+  }>();
+
+  for (const expected of subagent.expectedLocations ?? []) {
+    entries.set(expected.agentId, {
+      agentId: expected.agentId,
+      label: expected.agentLabel,
+      path: expected.path ?? expected.directoryPath,
+      supportStatus: expected.supportStatus,
+      unsupportedReason: expected.unsupportedReason,
+      location: locationsByAgent.get(expected.agentId) ?? null,
+    });
+  }
+
+  for (const location of subagent.locations) {
+    if (!entries.has(location.agentId)) {
+      entries.set(location.agentId, {
+        agentId: location.agentId,
+        label: location.agentLabel,
+        path: location.path,
+        location,
+      });
+    }
+  }
+
+  for (const missing of subagent.missingLocations ?? []) {
+    if (!entries.has(missing.agentId)) {
+      entries.set(missing.agentId, {
+        agentId: missing.agentId,
+        label: missing.agentLabel,
+        path: missing.path ?? missing.directoryPath,
+        supportStatus: missing.supportStatus,
+        unsupportedReason: missing.unsupportedReason,
+        location: null,
+      });
+    }
+  }
+
+  return [...entries.values()].map((entry) => ({
+    ...entry,
+    label: formatSubagentAgentLabel(entry.agentId, agentIndex, entry.label, entry.path),
+  }));
+}
+
+function getSubagentLocationIssueState(
+  subagent: SubagentRecord,
+  entry: {
+    agentId?: string;
+    label?: string;
+    path?: string;
+    supportStatus?: 'supported' | 'unsupported';
+    unsupportedReason?: 'not-documented' | 'unsupported-format' | 'account-managed';
+    location: SubagentLocationRecord | null;
+  },
+): { statusLabel?: string; tone: InspectorLocationTone } {
+  if (entry.supportStatus === 'unsupported') {
+    return {
+      statusLabel: formatSubagentUnsupportedLocationStatus(entry.unsupportedReason),
+      tone: 'muted',
+    };
+  }
+
+  const location = entry.location;
+  if (!location) {
+    return { statusLabel: 'Missing From Agent', tone: 'muted' };
+  }
+
+  if ((location.invalidDetails?.length ?? 0) > 0) {
+    return { statusLabel: 'Invalid Definition', tone: 'danger' };
+  }
+
+  if (location.fileType === 'symlink') {
+    if (subagent.issueReasons.includes('broken-symlink') && !location.resolvedPath) {
+      return { statusLabel: 'Broken Symlink', tone: 'danger' };
+    }
+
+    if (subagent.issueReasons.includes('wrong-symlink-target') && isWrongSubagentSymlinkTarget(subagent, location)) {
+      return { statusLabel: 'Wrong Target', tone: 'warning' };
+    }
+
+    return { statusLabel: 'symlink', tone: 'healthy' };
+  }
+
+  if (!location.canonical && subagent.issueReasons.includes('definition-mismatch') && isSubagentDefinitionMismatch(subagent, location)) {
+    return { statusLabel: 'Definition Mismatch', tone: 'warning' };
+  }
+
+  if (!location.canonical && subagent.issueReasons.includes('identical-copies')) {
+    return { statusLabel: 'Identical Copy', tone: 'warning' };
+  }
+
+  return { tone: 'healthy' };
+}
+
+function formatSubagentUnsupportedLocationStatus(
+  reason?: 'not-documented' | 'unsupported-format' | 'account-managed',
+): string {
+  switch (reason) {
+    case 'account-managed':
+      return 'Account managed';
+    case 'not-documented':
+      return 'Not documented';
+    case 'unsupported-format':
+      return 'Unsupported format';
+    case undefined:
+      return 'Unsupported';
+  }
+}
+
 function formatMcpUnsupportedLocationStatus(entry: {
   unsupportedReason?: 'remote-mcp-not-supported' | 'transport-not-supported';
   unsupportedTransport?: McpTransportKind;
@@ -1748,6 +2287,35 @@ function mapMcpVariant(
       path: location.configPath,
     })),
     updatedLabel: summarizeMcpCommand(representative),
+    definitionText: variant.definitionText,
+  };
+}
+
+function mapSubagentVariant(
+  variant: SubagentVariantGroup,
+  baselineVariant: SubagentVariantGroup | null,
+  selectedVariant: SubagentVariantGroup | null,
+  agentIndex: Map<string, AgentRecord>,
+): InspectorVariantModel {
+  const representative = variant.representative;
+  const badge = representative.path === baselineVariant?.representative.path
+    ? 'Universal'
+    : representative.path === selectedVariant?.representative.path
+      ? 'Selected Version'
+      : undefined;
+
+  return {
+    id: variant.id,
+    path: representative.path,
+    label: formatSubagentAgentLabel(representative.agentId, agentIndex, representative.agentLabel, representative.path),
+    secondaryLabel: representative.path,
+    badge,
+    isBaseline: representative.path === baselineVariant?.representative.path,
+    locations: variant.locations.map((location) => ({
+      label: formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path),
+      path: location.path,
+    })),
+    updatedLabel: formatAgeLabel(representative.modifiedAt),
     definitionText: variant.definitionText,
   };
 }
@@ -2222,6 +2790,38 @@ function groupMcpVariants(locations: McpLocationRecord[]): McpVariantGroup[] {
   });
 }
 
+function groupSubagentVariants(locations: SubagentLocationRecord[]): SubagentVariantGroup[] {
+  const groups = new Map<string, SubagentLocationRecord[]>();
+
+  for (const location of locations.filter(isReadableSubagentVariantLocation)) {
+    const definitionText = normalizeDefinitionText(location.definitionText);
+    const key = location.definitionComparisonKey ?? (definitionText ? `text:${hashStableString(definitionText)}` : `path:${location.path}`);
+    const existing = groups.get(key) ?? [];
+    existing.push(location);
+    groups.set(key, existing);
+  }
+
+  return [...groups.entries()].map(([id, groupedLocations]) => {
+    const sortedLocations = groupedLocations.slice().sort(compareSubagentLocationsForDisplay);
+    const representative = sortedLocations[0];
+    if (!representative) {
+      throw new Error(`Expected a representative location for subagent variant group ${id}.`);
+    }
+
+    return {
+      id,
+      definitionText: normalizeDefinitionText(representative.definitionText),
+      locations: sortedLocations,
+      representative,
+    };
+  });
+}
+
+function isReadableSubagentVariantLocation(location: SubagentLocationRecord): boolean {
+  return (location.invalidDetails?.length ?? 0) === 0
+    && (location.fileType === 'real-file' || Boolean(normalizeDefinitionText(location.definitionText)));
+}
+
 const MCP_BREAKDOWN_FIELD_ORDER = [
   'transport',
   'command',
@@ -2532,6 +3132,22 @@ function selectMcpVariant(
   return agentsVariant ?? baselineVariant ?? variants[0] ?? null;
 }
 
+function selectSubagentVariant(
+  variants: SubagentVariantGroup[],
+  selectedVariantPath: string | null | undefined,
+  baselineVariant: SubagentVariantGroup | null,
+): SubagentVariantGroup | null {
+  if (selectedVariantPath) {
+    const selectedVariant = variants.find((variant) => variant.locations.some((location) => location.path === selectedVariantPath));
+    if (selectedVariant) {
+      return withSubagentRepresentativeOverride(selectedVariant, selectedVariantPath);
+    }
+  }
+
+  const agentsVariant = variants.find((variant) => isAgentsPath(variant.representative.path));
+  return agentsVariant ?? baselineVariant ?? variants[0] ?? null;
+}
+
 function withSkillRepresentativeOverride(variant: SkillVariantGroup, selectedPath: string): SkillVariantGroup {
   const representative = variant.locations.find((location) => location.path === selectedPath) ?? variant.representative;
   return {
@@ -2542,6 +3158,14 @@ function withSkillRepresentativeOverride(variant: SkillVariantGroup, selectedPat
 
 function withMcpRepresentativeOverride(variant: McpVariantGroup, selectedPath: string): McpVariantGroup {
   const representative = variant.locations.find((location) => location.configPath === selectedPath) ?? variant.representative;
+  return {
+    ...variant,
+    representative,
+  };
+}
+
+function withSubagentRepresentativeOverride(variant: SubagentVariantGroup, selectedPath: string): SubagentVariantGroup {
+  const representative = variant.locations.find((location) => location.path === selectedPath) ?? variant.representative;
   return {
     ...variant,
     representative,
@@ -2562,6 +3186,23 @@ function getMcpBaselineVariant(
   }
 
   return variants[0] ?? null;
+}
+
+function getSubagentBaselineVariant(
+  variants: SubagentVariantGroup[],
+  canonicalPath: string | null,
+): SubagentVariantGroup | null {
+  if (canonicalPath) {
+    const canonicalVariant = variants.find((variant) =>
+      variant.locations.some((location) => location.path === canonicalPath),
+    );
+    if (canonicalVariant) {
+      return withSubagentRepresentativeOverride(canonicalVariant, canonicalPath);
+    }
+  }
+
+  const agentsVariant = variants.find((variant) => isAgentsPath(variant.representative.path));
+  return agentsVariant ?? variants[0] ?? null;
 }
 
 function getSkillBaselineVariant(
@@ -2612,6 +3253,16 @@ function orderMcpVariantsForInspector(
   );
 }
 
+function orderSubagentVariantsForInspector(
+  variants: SubagentVariantGroup[],
+  baselineVariant: SubagentVariantGroup | null,
+): SubagentVariantGroup[] {
+  return orderVariantsForInspector(
+    variants,
+    baselineVariant?.id ?? null,
+  );
+}
+
 function orderVariantsForInspector<T extends { id: string }>(
   variants: T[],
   baselineId: string | null,
@@ -2653,7 +3304,10 @@ function buildProblemSections(problemKeys: InspectorProblemKey[]): InspectorProb
 }
 
 function isVariantResolutionProblemKey(problemKey: InspectorProblemKey): boolean {
-  return problemKey === 'diverged-copies' || problemKey === 'missing-canonical' || problemKey === 'definition-mismatch';
+  return problemKey === 'diverged-copies'
+    || problemKey === 'missing-canonical'
+    || problemKey === 'missing-universal'
+    || problemKey === 'definition-mismatch';
 }
 
 function getActiveProblemSelectedVariantPath(problem: InspectorActiveProblemModel): string | null {
@@ -2818,6 +3472,93 @@ function buildMcpProvenanceSummary(
   return buildSourceSummaryRows(location?.provenance);
 }
 
+function buildSubagentProvenanceRows(
+  subagent: SubagentRecord,
+  selectedVariantPath: string | null,
+  referencePath: string | null,
+  agentIndex: Map<string, AgentRecord>,
+): InspectorProvenanceRow[] {
+  return subagent.locations
+    .slice()
+    .sort(compareSubagentLocationsForDisplay)
+    .map((location) => ({
+      id: `${location.agentId}:${location.path}`,
+      label: location.path === selectedVariantPath
+        ? 'Selected definition'
+        : location.path === referencePath
+          ? 'Reference definition'
+          : 'Definition',
+      sourceLabel: formatSubagentAgentLabel(location.agentId, agentIndex, location.agentLabel, location.path),
+      path: location.path,
+      detail: location.fileType === 'symlink'
+        ? location.symlinkTarget ?? location.resolvedPath ?? 'Linked copy'
+        : formatAgeLabel(location.modifiedAt),
+      isSelected: location.path === selectedVariantPath,
+      isCanonical: location.path === referencePath,
+    }));
+}
+
+function buildSubagentProvenanceSummary(
+  subagent: SubagentRecord,
+  selectedVariantPath: string | null,
+  referencePath: string | null,
+): InspectorProvenanceSummaryRow[] {
+  const pluginLocations = subagent.locations.filter((entry) =>
+    entry.provenance?.kind === 'plugin' && entry.provenance.plugin);
+  const hasManualLocations = subagent.locations.some((entry) => entry.provenance?.kind !== 'plugin');
+  if (pluginLocations.length > 0 && hasManualLocations) {
+    return buildMixedSubagentSourceSummaryRows(pluginLocations);
+  }
+
+  let location: SubagentLocationRecord | null = null;
+  if (selectedVariantPath) {
+    location = subagent.locations.find((entry) => entry.path === selectedVariantPath) ?? null;
+  }
+  if (!location && referencePath) {
+    location = subagent.locations.find((entry) => entry.path === referencePath) ?? null;
+  }
+  location ??= subagent.locations[0] ?? null;
+
+  return buildSourceSummaryRows(location?.provenance);
+}
+
+function buildMixedSubagentSourceSummaryRows(pluginLocations: SubagentLocationRecord[]): InspectorProvenanceSummaryRow[] {
+  const uniquePlugins = new Map<string, NonNullable<SkillProvenance['plugin']>>();
+  for (const location of pluginLocations) {
+    const plugin = location.provenance?.plugin;
+    if (!plugin) {
+      continue;
+    }
+    uniquePlugins.set(`${plugin.host}:${plugin.pluginId}:${plugin.version ?? ''}`, plugin);
+  }
+
+  const [plugin] = uniquePlugins.values();
+  return [
+    {
+      id: 'source-type',
+      label: 'Source Type',
+      value: 'Plugin + Manual',
+    },
+    ...(plugin
+      ? [{
+          id: 'source',
+          label: 'Source' as const,
+          value: uniquePlugins.size === 1 ? plugin.pluginId : `${uniquePlugins.size} plugin sources`,
+          ...(uniquePlugins.size === 1
+            ? {
+                action: {
+                  kind: 'plugin' as const,
+                  host: plugin.host,
+                  pluginId: plugin.pluginId,
+                  version: plugin.version,
+                },
+              }
+            : {}),
+        }]
+      : []),
+  ];
+}
+
 function buildMixedMcpSourceSummaryRows(pluginLocations: McpLocationRecord[]): InspectorProvenanceSummaryRow[] {
   const uniquePlugins = new Map<string, NonNullable<SkillProvenance['plugin']>>();
   for (const location of pluginLocations) {
@@ -2970,6 +3711,10 @@ function hasPluginMcpLocation(mcp: McpRecord): boolean {
   return mcp.locations.some((location) => location.provenance?.kind === 'plugin');
 }
 
+function hasPluginSubagentLocation(subagent: SubagentRecord): boolean {
+  return subagent.locations.some((location) => location.provenance?.kind === 'plugin');
+}
+
 function compareSkillLocationForProvenance(left: SkillLocationRecord, right: SkillLocationRecord): number {
   if (left.canonical !== right.canonical) {
     return left.canonical ? -1 : 1;
@@ -2981,6 +3726,10 @@ function compareSkillLocationForProvenance(left: SkillLocationRecord, right: Ski
 
 function getCanonicalSkillPath(skill: SkillRecord): string | null {
   return skill.locations.find((location) => location.canonical)?.path ?? null;
+}
+
+function getCanonicalSubagentPath(subagent: SubagentRecord): string | null {
+  return subagent.locations.find((location) => location.canonical)?.path ?? null;
 }
 
 function getMcpReferencePath(mcp: McpRecord): string | null {
@@ -3080,6 +3829,59 @@ function resolveSkillInstallAgent(
   }
 
   return null;
+}
+
+function compareSubagentLocationsForDisplay(left: SubagentLocationRecord, right: SubagentLocationRecord): number {
+  if (left.canonical !== right.canonical) {
+    return left.canonical ? -1 : 1;
+  }
+
+  const modifiedDifference = new Date(right.modifiedAt).getTime() - new Date(left.modifiedAt).getTime();
+  return modifiedDifference || left.path.localeCompare(right.path);
+}
+
+function getAffectedSubagentSymlinkRepairLocations(
+  subagent: SubagentRecord,
+  problemKey: 'broken-symlink' | 'wrong-symlink-target',
+): SubagentLocationRecord[] {
+  return subagent.locations.filter((location) => {
+    if (location.canonical || location.fileType !== 'symlink') {
+      return false;
+    }
+
+    if (problemKey === 'broken-symlink') {
+      return !location.resolvedPath;
+    }
+
+    return isWrongSubagentSymlinkTarget(subagent, location);
+  });
+}
+
+function getWrongSubagentSymlinkTargetPath(location: SubagentLocationRecord): string {
+  return location.symlinkTarget ?? location.resolvedPath ?? 'Missing target';
+}
+
+function isWrongSubagentSymlinkTarget(subagent: SubagentRecord, location: SubagentLocationRecord): boolean {
+  const canonicalPath = getCanonicalSubagentPath(subagent);
+  if (!canonicalPath) {
+    return Boolean(location.symlinkTarget || location.resolvedPath);
+  }
+
+  return location.resolvedPath !== canonicalPath && location.symlinkTarget !== canonicalPath;
+}
+
+function isSubagentDefinitionMismatch(subagent: SubagentRecord, location: SubagentLocationRecord): boolean {
+  const canonicalLocation = subagent.locations.find((candidate) => candidate.canonical) ?? subagent.locations[0] ?? null;
+  if (!canonicalLocation || canonicalLocation.path === location.path) {
+    return false;
+  }
+
+  return getSubagentLocationComparisonKey(canonicalLocation) !== getSubagentLocationComparisonKey(location);
+}
+
+function getSubagentLocationComparisonKey(location: Pick<SubagentLocationRecord, 'definitionComparisonKey' | 'definitionText' | 'path'>): string {
+  const definitionText = normalizeDefinitionText(location.definitionText);
+  return location.definitionComparisonKey ?? (definitionText ? `text:${hashStableString(definitionText)}` : `path:${location.path}`);
 }
 
 function stripScopePrefix(label: string): string {

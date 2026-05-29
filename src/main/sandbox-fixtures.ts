@@ -1,7 +1,7 @@
 import { chmod, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { McpServerDefinition, SeedRepresentativeFixturesResult, SkillStructuralState } from '@shared/contracts';
+import type { AgentRecord, McpServerDefinition, SeedRepresentativeFixturesResult, SkillStructuralState } from '@shared/contracts';
 import {
   defaultConfig,
   ensureSkillIndexSandboxLayout,
@@ -34,6 +34,13 @@ interface SkillMarkdownOptions {
   includeName?: boolean;
   frontMatterName?: string;
   frontMatterDescription?: string;
+}
+
+interface SubagentMarkdownOptions {
+  name: string;
+  description?: string;
+  bodyLines: string[];
+  extraFields?: Record<string, string | boolean | number>;
 }
 
 type McpDefinition = McpServerDefinition;
@@ -124,6 +131,9 @@ const INITIALLY_DISMISSED_SKILL_NAMES = new Set([
 const INITIALLY_DISMISSED_MCP_NAMES = new Set([
   'muted-mcp',
   'muted-extra-mcp',
+]);
+const INITIALLY_DISMISSED_SUBAGENT_NAMES = new Set([
+  'dismissed-subagent',
 ]);
 const INVALID_SKILL_NAME_TOO_LONG = 'a'.repeat(65);
 const INVALID_SKILL_DESCRIPTION_TOO_LONG = `Too long: ${'x'.repeat(1016)}`;
@@ -1370,6 +1380,7 @@ export async function seedRepresentativeFixtures(
     ...representativeMcpAgentIds.map((agentId) =>
       writeAgentMcpConfig(sandboxAgents, agentId, representativeMcpConfigs[agentId])),
   ]);
+  await writeSandboxSubagentFixtures(paths.sandboxRoot, sandboxAgents);
   if (includeParserMatrix) {
     await writeGeneratedHealthySkillSymlinksForAgents(sourceById, sandboxAgents, REPRESENTATIVE_SKILL_AGENT_IDS);
   }
@@ -1385,10 +1396,14 @@ export async function seedRepresentativeFixtures(
   const dismissedMcpSignatures = (seededInventory.mcps ?? [])
     .filter((mcp) => INITIALLY_DISMISSED_MCP_NAMES.has(mcp.name) && mcp.signature)
     .map((mcp) => mcp.signature as string);
+  const dismissedSubagentSignatures = (seededInventory.subagents ?? [])
+    .filter((subagent) => INITIALLY_DISMISSED_SUBAGENT_NAMES.has(subagent.name) && subagent.signature)
+    .map((subagent) => subagent.signature as string);
   await writeSkillIndexConfig(paths.configFile, {
     ...defaultConfig,
     dismissedDriftSignatures,
     dismissedMcpSignatures,
+    dismissedSubagentSignatures,
   });
 
   return {
@@ -1666,6 +1681,309 @@ async function writeSandboxCodexConfig(configPath: string): Promise<void> {
   await writeFile(configPath, 'model = "gpt-5"\n', 'utf8');
 }
 
+async function writeSandboxSubagentFixtures(sandboxRoot: string, agents: AgentRecord[]): Promise<void> {
+  const canonicalDir = path.join(sandboxRoot, '.agents', 'agents');
+  const claudeDir = getSandboxAgentSubagentsDir(agents, 'sandbox-claude');
+  const codexDir = getSandboxAgentSubagentsDir(agents, 'sandbox-codex');
+  const factoryDir = getSandboxAgentSubagentsDir(agents, 'sandbox-factory');
+  const canonicalPath = (name: string) => path.join(canonicalDir, `${name}.md`);
+  const claudePath = (name: string) => path.join(claudeDir ?? canonicalDir, `${name}.md`);
+  const factoryPath = (name: string) => path.join(factoryDir ?? canonicalDir, `${name}.md`);
+  const codexPath = (name: string) => path.join(codexDir ?? canonicalDir, `${name}.toml`);
+  const writeMarkdown = (
+    filePath: string,
+    name: string,
+    description: string | undefined,
+    bodyLines: string[],
+    extraFields?: Record<string, string | boolean | number>,
+  ) =>
+    writeFileWithParents(
+      filePath,
+      buildSubagentMarkdown({
+        name,
+        description,
+        bodyLines,
+        ...(extraFields ? { extraFields } : {}),
+      }),
+    );
+  const writeCodex = (
+    filePath: string,
+    name: string,
+    description: string,
+    developerInstructions: string,
+  ) =>
+    writeFileWithParents(
+      filePath,
+      buildCodexSubagentToml({ name, description, developerInstructions }),
+    );
+
+  const canonicalDefinitions: Array<Promise<void>> = [
+    writeMarkdown(
+      canonicalPath('healthy-subagent'),
+      'healthy-subagent',
+      'Healthy across Universal, Claude, Codex, and Factory.',
+      ['Use the shared healthy behavior everywhere.'],
+    ),
+    writeMarkdown(
+      canonicalPath('reviewer'),
+      'reviewer',
+      'Reviews implementation changes across supported agents.',
+      ['Inspect diffs, note risks, and keep recommendations grounded in repository behavior.'],
+    ),
+    writeMarkdown(
+      canonicalPath('missing-from-agents-subagent'),
+      'missing-from-agents-subagent',
+      'Universal copy exists but supported agent locations are absent.',
+      ['This should show the Missing From Agents issue by itself.'],
+    ),
+    writeMarkdown(
+      canonicalPath('dismissed-subagent'),
+      'dismissed-subagent',
+      'Universal copy exists, but its missing agent copies start dismissed in Sandbox.',
+      ['This should show the same issue as Missing From Agents with dismissed presentation.'],
+    ),
+    writeMarkdown(
+      canonicalPath('identical-copies-subagent'),
+      'identical-copies-subagent',
+      'Has an agent-local Markdown copy that exactly matches Universal.',
+      ['This duplicate should be replaced with a symlink.'],
+    ),
+    writeMarkdown(
+      canonicalPath('definition-mismatch-subagent'),
+      'definition-mismatch-subagent',
+      'Canonical definition used for mismatch resolution.',
+      ['Use the canonical mismatch fixture behavior.'],
+    ),
+    writeMarkdown(
+      canonicalPath('broken-symlink-subagent'),
+      'broken-symlink-subagent',
+      'Exercises repair for a broken agent-local subagent link.',
+      ['This canonical copy should replace the broken agent-local link.'],
+    ),
+    writeMarkdown(
+      canonicalPath('wrong-symlink-target-subagent'),
+      'wrong-symlink-target-subagent',
+      'Exercises repair for a symlink pointing at a different subagent.',
+      ['This canonical copy is the correct target for the agent-local symlink.'],
+    ),
+    writeMarkdown(
+      canonicalPath('wrong-symlink-target-decoy'),
+      'wrong-symlink-target-decoy',
+      'A healthy decoy subagent used as the wrong symlink target.',
+      ['This file intentionally receives an unrelated symlink from another subagent.'],
+    ),
+    writeMarkdown(
+      canonicalPath('invalid-universal-subagent'),
+      'invalid-universal-subagent',
+      undefined,
+      ['This Universal definition intentionally omits the required description field.'],
+    ),
+    writeMarkdown(
+      canonicalPath('multi-mismatch-missing-subagent'),
+      'multi-mismatch-missing-subagent',
+      'Canonical definition that also lacks some supported agent targets.',
+      ['Use the canonical multi-issue mismatch behavior.'],
+    ),
+    writeMarkdown(
+      canonicalPath('multi-identical-missing-subagent'),
+      'multi-identical-missing-subagent',
+      'Canonical definition with a duplicate and missing supported agent targets.',
+      ['This duplicate is intentionally missing other agent renderings.'],
+    ),
+    writeMarkdown(
+      canonicalPath('multi-broken-missing-subagent'),
+      'multi-broken-missing-subagent',
+      'Canonical definition with a broken link and missing supported agent targets.',
+      ['Repair the broken link while still showing absent agent locations.'],
+    ),
+  ];
+
+  await Promise.all(canonicalDefinitions);
+
+  const writes: Array<Promise<void>> = [];
+  if (claudeDir) {
+    writes.push(
+      writeSubagentFixtureSymlink(
+        claudePath('healthy-subagent'),
+        canonicalPath('healthy-subagent'),
+      ),
+      writeFileWithParents(
+        claudePath('identical-copies-subagent'),
+        buildSubagentMarkdown({
+          name: 'identical-copies-subagent',
+          description: 'Has an agent-local Markdown copy that exactly matches Universal.',
+          bodyLines: ['This duplicate should be replaced with a symlink.'],
+        }),
+      ),
+      writeFileWithParents(
+        claudePath('definition-mismatch-subagent'),
+        buildSubagentMarkdown({
+          name: 'definition-mismatch-subagent',
+          description: 'Claude-local definition used for mismatch resolution.',
+          bodyLines: ['Use the Claude-local mismatch fixture behavior.'],
+        }),
+      ),
+      writeSubagentFixtureSymlink(
+        claudePath('broken-symlink-subagent'),
+        path.join(canonicalDir, 'missing-broken-symlink-target.md'),
+      ),
+      writeSubagentFixtureSymlink(
+        claudePath('wrong-symlink-target-subagent'),
+        canonicalPath('wrong-symlink-target-decoy'),
+      ),
+      writeSubagentFixtureSymlink(
+        claudePath('wrong-symlink-target-decoy'),
+        canonicalPath('wrong-symlink-target-decoy'),
+      ),
+      writeFileWithParents(
+        claudePath('multi-mismatch-missing-subagent'),
+        buildSubagentMarkdown({
+          name: 'multi-mismatch-missing-subagent',
+          description: 'Claude definition that differs while other agents are missing.',
+          bodyLines: ['Use the Claude-local multi-issue behavior.'],
+        }),
+      ),
+      writeFileWithParents(
+        claudePath('multi-identical-missing-subagent'),
+        buildSubagentMarkdown({
+          name: 'multi-identical-missing-subagent',
+          description: 'Canonical definition with a duplicate and missing supported agent targets.',
+          bodyLines: ['This duplicate is intentionally missing other agent renderings.'],
+        }),
+      ),
+      writeSubagentFixtureSymlink(
+        claudePath('multi-broken-missing-subagent'),
+        path.join(canonicalDir, 'missing-multi-broken-target.md'),
+      ),
+      writeFileWithParents(
+        claudePath('missing-universal-claude-subagent'),
+        buildSubagentMarkdown({
+          name: 'missing-universal-claude-subagent',
+          description: 'Claude-local subagent without a Universal copy.',
+          bodyLines: ['Promote this into Universal before syncing elsewhere.'],
+        }),
+      ),
+      writeFileWithParents(
+        claudePath('invalid-definition-subagent'),
+        [
+          '---',
+          'name: invalid-definition-subagent',
+          '---',
+          'This intentionally omits Claude Code\'s required description field.',
+          '',
+        ].join('\n'),
+      ),
+    );
+  }
+
+  if (codexDir) {
+    writes.push(
+      writeCodex(
+        codexPath('healthy-subagent'),
+        'healthy-subagent',
+        'Healthy across Universal, Claude, Codex, and Factory.',
+        'Use the shared healthy behavior everywhere.',
+      ),
+      writeCodex(
+        codexPath('identical-copies-subagent'),
+        'identical-copies-subagent',
+        'Has an agent-local Markdown copy that exactly matches Universal.',
+        'This duplicate should be replaced with a symlink.',
+      ),
+      writeCodex(
+        codexPath('definition-mismatch-subagent'),
+        'definition-mismatch-subagent',
+        'Canonical definition used for mismatch resolution.',
+        'Use the canonical mismatch fixture behavior.',
+      ),
+      writeCodex(
+        codexPath('broken-symlink-subagent'),
+        'broken-symlink-subagent',
+        'Exercises repair for a broken agent-local subagent link.',
+        'This canonical copy should replace the broken agent-local link.',
+      ),
+      writeCodex(
+        codexPath('wrong-symlink-target-subagent'),
+        'wrong-symlink-target-subagent',
+        'Exercises repair for a symlink pointing at a different subagent.',
+        'This canonical copy is the correct target for the agent-local symlink.',
+      ),
+      writeCodex(
+        codexPath('wrong-symlink-target-decoy'),
+        'wrong-symlink-target-decoy',
+        'A healthy decoy subagent used as the wrong symlink target.',
+        'This file intentionally receives an unrelated symlink from another subagent.',
+      ),
+      writeCodex(
+        codexPath('missing-universal-codex-subagent'),
+        'missing-universal-codex-subagent',
+        'Codex TOML subagent without a Universal copy.',
+        'Promote this Codex TOML definition into Universal.',
+      ),
+      writeFileWithParents(
+        codexPath('codex-multiline-subagent'),
+        [
+          'name = "codex-multiline-subagent"',
+          'description = "Exercises Codex TOML multiline instructions."',
+          'developer_instructions = """',
+          'Review release health before proceeding.',
+          'Confirm rollback ownership.',
+          '"""',
+          '',
+        ].join('\n'),
+      ),
+    );
+  }
+
+  if (factoryDir) {
+    writes.push(
+      writeSubagentFixtureSymlink(
+        factoryPath('healthy-subagent'),
+        canonicalPath('healthy-subagent'),
+      ),
+      writeSubagentFixtureSymlink(
+        factoryPath('identical-copies-subagent'),
+        canonicalPath('identical-copies-subagent'),
+      ),
+      writeSubagentFixtureSymlink(
+        factoryPath('definition-mismatch-subagent'),
+        canonicalPath('definition-mismatch-subagent'),
+      ),
+      writeSubagentFixtureSymlink(
+        factoryPath('broken-symlink-subagent'),
+        canonicalPath('broken-symlink-subagent'),
+      ),
+      writeSubagentFixtureSymlink(
+        factoryPath('wrong-symlink-target-subagent'),
+        canonicalPath('wrong-symlink-target-subagent'),
+      ),
+      writeSubagentFixtureSymlink(
+        factoryPath('wrong-symlink-target-decoy'),
+        canonicalPath('wrong-symlink-target-decoy'),
+      ),
+      writeFileWithParents(
+        factoryPath('factory-name-only-droid'),
+        buildSubagentMarkdown({
+          name: 'factory-name-only-droid',
+          bodyLines: ['Factory droids document name as the required frontmatter field.'],
+        }),
+      ),
+    );
+  }
+
+  await Promise.all(writes);
+}
+
+function getSandboxAgentSubagentsDir(agents: AgentRecord[], agentId: string): string | null {
+  const subagentsPath = agents.find((agent) => agent.id === agentId)?.subagentsLocation?.path;
+  return subagentsPath && subagentsPath.length > 0 ? subagentsPath : null;
+}
+
+async function writeSubagentFixtureSymlink(linkPath: string, targetPath: string): Promise<void> {
+  await mkdir(path.dirname(linkPath), { recursive: true });
+  await symlink(targetPath, linkPath);
+}
+
 async function writeSandboxClaudePluginState(sandboxRoot: string): Promise<void> {
   const pluginRoot = path.join(sandboxRoot, '.claude', 'plugins', 'sandbox-plugin-pack');
   await Promise.all([
@@ -1682,6 +2000,14 @@ async function writeSandboxClaudePluginState(sandboxRoot: string): Promise<void>
       version: '0.1.0',
       repository: 'https://github.com/example/sandbox-plugin-pack',
     }),
+    writeFileWithParents(
+      path.join(pluginRoot, 'agents', 'deployment-expert.md'),
+      buildSubagentMarkdown({
+        name: 'deployment-expert',
+        description: 'Specializes in deployment strategies and production rollouts.',
+        bodyLines: ['Check release gates, rollback ownership, and production rollout sequencing.'],
+      }),
+    ),
   ]);
 }
 
@@ -2031,6 +2357,41 @@ function buildSkillMarkdown({
     '',
     `# ${title}`,
     ...bodyLines,
+    '',
+  ].join('\n');
+}
+
+function buildSubagentMarkdown({
+  name,
+  description,
+  bodyLines,
+  extraFields = {},
+}: SubagentMarkdownOptions): string {
+  return [
+    '---',
+    `name: ${JSON.stringify(name)}`,
+    ...(description ? [`description: ${JSON.stringify(description)}`] : []),
+    ...Object.entries(extraFields).map(([key, value]) =>
+      `${key}: ${typeof value === 'string' ? JSON.stringify(value) : String(value)}`),
+    '---',
+    ...bodyLines,
+    '',
+  ].join('\n');
+}
+
+function buildCodexSubagentToml({
+  name,
+  description,
+  developerInstructions,
+}: {
+  name: string;
+  description: string;
+  developerInstructions: string;
+}): string {
+  return [
+    `name = ${JSON.stringify(name)}`,
+    `description = ${JSON.stringify(description)}`,
+    `developer_instructions = ${JSON.stringify(developerInstructions)}`,
     '',
   ].join('\n');
 }

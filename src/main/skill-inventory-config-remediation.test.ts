@@ -39,6 +39,7 @@ describe('dismissed drift config remediation', () => {
       onboardingCompletedAt: null,
       dismissedDriftSignatures: ['stale-dismissed-signature'],
       dismissedMcpSignatures: [],
+      dismissedSubagentSignatures: [],
     };
     const latestConfig: SkillIndexConfig = {
       customScanPaths: [path.join(root, 'custom-skills')],
@@ -47,6 +48,7 @@ describe('dismissed drift config remediation', () => {
       onboardingCompletedAt: null,
       dismissedDriftSignatures: ['stale-dismissed-signature'],
       dismissedMcpSignatures: ['dismissed-mcp-signature'],
+      dismissedSubagentSignatures: ['dismissed-subagent-signature'],
     };
     const mockedReadSkillIndexConfig = vi.mocked(readSkillIndexConfig);
     const mockedWriteSkillIndexConfig = vi.mocked(writeSkillIndexConfig);

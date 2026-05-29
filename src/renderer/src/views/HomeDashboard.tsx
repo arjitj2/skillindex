@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowRight, Check, ChevronUp, Wrench } from 'lucide-react';
+import { ArrowRight, Check, ChevronUp, Wrench } from 'lucide-react';
 import { useState } from 'react';
 
 import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SkillRecord, SkillScanSource } from '@shared/contracts';
@@ -26,7 +26,9 @@ const FIX_ACTION_LABELS: Record<string, string> = {
   'missing-symlinks': 'Create missing symlinks',
   'identical-copies': 'Convert copies to symlinks',
   'missing-canonical': 'Promote to universal',
+  'missing-universal': 'Promote to universal',
   'broken-symlink': 'Relink to canonical',
+  'wrong-symlink-target': 'Relink to canonical',
   'missing-from-agents': 'Add to missing agents',
 };
 
@@ -34,13 +36,27 @@ const FIX_TYPE_LABELS: Record<string, string> = {
   'missing-symlinks': 'Missing Symlinks',
   'identical-copies': 'Identical Copies',
   'missing-canonical': 'Missing Universal',
+  'missing-universal': 'Missing Universal',
   'broken-symlink': 'Broken Symlink',
+  'wrong-symlink-target': 'Wrong Symlink Target',
   'missing-from-agents': 'Missing From Agents',
+};
+
+const FIX_ENTITY_LABELS: Record<ResolveIssueRequest['entity'], string> = {
+  skill: 'Skills',
+  mcp: 'MCPs',
+  subagent: 'Subagents',
 };
 
 interface PlannedFixRow {
   key: string;
   name: string;
+}
+
+interface PlannedFixGroup {
+  entity: ResolveIssueRequest['entity'];
+  issue: ResolveIssueRequest['issue'];
+  rows: PlannedFixRow[];
 }
 
 function getResolveRequestDisplayName(
@@ -52,6 +68,10 @@ function getResolveRequestDisplayName(
     return skill ? getSkillDisplayName(skill) : request.skillName;
   }
 
+  if (request.entity === 'subagent') {
+    return request.subagentName;
+  }
+
   const mcp = inventorySnapshot?.mcps?.find((entry) => entry.name === request.mcpName);
   return mcp ? getMcpDisplayName(mcp) : request.mcpName;
 }
@@ -59,7 +79,7 @@ function getResolveRequestDisplayName(
 function getResolveRequestKey(request: ResolveIssueRequest): string {
   return [
     request.entity,
-    request.skillName ?? request.mcpName,
+    request.skillName ?? request.mcpName ?? request.subagentName,
     request.issue,
     request.selectedVariantPath ?? '',
   ].join(':');
@@ -76,26 +96,22 @@ function getActiveIssueCount(inventorySnapshot: SkillInventorySnapshot | null): 
   const mcpIssueCount = (inventorySnapshot.mcps ?? [])
     .filter((mcp) => mcp.presentation === 'active' && mcp.status === 'needs-attention')
     .reduce((count, mcp) => count + mcp.issueReasons.length, 0);
-
-  return skillIssueCount + mcpIssueCount;
+  const subagentIssueCount = (inventorySnapshot.subagents ?? [])
+    .filter((subagent) => subagent.presentation === 'active' && subagent.status === 'needs-attention')
+    .reduce((count, subagent) => count + subagent.issueReasons.length, 0);
+  return skillIssueCount + mcpIssueCount + subagentIssueCount;
 }
 
-function RepairError({ errorMessage }: { errorMessage: string | null }) {
-  if (!errorMessage) {
-    return null;
-  }
+function getFixGroupKey(request: ResolveIssueRequest): string {
+  return `${request.entity}:${request.issue}`;
+}
 
-  return (
-    <div className="repair-error">
-      <AlertCircle />
-      {errorMessage}
-    </div>
-  );
+function formatFixGroupLabel(group: Pick<PlannedFixGroup, 'entity' | 'issue'>): string {
+  return `${FIX_ENTITY_LABELS[group.entity]} • ${FIX_TYPE_LABELS[group.issue] ?? group.issue}`;
 }
 
 function RepairSurface({
   autoResolvableRequests,
-  errorMessage,
   hasAttentionIssues,
   inventorySnapshot,
   isAutoResolving,
@@ -103,7 +119,6 @@ function RepairSurface({
   onViewSkills,
 }: {
   autoResolvableRequests: ResolveIssueRequest[];
-  errorMessage: string | null;
   hasAttentionIssues: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving: boolean;
@@ -113,18 +128,23 @@ function RepairSurface({
   const [reviewOpen, setReviewOpen] = useState(false);
   const reviewPanelId = 'home-auto-repair-review-panel';
 
-  const fixesByType = autoResolvableRequests.reduce<Map<string, PlannedFixRow[]>>((acc, req) => {
-    const names = acc.get(req.issue) ?? [];
-    names.push({
+  const fixesByType = autoResolvableRequests.reduce<Map<string, PlannedFixGroup>>((acc, req) => {
+    const groupKey = getFixGroupKey(req);
+    const group = acc.get(groupKey) ?? {
+      entity: req.entity,
+      issue: req.issue,
+      rows: [],
+    };
+    group.rows.push({
       key: getResolveRequestKey(req),
       name: getResolveRequestDisplayName(req, inventorySnapshot),
     });
-    acc.set(req.issue, names);
+    acc.set(groupKey, group);
     return acc;
   }, new Map());
 
   const totalIssues = autoResolvableRequests.length;
-  const totalItems = new Set(autoResolvableRequests.map((r) => r.skillName ?? r.mcpName)).size;
+  const totalItems = new Set(autoResolvableRequests.map((r) => r.skillName ?? r.mcpName ?? r.subagentName)).size;
   const manualIssueCount = Math.max(0, getActiveIssueCount(inventorySnapshot) - totalIssues);
 
   if (autoResolvableRequests.length === 0 && !hasAttentionIssues) {
@@ -139,7 +159,6 @@ function RepairSurface({
             <p>All skills and MCPs are healthy — nothing needs attention right now.</p>
           </div>
         </div>
-        <RepairError errorMessage={errorMessage} />
       </div>
     );
   }
@@ -160,7 +179,6 @@ function RepairSurface({
             .
           </div>
         </div>
-        <RepairError errorMessage={errorMessage} />
       </div>
     );
   }
@@ -196,25 +214,23 @@ function RepairSurface({
         </button>
       </div>
 
-      <RepairError errorMessage={errorMessage} />
-
       {reviewOpen ? (
         <div className="review-panel review-panel--open" id={reviewPanelId}>
           <div className="review-header">
             <span className="review-header-title">Review planned fixes</span>
           </div>
           <div className="review-body">
-            {[...fixesByType.entries()].map(([issueType, fixRows]) => (
-              <div className="issue-bucket" key={issueType}>
+            {[...fixesByType.values()].map((fixGroup) => (
+              <div className="issue-bucket" key={`${fixGroup.entity}:${fixGroup.issue}`}>
                 <div className="issue-bucket-header">
-                  <span className="issue-bucket-label">{FIX_TYPE_LABELS[issueType] ?? issueType}</span>
-                  <span className="issue-bucket-count">{fixRows.length} {fixRows.length === 1 ? 'item' : 'items'}</span>
+                  <span className="issue-bucket-label">{formatFixGroupLabel(fixGroup)}</span>
+                  <span className="issue-bucket-count">{fixGroup.rows.length} {fixGroup.rows.length === 1 ? 'item' : 'items'}</span>
                 </div>
                 <div className="issue-bucket-rows">
-                  {fixRows.map((row) => (
+                  {fixGroup.rows.map((row) => (
                     <div className="skill-fix-row" key={row.key}>
                       <span className="skill-fix-name">{row.name}</span>
-                      <span className="skill-fix-action">{FIX_ACTION_LABELS[issueType] ?? issueType}</span>
+                      <span className="skill-fix-action">{FIX_ACTION_LABELS[fixGroup.issue] ?? fixGroup.issue}</span>
                     </div>
                   ))}
                 </div>
@@ -250,7 +266,6 @@ function RepairSurface({
 
 export function HomeDashboard({
   autoResolvableRequests,
-  errorMessage,
   homeSummary,
   inventorySnapshot,
   isAutoResolving,
@@ -262,7 +277,6 @@ export function HomeDashboard({
   onSelectSkill,
 }: {
   autoResolvableRequests: ResolveIssueRequest[];
-  errorMessage: string | null;
   homeSummary: ReturnType<typeof getHomeSummary>;
   inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving: boolean;
@@ -333,7 +347,6 @@ export function HomeDashboard({
 
             <RepairSurface
               autoResolvableRequests={autoResolvableRequests}
-              errorMessage={errorMessage}
               hasAttentionIssues={skillAttentionRows.length > 0 || mcpAttentionRows.length > 0}
               inventorySnapshot={inventorySnapshot}
               isAutoResolving={isAutoResolving}

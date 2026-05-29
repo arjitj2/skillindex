@@ -30,12 +30,14 @@ export function resolveSandboxAgentRuntimePaths(
   installResolutionContext: { cwd: string; env: NodeJS.ProcessEnv; homeDir: string };
   mcpConfigPath?: string;
   configPath?: string;
+  subagentsDir?: string;
   executablePath?: string;
 } {
   return {
     installResolutionContext: { cwd: rootDir, env: {}, homeDir: rootDir },
     mcpConfigPath: family.mcpConfigRelativeParts ? path.join(rootDir, ...family.mcpConfigRelativeParts) : undefined,
     configPath: family.agentConfigRelativeParts ? path.join(rootDir, ...family.agentConfigRelativeParts) : undefined,
+    subagentsDir: family.subagentGlobalDirRelativeParts ? path.join(rootDir, ...family.subagentGlobalDirRelativeParts) : undefined,
     executablePath: family.expectedExecutableNames?.[0]
       ? path.join(rootDir, 'bin', family.expectedExecutableNames[0])
       : undefined,

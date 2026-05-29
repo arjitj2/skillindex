@@ -5,6 +5,7 @@ import type {
   AddMcpServerRequest,
   AgentRecord,
   AgentMcpWriteDialect,
+  AgentSubagentParserKind,
   McpConfiguredTransportKind,
   McpDefinitionObject,
   McpDefinitionValue,
@@ -15,6 +16,9 @@ import type {
   SkillInventorySnapshot,
   SkillLocationRecord,
   SkillRecord,
+  SubagentExpectedLocationRecord,
+  SubagentLocationRecord,
+  SubagentRecord,
 } from '@shared/contracts';
 import { buildPortableMcpDefinition, isMcpDefinitionObject, isMcpServerDefinitions } from '@shared/mcp-definition';
 import {
@@ -22,6 +26,10 @@ import {
   resolveSkillIndexPaths,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
+import {
+  getSubagentFileNameForFormat,
+  isMarkdownSubagentSymlinkCompatible,
+} from '@shared/subagent-format-policy';
 import {
   parseTomlMcpServerArray,
   parseTomlMcpServers,
@@ -32,6 +40,11 @@ import {
 import { sanitizeJsonc, sortRecordValue } from '@main/json-utils';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
 import { scanSkillInventory, type ScanSkillInventoryOptions } from '@main/skill-inventory';
+import {
+  readPortableSubagentDefinitionFromFile,
+  renderPortableSubagentDefinition,
+  type PortableSubagentDefinition,
+} from '@main/subagent-inventory';
 import { persistSkillUniversalDecisionForSelection } from '@main/skill-universal-decisions';
 
 export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
@@ -61,6 +74,19 @@ interface CanonicalSkillPackage {
   location: SkillLocationRecord;
 }
 
+interface CanonicalSubagentPackage {
+  path: string;
+  definition: PortableSubagentDefinition;
+}
+
+interface SubagentWriteTarget {
+  agentId: string;
+  family?: string;
+  format: AgentSubagentParserKind;
+  localExtrasKeys?: string[];
+  path: string;
+}
+
 export async function resolveInventoryIssue(
   request: ResolveIssueRequest,
   options: ResolveIssueOptions = {},
@@ -80,8 +106,13 @@ export async function resolveInventoryIssue(
       ...options,
       paths,
     });
-  } else {
+  } else if (request.entity === 'mcp') {
     await resolveMcpIssueIfCurrent(snapshot, request);
+  } else {
+    await resolveSubagentIssueIfCurrent(snapshot, request, {
+      ...options,
+      paths,
+    });
   }
 
   const nextSnapshot = await scanSkillInventory({
@@ -147,13 +178,25 @@ function assertResolutionIssueIsCurrent(snapshot: SkillInventorySnapshot, reques
     return;
   }
 
-  const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
-  if (!mcp) {
-    throw new Error(`MCP "${request.mcpName}" was not found in the current inventory.`);
+  if (request.entity === 'mcp') {
+    const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+    if (!mcp) {
+      throw new Error(`MCP "${request.mcpName}" was not found in the current inventory.`);
+    }
+
+    if (!mcp.issueReasons.includes(request.issue)) {
+      throw new Error(`MCP "${request.mcpName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
+    }
+    return;
   }
 
-  if (!mcp.issueReasons.includes(request.issue)) {
-    throw new Error(`MCP "${request.mcpName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
+  const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+  if (!subagent) {
+    throw new Error(`Subagent "${request.subagentName}" was not found in the current inventory.`);
+  }
+
+  if (!subagent.issueReasons.includes(request.issue)) {
+    throw new Error(`Subagent "${request.subagentName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
   }
 }
 
@@ -166,9 +209,17 @@ function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, requ
     return;
   }
 
-  const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
-  if (mcp && mcp.issueReasons.includes(request.issue)) {
-    throw new Error(`MCP "${request.mcpName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
+  if (request.entity === 'mcp') {
+    const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+    if (mcp && mcp.issueReasons.includes(request.issue)) {
+      throw new Error(`MCP "${request.mcpName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
+    }
+    return;
+  }
+
+  const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+  if (subagent && subagent.issueReasons.includes(request.issue)) {
+    throw new Error(`Subagent "${request.subagentName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
   }
 }
 
@@ -396,6 +447,400 @@ async function resolveMcpIssueIfCurrent(
       await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
     }),
   );
+}
+
+async function resolveSubagentIssueIfCurrent(
+  snapshot: SkillInventorySnapshot,
+  request: Extract<ResolveIssueRequest, { entity: 'subagent' }>,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+  if (!subagent) {
+    throw new Error(`Subagent "${request.subagentName}" was not found in the current inventory.`);
+  }
+
+  if (!subagent.issueReasons.includes(request.issue)) {
+    throw new Error(`Subagent "${request.subagentName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
+  }
+
+  assertSubagentResolutionScopeAllowed(subagent);
+
+  switch (request.issue) {
+    case 'missing-universal': {
+      const canonicalPackage = await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+        preferExisting: false,
+        requireSelectionOnAmbiguous: true,
+      });
+      const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
+        requireSelectionOnAmbiguous: true,
+      });
+      const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
+      await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
+        replaceWithCanonicalSymlink(target.path, canonicalPackage.path)));
+      return;
+    }
+    case 'missing-from-agents': {
+      const canonicalPackage = await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+        preferExisting: true,
+        requireSelectionOnAmbiguous: true,
+      });
+      const targets = collectWritableMissingSubagentTargets(snapshot, subagent.missingLocations ?? []);
+      await Promise.all(dedupeSubagentTargets(targets).map((target) =>
+        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+      return;
+    }
+    case 'identical-copies': {
+      const canonicalPackage = await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+        preferExisting: true,
+        requireSelectionOnAmbiguous: false,
+      });
+      const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(
+        subagent,
+        snapshot,
+        findCanonicalSubagentLocation(subagent)?.definitionComparisonKey,
+      );
+      await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
+        replaceWithCanonicalSymlink(target.path, canonicalPackage.path)));
+      return;
+    }
+    case 'broken-symlink':
+    case 'wrong-symlink-target': {
+      const canonicalPackage = await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+        preferExisting: true,
+        requireSelectionOnAmbiguous: false,
+      });
+      const targets = subagent.locations
+        .filter((location) =>
+          location.fileType === 'symlink'
+          && !location.canonical
+          && location.mutability === 'writable'
+          && (request.issue === 'broken-symlink'
+            ? location.resolvedPath === undefined
+            : location.resolvedPath !== undefined && path.normalize(location.resolvedPath) !== path.normalize(canonicalPackage.path)))
+        .map((location) => locationToSubagentWriteTarget(location, snapshot));
+      await Promise.all(dedupeSubagentTargets(targets).map((target) =>
+        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+      return;
+    }
+    case 'definition-mismatch': {
+      const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
+        requireSelectionOnAmbiguous: true,
+      });
+      const selectedDefinition = readPortableDefinitionForSubagentLocation(snapshot, subagent.name, selectedLocation);
+      const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, options.paths);
+      const canonicalPackage: CanonicalSubagentPackage = {
+        path: canonicalPath,
+        definition: selectedDefinition,
+      };
+      const canonicalLocation = findCanonicalSubagentLocation(subagent);
+      const targets = [
+        ...(!canonicalLocation || canonicalLocation.definitionComparisonKey !== selectedLocation.definitionComparisonKey
+          ? [{
+              agentId: 'universal-subagents',
+              path: canonicalPath,
+              format: 'markdown-frontmatter' as const,
+            }]
+          : []),
+        ...subagent.locations
+          .filter((location) =>
+            !location.canonical
+            && location.fileType === 'real-file'
+            && isWritableSubagentLocation(location)
+            && location.definitionComparisonKey !== selectedLocation.definitionComparisonKey)
+          .map((location) => locationToSubagentWriteTarget(location, snapshot)),
+      ];
+      await Promise.all(dedupeSubagentTargets(targets).map((target) =>
+        writeSubagentTarget(target, canonicalPackage, selectedDefinition, snapshot)));
+      return;
+    }
+  }
+}
+
+function assertSubagentResolutionScopeAllowed(subagent: SubagentRecord): void {
+  const scopes = new Set([
+    ...subagent.locations.map((location) => location.scope),
+    ...(subagent.missingLocations ?? []).map((location) => location.scope),
+  ]);
+  if (scopes.size > 1) {
+    throw new Error('Subagent resolution currently requires every affected location to stay within one scope.');
+  }
+}
+
+async function ensureCanonicalSubagentPackage(
+  subagent: SubagentRecord,
+  snapshot: SkillInventorySnapshot,
+  selectedVariantPath: string | undefined,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+  behavior: {
+    preferExisting: boolean;
+    requireSelectionOnAmbiguous: boolean;
+  },
+): Promise<CanonicalSubagentPackage> {
+  const canonicalLocation = behavior.preferExisting ? findCanonicalSubagentLocation(subagent) : null;
+  if (canonicalLocation) {
+    const definition = stripSubagentLocalExtras(
+      readPortableDefinitionForSubagentLocation(snapshot, subagent.name, canonicalLocation),
+    );
+    return {
+      path: canonicalLocation.path,
+      definition,
+    };
+  }
+
+  const selectedLocation = pickSubagentSelection(subagent, selectedVariantPath, {
+    requireSelectionOnAmbiguous: behavior.requireSelectionOnAmbiguous,
+  });
+  const definition = stripSubagentLocalExtras(
+    readPortableDefinitionForSubagentLocation(snapshot, subagent.name, selectedLocation),
+  );
+  const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, options.paths);
+  await writeSubagentDefinitionFile(canonicalPath, 'markdown-frontmatter', definition);
+  return {
+    path: canonicalPath,
+    definition,
+  };
+}
+
+function findCanonicalSubagentLocation(subagent: SubagentRecord): SubagentLocationRecord | null {
+  return subagent.locations.find((location) =>
+    location.canonical
+    && location.fileType === 'real-file'
+    && (location.invalidDetails?.length ?? 0) === 0) ?? null;
+}
+
+function pickSubagentSelection(
+  subagent: SubagentRecord,
+  selectedVariantPath: string | undefined,
+  options: { requireSelectionOnAmbiguous: boolean },
+): SubagentLocationRecord {
+  const selectableLocations = subagent.locations.filter((location) =>
+    location.fileType === 'real-file'
+    && (location.invalidDetails?.length ?? 0) === 0);
+  if (selectableLocations.length === 0) {
+    throw new Error(`Subagent "${subagent.name}" has no valid definition to use for resolution.`);
+  }
+
+  if (selectedVariantPath) {
+    const selectedLocation = selectableLocations.find((location) => location.path === selectedVariantPath);
+    if (!selectedLocation) {
+      throw new Error('Choose one of the available subagent definitions before resolving this issue.');
+    }
+
+    return selectedLocation;
+  }
+
+  const groups = new Map<string, SubagentLocationRecord[]>();
+  for (const location of selectableLocations) {
+    const key = location.definitionComparisonKey ?? location.definitionText ?? `path:${location.path}`;
+    const existing = groups.get(key) ?? [];
+    existing.push(location);
+    groups.set(key, existing);
+  }
+
+  if (groups.size === 1) {
+    return [...groups.values()][0][0];
+  }
+
+  if (options.requireSelectionOnAmbiguous) {
+    throw new Error('Choose a subagent definition before resolving this issue.');
+  }
+
+  const canonicalLocation = selectableLocations.find((location) => location.canonical);
+  if (canonicalLocation) {
+    return canonicalLocation;
+  }
+
+  return selectableLocations[0];
+}
+
+function readPortableDefinitionForSubagentLocation(
+  snapshot: SkillInventorySnapshot,
+  fallbackName: string,
+  location: SubagentLocationRecord,
+): PortableSubagentDefinition {
+  return readPortableSubagentDefinitionFromFile({
+    family: findSubagentLocationFamily(snapshot, location.agentId),
+    filePath: location.path,
+    format: location.format,
+    fallbackName,
+  });
+}
+
+function findSubagentLocationFamily(snapshot: SkillInventorySnapshot, agentId: string): string | undefined {
+  return (snapshot.agents ?? []).find((agent) => agent.id === agentId)?.family;
+}
+
+function resolveCanonicalSubagentPath(
+  subagent: SubagentRecord,
+  selectedLocation: SubagentLocationRecord,
+  paths: SkillIndexPaths,
+): string {
+  const existingCanonicalLocation = findCanonicalSubagentLocation(subagent);
+  if (existingCanonicalLocation) {
+    return existingCanonicalLocation.path;
+  }
+
+  const canonicalSkillsDir = selectedLocation.scope === 'sandbox'
+    ? paths.sandboxCanonicalUserSkillsDir
+    : paths.liveCanonicalUserSkillsDir;
+  return path.join(
+    path.dirname(canonicalSkillsDir),
+    'agents',
+    getSubagentFileName(subagent.name, 'markdown-frontmatter'),
+  );
+}
+
+function collectWritableMissingSubagentTargets(
+  snapshot: SkillInventorySnapshot,
+  locations: SubagentExpectedLocationRecord[],
+): SubagentWriteTarget[] {
+  return locations
+    .filter((location) =>
+      location.path
+      && location.format
+      && location.supportStatus !== 'unsupported'
+      && isWritableSubagentAgent(snapshot, location.agentId))
+    .map((location) => ({
+      agentId: location.agentId,
+      family: findSubagentLocationFamily(snapshot, location.agentId),
+      format: location.format ?? 'markdown-frontmatter',
+      path: location.path ?? '',
+    }))
+    .filter((target) => target.path.length > 0);
+}
+
+function isWritableSubagentAgent(snapshot: SkillInventorySnapshot, agentId: string): boolean {
+  const agent = (snapshot.agents ?? []).find((entry) => entry.id === agentId);
+  return Boolean(agent?.writable && agent.subagentsLocation?.state === 'available' && agent.subagentsLocation.path);
+}
+
+function isWritableSubagentLocation(location: SubagentLocationRecord): boolean {
+  return !location.agentId.startsWith('plugin:')
+    && (location.canonical || location.mutability === 'writable')
+    && (location.invalidDetails?.length ?? 0) === 0;
+}
+
+function locationToSubagentWriteTarget(
+  location: SubagentLocationRecord,
+  snapshot: SkillInventorySnapshot,
+): SubagentWriteTarget {
+  return {
+    agentId: location.agentId,
+    family: findSubagentLocationFamily(snapshot, location.agentId),
+    format: location.format,
+    localExtrasKeys: location.localExtrasKeys,
+    path: location.path,
+  };
+}
+
+function collectIdenticalMarkdownSubagentCopyTargets(
+  subagent: SubagentRecord,
+  snapshot: SkillInventorySnapshot,
+  definitionComparisonKey: string | undefined,
+): SubagentWriteTarget[] {
+  if (!definitionComparisonKey) {
+    return [];
+  }
+
+  return subagent.locations
+    .filter((location) => {
+      const family = findSubagentLocationFamily(snapshot, location.agentId);
+      return location.fileType === 'real-file'
+        && !location.canonical
+        && location.mutability === 'writable'
+        && location.format === 'markdown-frontmatter'
+        && isMarkdownSubagentSymlinkCompatible(family)
+        && !hasSubagentLocalExtras(location)
+        && location.definitionComparisonKey === definitionComparisonKey;
+    })
+    .map((location) => locationToSubagentWriteTarget(location, snapshot));
+}
+
+function dedupeSubagentTargets(targets: SubagentWriteTarget[]): SubagentWriteTarget[] {
+  const seen = new Set<string>();
+  return targets.filter((target) => {
+    const key = path.normalize(target.path);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+async function writeSubagentTarget(
+  target: SubagentWriteTarget,
+  canonicalPackage: CanonicalSubagentPackage,
+  definition: PortableSubagentDefinition,
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  if (path.normalize(target.path) === path.normalize(canonicalPackage.path)) {
+    await writeSubagentDefinitionFile(target.path, 'markdown-frontmatter', stripSubagentLocalExtras(definition));
+    return;
+  }
+
+  const family = target.family ?? findSubagentLocationFamily(snapshot, target.agentId);
+  if (
+    target.format === 'markdown-frontmatter'
+    && isMarkdownSubagentSymlinkCompatible(family)
+    && !hasSubagentLocalExtras(target)
+  ) {
+    await replaceWithCanonicalSymlink(target.path, canonicalPackage.path);
+    return;
+  }
+
+  await writeSubagentDefinitionFile(
+    target.path,
+    target.format,
+    mergeExistingSubagentTargetExtras(target, stripSubagentLocalExtras(definition)),
+    { family },
+  );
+}
+
+async function writeSubagentDefinitionFile(
+  filePath: string,
+  format: AgentSubagentParserKind,
+  definition: PortableSubagentDefinition,
+  options: { family?: string } = {},
+): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await rm(filePath, { recursive: true, force: true });
+  await writeFile(filePath, renderPortableSubagentDefinition(definition, format, options), 'utf8');
+}
+
+function stripSubagentLocalExtras(definition: PortableSubagentDefinition): PortableSubagentDefinition {
+  return {
+    ...definition,
+    extras: {},
+  };
+}
+
+function mergeExistingSubagentTargetExtras(
+  target: SubagentWriteTarget,
+  definition: PortableSubagentDefinition,
+): PortableSubagentDefinition {
+  try {
+    const existing = readPortableSubagentDefinitionFromFile({
+      family: target.family,
+      filePath: target.path,
+      format: target.format,
+      fallbackName: definition.name,
+    });
+    return {
+      ...definition,
+      extras: existing.extras,
+    };
+  } catch {
+    return definition;
+  }
+}
+
+function getSubagentFileName(name: string, format: AgentSubagentParserKind): string {
+  return getSubagentFileNameForFormat({ name, format });
+}
+
+function hasSubagentLocalExtras(location: Pick<SubagentLocationRecord | SubagentWriteTarget, 'localExtrasKeys'>): boolean {
+  return (location.localExtrasKeys?.length ?? 0) > 0;
 }
 
 function getMcpDefinitionNameForWrite(requestedMcpName: string, selectedVariant: McpLocationRecord): string {

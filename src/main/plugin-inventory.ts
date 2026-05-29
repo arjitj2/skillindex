@@ -8,6 +8,7 @@ import type {
   PluginHost,
   PluginMcpRef,
   PluginRecord,
+  PluginSubagentRef,
   PluginUnsupportedAssetRef,
   SkillSourceScope,
   PluginSkillRef,
@@ -30,6 +31,7 @@ interface PluginManifest {
   repository?: string | { url?: string };
   skills?: string | string[];
   mcpServers?: string | string[] | McpServerDefinitions;
+  agents?: string | string[];
   hooks?: string | string[];
 }
 
@@ -247,6 +249,7 @@ async function readPluginRecord(
     version,
   });
   const bundledMcps = await collectPluginMcps(candidate.rootPath, manifest, sourceId);
+  const bundledSubagents = await collectPluginSubagents(candidate.rootPath, manifest, sourceId);
   const unsupportedAssets = await collectPluginHooks(candidate.rootPath, manifest, sourceId);
 
   return {
@@ -261,6 +264,7 @@ async function readPluginRecord(
     skillRoots: skillInventory.skillRoots,
     bundledSkills: skillInventory.skills,
     bundledMcps,
+    bundledSubagents,
     unsupportedAssets,
     unsupportedHooksCount: unsupportedAssets.length,
     source: {
@@ -674,10 +678,168 @@ async function readMcpNames(configPath: string): Promise<string[]> {
             ? parsed
             : null;
 
-    return definitions ? Object.keys(definitions).sort((left, right) => left.localeCompare(right)) : [];
+  return definitions ? Object.keys(definitions).sort((left, right) => left.localeCompare(right)) : [];
   } catch {
     return [];
   }
+}
+
+async function collectPluginSubagents(
+  rootPath: string,
+  manifest: PluginManifest,
+  sourceId: string,
+): Promise<PluginSubagentRef[]> {
+  const agentPaths = await resolvePluginSubagentPaths(rootPath, manifest);
+  const refs = await Promise.all(agentPaths.map(async (agentPath) => ({
+    name: await readPluginSubagentName(agentPath),
+    path: agentPath,
+    sourceId,
+  })));
+
+  return dedupeBy(refs, (ref) => ref.path)
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
+}
+
+async function resolvePluginSubagentPaths(rootPath: string, manifest: PluginManifest): Promise<string[]> {
+  const declaredPaths = normalizeManifestPaths(manifest.agents, 'agents').map((relativeAgentPath) =>
+    path.resolve(rootPath, relativeAgentPath));
+  const paths: string[] = [];
+
+  for (const agentPath of declaredPaths) {
+    paths.push(...await collectSubagentFiles(agentPath));
+  }
+
+  return paths.sort((left, right) => left.localeCompare(right));
+}
+
+async function collectSubagentFiles(targetPath: string): Promise<string[]> {
+  let stats;
+  try {
+    stats = await stat(targetPath);
+  } catch {
+    return [];
+  }
+
+  if (stats.isFile()) {
+    return isSubagentFileName(path.basename(targetPath)) ? [targetPath] : [];
+  }
+
+  if (!stats.isDirectory()) {
+    return [];
+  }
+
+  let entries: Dirent[];
+  try {
+    entries = await readdir(targetPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.isFile() && isSubagentFileName(entry.name)) {
+      files.push(path.join(targetPath, entry.name));
+    }
+  }
+
+  return files;
+}
+
+function isSubagentFileName(fileName: string): boolean {
+  return /\.(?:md|toml|json|jsonc|ya?ml)$/iu.test(fileName);
+}
+
+async function readPluginSubagentName(agentPath: string): Promise<string> {
+  try {
+    const raw = await readFile(agentPath, 'utf8');
+    const frontMatterName = readFrontMatterField(raw, 'name');
+    if (frontMatterName) {
+      return frontMatterName;
+    }
+
+    const tomlName = readTomlStringField(raw, 'name');
+    if (tomlName) {
+      return tomlName;
+    }
+
+    const yamlName = readYamlStringField(raw, 'name');
+    if (yamlName) {
+      return yamlName;
+    }
+
+    const parsedJson = JSON.parse(sanitizeJsonc(raw)) as unknown;
+    if (isRecord(parsedJson) && typeof parsedJson.name === 'string' && parsedJson.name.trim().length > 0) {
+      return parsedJson.name.trim();
+    }
+  } catch {
+    // Fall back to the filename below.
+  }
+
+  return path.basename(agentPath).replace(/(?:\.agent)?\.(?:md|toml|jsonc?|ya?ml)$/iu, '');
+}
+
+function readFrontMatterField(raw: string, field: string): string | null {
+  const lines = raw.split(/\r?\n/u);
+  if (lines[0] !== '---') {
+    return null;
+  }
+
+  const closingIndex = lines.findIndex((line, index) => index > 0 && (line === '---' || line === '...'));
+  if (closingIndex < 0) {
+    return null;
+  }
+
+  const fieldPattern = new RegExp(`^${field}:\\s*(.*)$`, 'u');
+  for (const line of lines.slice(1, closingIndex)) {
+    const match = fieldPattern.exec(line);
+    const value = match?.[1]?.trim();
+    if (value) {
+      return unquoteScalar(value);
+    }
+  }
+
+  return null;
+}
+
+function readYamlStringField(raw: string, field: string): string | null {
+  const fieldPattern = new RegExp(`^${field}:\\s*(.*)$`, 'u');
+  for (const line of raw.split(/\r?\n/u)) {
+    const match = fieldPattern.exec(stripYamlComment(line).trim());
+    const value = match?.[1]?.trim();
+    if (value && value !== '|' && value !== '>') {
+      return unquoteScalar(value);
+    }
+  }
+
+  return null;
+}
+
+function stripYamlComment(line: string): string {
+  let inQuote: '"' | "'" | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if ((character === '"' || character === "'") && line[index - 1] !== '\\') {
+      inQuote = inQuote === character ? null : inQuote ?? character;
+    }
+    if (character === '#' && !inQuote) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+function readTomlStringField(raw: string, field: string): string | null {
+  const fieldPattern = new RegExp(`^\\s*${field}\\s*=\\s*(.+?)\\s*$`, 'mu');
+  const value = fieldPattern.exec(raw)?.[1]?.trim();
+  return value ? unquoteScalar(value) : null;
+}
+
+function unquoteScalar(value: string): string {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+
+  return value;
 }
 
 async function collectPluginHooks(

@@ -108,6 +108,13 @@ export const representativeInventorySnapshot: SkillInventorySnapshot = normalize
         },
       ],
       bundledMcps: [],
+      bundledSubagents: [
+        {
+          name: 'deployment-expert',
+          path: '~/.skillindex/sandbox/plugins/agents/deployment-expert.md',
+          sourceId: 'sandbox-plugin-pack',
+        },
+      ],
       unsupportedAssets: [
         {
           kind: 'hook',
@@ -1010,6 +1017,116 @@ export const representativeInventorySnapshot: SkillInventorySnapshot = normalize
     healthyMcps: 5,
     dismissedAttentionMcps: 1,
   },
+  subagents: [
+    {
+      name: 'reviewer',
+      displayName: 'reviewer',
+      description: 'Reviews code changes before handoff.',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-from-agents'],
+      locations: [
+        {
+          agentId: 'sandbox-agents-subagents',
+          agentLabel: 'Sandbox .agents',
+          scope: 'sandbox',
+          path: '~/.skillindex/sandbox/.agents/agents/reviewer.md',
+          directoryPath: '~/.skillindex/sandbox/.agents/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-09T00:00:00.000Z',
+          canonical: true,
+          format: 'markdown-frontmatter',
+          definitionComparisonKey: 'reviewer-v1',
+          canonicalRole: 'canonical',
+          mutability: 'writable',
+        },
+      ],
+      expectedLocations: [
+        {
+          agentId: 'sandbox-codex',
+          agentLabel: 'Codex',
+          scope: 'sandbox',
+          directoryPath: '~/.skillindex/sandbox/.codex/agents',
+          path: '~/.skillindex/sandbox/.codex/agents/reviewer.toml',
+          format: 'codex-toml',
+          supportStatus: 'supported',
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          directoryPath: '~/.skillindex/sandbox/.claude/agents',
+          path: '~/.skillindex/sandbox/.claude/agents/reviewer.md',
+          format: 'markdown-frontmatter',
+          supportStatus: 'supported',
+        },
+      ],
+      missingLocations: [
+        {
+          agentId: 'sandbox-codex',
+          agentLabel: 'Codex',
+          scope: 'sandbox',
+          directoryPath: '~/.skillindex/sandbox/.codex/agents',
+          path: '~/.skillindex/sandbox/.codex/agents/reviewer.toml',
+          format: 'codex-toml',
+          supportStatus: 'supported',
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          directoryPath: '~/.skillindex/sandbox/.claude/agents',
+          path: '~/.skillindex/sandbox/.claude/agents/reviewer.md',
+          format: 'markdown-frontmatter',
+          supportStatus: 'supported',
+        },
+      ],
+      signature: 'reviewer-missing-from-agents',
+    },
+    {
+      name: 'sandbox-plugin-pack:deployment-expert',
+      displayName: 'deployment-expert',
+      description: 'Specializes in deployment strategies and production rollouts.',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [
+        {
+          agentId: 'plugin:sandbox:claude:sandbox-plugin-pack:0.1.0:subagents',
+          agentLabel: 'Claude Plugin sandbox-plugin-pack',
+          scope: 'sandbox',
+          path: '~/.skillindex/sandbox/plugins/agents/deployment-expert.md',
+          directoryPath: '~/.skillindex/sandbox/plugins',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-09T00:15:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          definitionComparisonKey: 'deployment-expert-v1',
+          provenance: {
+            kind: 'plugin',
+            plugin: {
+              host: 'claude',
+              pluginId: 'sandbox-plugin-pack',
+              version: '0.1.0',
+            },
+            sourcePath: '~/.skillindex/sandbox/plugins/agents/deployment-expert.md',
+            discoveredAt: '2026-01-09T00:15:00.000Z',
+          },
+          canonicalRole: 'materialized-copy',
+          mutability: 'read-only-managed',
+        },
+      ],
+      expectedLocations: [],
+      missingLocations: [],
+      signature: 'sandbox-plugin-pack-deployment-expert-missing-universal',
+    },
+  ],
+  subagentCounts: {
+    totalSubagents: 2,
+    attentionSubagents: 2,
+    healthySubagents: 0,
+    dismissedAttentionSubagents: 0,
+  },
   agents: buildRepresentativeAgents('~/.skillindex/sandbox', { cursorInstalled: true, windsurfInstalled: true }),
   agentCounts: buildAgentCounts(buildRepresentativeAgents('~/.skillindex/sandbox', { cursorInstalled: true, windsurfInstalled: true })),
   homeSummary: {
@@ -1438,6 +1555,9 @@ function buildRepresentativeAgents(
       mcpConfigKind: family.mcpConfigKind,
       mcpParserKind: family.mcpParserKind,
       mcpSupportedTransports: family.mcpSupportedTransports,
+      subagentConfigKind: family.subagentConfigKind,
+      subagentParserKind: family.subagentParserKind,
+      subagentWriteDialect: family.subagentWriteDialect,
       metadataSources: family.metadataSources,
       icon: family.icon,
       skillsLocation: family.skillStorageKind === 'local-directory'
@@ -1461,6 +1581,17 @@ function buildRepresentativeAgents(
             state: 'unavailable',
             exists: false,
             reason: 'not-supported',
+          },
+      subagentsLocation: family.subagentGlobalDirRelativeParts
+        ? {
+            state: 'available',
+            path: joinPreviewPath(rootDir, ...family.subagentGlobalDirRelativeParts),
+            exists: installState === 'installed',
+          }
+        : {
+            state: 'unavailable',
+            exists: false,
+            reason: family.subagentConfigKind === 'account-managed' ? 'account-managed' : 'not-supported',
           },
       configLocation: family.agentConfigRelativeParts
         ? {

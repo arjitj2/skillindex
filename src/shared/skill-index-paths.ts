@@ -42,12 +42,17 @@ export interface SkillIndexConfig {
   onboardingCompletedAt?: string | null;
   dismissedDriftSignatures: string[];
   dismissedMcpSignatures: string[];
+  dismissedSubagentSignatures: string[];
   skillUniversalDecisions?: SkillUniversalDecision[];
 }
 
-export type WritableSkillIndexConfig = Omit<SkillIndexConfig, 'showDevSidebarInventorySourceSwitcher' | 'onboardingCompletedAt'> & {
+export type WritableSkillIndexConfig = Omit<
+  SkillIndexConfig,
+  'showDevSidebarInventorySourceSwitcher' | 'onboardingCompletedAt' | 'dismissedSubagentSignatures'
+> & {
   showDevSidebarInventorySourceSwitcher?: boolean;
   onboardingCompletedAt?: string | null;
+  dismissedSubagentSignatures?: string[];
 };
 
 export const defaultConfig: SkillIndexConfig = {
@@ -57,6 +62,7 @@ export const defaultConfig: SkillIndexConfig = {
   onboardingCompletedAt: null,
   dismissedDriftSignatures: [],
   dismissedMcpSignatures: [],
+  dismissedSubagentSignatures: [],
   skillUniversalDecisions: [],
 };
 
@@ -217,6 +223,7 @@ export async function writeSkillIndexConfig(configFile: string, config: Writable
     ...config,
     showDevSidebarInventorySourceSwitcher: config.showDevSidebarInventorySourceSwitcher ?? true,
     onboardingCompletedAt: config.onboardingCompletedAt ?? null,
+    dismissedSubagentSignatures: config.dismissedSubagentSignatures ?? [],
   }, null, 2)}
 `;
   const tempFile = path.join(
@@ -294,6 +301,9 @@ function parseSkillIndexConfig(raw: string, options: ResolveSkillIndexPathOption
       : [],
     dismissedMcpSignatures: Array.isArray(parsed.dismissedMcpSignatures)
       ? parsed.dismissedMcpSignatures.filter(isString)
+      : [],
+    dismissedSubagentSignatures: Array.isArray(parsed.dismissedSubagentSignatures)
+      ? parsed.dismissedSubagentSignatures.filter(isString)
       : [],
     skillUniversalDecisions: Array.isArray(parsed.skillUniversalDecisions)
       ? parsed.skillUniversalDecisions.filter(isSkillUniversalDecision)

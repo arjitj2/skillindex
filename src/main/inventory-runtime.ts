@@ -414,7 +414,9 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
           sourceMode: resolveAuditSourceMode(lastScanOptions),
           entity: 'skillName' in request
             ? { type: 'skill', name: request.skillName }
-            : { type: 'mcp', name: request.mcpName },
+            : 'mcpName' in request
+              ? { type: 'mcp', name: request.mcpName }
+              : { type: 'subagent', name: request.subagentName },
           paths: resolveAuditPaths(lastScanOptions),
           includeCache: true,
         }),
@@ -493,6 +495,23 @@ function buildResolveIssueAuditRequest(
       summary: `${affectedPaths.length} ${affectedPaths.length === 1 ? 'config' : 'configs'} changed.`,
       sourceMode,
       entity: { type: 'mcp', name: request.mcpName },
+      affectedPaths,
+      undoable: affectedPaths.length > 0,
+    };
+  }
+
+  if (request.entity === 'subagent') {
+    const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+    const affectedPaths = subagent
+      ? getSubagentResolutionAffectedPaths(request, subagent, snapshot, options)
+      : [];
+
+    return {
+      kind: 'resolve-subagent-issue',
+      title: `Resolved ${formatIssueLabel(request.issue)} for ${request.subagentName}`,
+      summary: `${affectedPaths.length} ${affectedPaths.length === 1 ? 'path' : 'paths'} changed.`,
+      sourceMode,
+      entity: { type: 'subagent', name: request.subagentName },
       affectedPaths,
       undoable: affectedPaths.length > 0,
     };
@@ -640,6 +659,55 @@ function getMcpResolutionAffectedPaths(
   );
 }
 
+function getSubagentResolutionAffectedPaths(
+  request: Extract<ResolveIssueRequest, { entity: 'subagent' }>,
+  subagent: NonNullable<SkillInventorySnapshot['subagents']>[number],
+  snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
+): string[] {
+  const canonicalPath = resolveCanonicalSubagentPathForAudit(subagent, request.selectedVariantPath, options);
+
+  switch (request.issue) {
+    case 'missing-universal':
+      return dedupePaths([canonicalPath]);
+    case 'missing-from-agents':
+      return dedupePaths((subagent.missingLocations ?? [])
+        .filter((location) => isWritableSubagentTarget(location.agentId, snapshot))
+        .map((location) => location.path)
+        .filter((targetPath): targetPath is string => Boolean(targetPath)));
+    case 'definition-mismatch':
+      return dedupePaths([
+        canonicalPath,
+        ...subagent.locations
+          .filter((location) => !location.canonical && !location.agentId.startsWith('plugin:') && location.mutability === 'writable')
+          .map((location) => location.path),
+        ...(subagent.missingLocations ?? [])
+          .filter((location) => isWritableSubagentTarget(location.agentId, snapshot))
+          .map((location) => location.path)
+          .filter((targetPath): targetPath is string => Boolean(targetPath)),
+      ]);
+    case 'identical-copies':
+      return dedupePaths(subagent.locations
+        .filter((location) =>
+          location.fileType === 'real-file'
+          && !location.canonical
+          && !location.agentId.startsWith('plugin:')
+          && location.mutability === 'writable')
+        .map((location) => location.path));
+    case 'broken-symlink':
+      return dedupePaths(subagent.locations
+        .filter((location) => location.fileType === 'symlink' && location.resolvedPath === undefined)
+        .map((location) => location.path));
+    case 'wrong-symlink-target':
+      return dedupePaths(subagent.locations
+        .filter((location) =>
+          location.fileType === 'symlink'
+          && location.resolvedPath !== undefined
+          && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath))
+        .map((location) => location.path));
+  }
+}
+
 function getSkillResolutionAffectedPaths(
   request: Extract<ResolveIssueRequest, { entity: 'skill' }>,
   skill: SkillRecord,
@@ -684,6 +752,34 @@ function getSkillResolutionAffectedPaths(
       return dedupePaths([canonicalPath, ...duplicatePaths]);
     }
   }
+}
+
+function resolveCanonicalSubagentPathForAudit(
+  subagent: NonNullable<SkillInventorySnapshot['subagents']>[number],
+  selectedVariantPath: string | undefined,
+  options: ScanSkillInventoryOptions,
+): string {
+  const existingCanonicalLocation = subagent.locations.find((location) => location.canonical);
+  if (existingCanonicalLocation) {
+    return existingCanonicalLocation.path;
+  }
+
+  const selectedScope = selectedVariantPath
+    ? subagent.locations.find((location) => location.path === selectedVariantPath)?.scope
+    : undefined;
+  const scope = selectedScope
+    ?? subagent.locations[0]?.scope
+    ?? 'live';
+  const paths = resolveAuditPathsForOptions(options);
+  const canonicalSkillsDir = scope === 'sandbox'
+    ? paths.sandboxCanonicalUserSkillsDir
+    : paths.liveCanonicalUserSkillsDir;
+  return path.join(path.dirname(canonicalSkillsDir), 'agents', `${subagent.name.replace(/[^A-Za-z0-9._-]+/gu, '-')}.md`);
+}
+
+function isWritableSubagentTarget(agentId: string, snapshot: SkillInventorySnapshot): boolean {
+  const agent = (snapshot.agents ?? []).find((entry) => entry.id === agentId);
+  return Boolean(agent?.writable && agent.subagentsLocation?.state === 'available' && agent.subagentsLocation.path);
 }
 
 function shouldAuditSkillUniversalDecisionConfig(skill: SkillRecord): boolean {

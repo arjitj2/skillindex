@@ -28,8 +28,20 @@ async function writeSkill(rootPath: string, name: string, description: string): 
   ].join('\n'), 'utf8');
 }
 
+async function writeSubagent(filePath: string, name: string, description: string): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, [
+    '---',
+    `name: ${name}`,
+    `description: ${description}`,
+    '---',
+    '',
+    `Use ${name}.`,
+  ].join('\n'), 'utf8');
+}
+
 describe('plugin inventory', () => {
-  it('discovers installed Codex and Claude plugin bundles with skills and MCPs', async () => {
+  it('discovers installed Codex and Claude plugin bundles with skills, MCPs, and subagents', async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-plugins-home-'));
     const codexRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'github-tools', 'abc123');
     const claudeRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'anthropic', 'jira-tools', '1.0.0');
@@ -48,6 +60,8 @@ describe('plugin inventory', () => {
         },
       },
     });
+    await writeSubagent(path.join(codexRoot, 'agents', 'reviewer.md'), 'reviewer', 'Reviews GitHub changes');
+    await writeFile(path.join(codexRoot, 'agents', 'yaml-runner.yaml'), 'name: yaml-runner\n', 'utf8');
     await writeJson(path.join(codexRoot, 'hooks', 'hooks.json'), {
       hooks: {
         SessionStart: [{ hooks: [{ type: 'command', command: 'node hook.js' }] }],
@@ -69,11 +83,17 @@ describe('plugin inventory', () => {
         },
       },
     });
+    await writeSubagent(path.join(claudeRoot, 'agents', 'jira-triage.md'), 'jira-triage', 'Triage Jira issues');
 
     const plugins = await scanPluginInventory({ homeDir });
+    const githubPlugin = plugins.find((plugin) => plugin.pluginId === 'github-tools@openai-curated');
+    if (!githubPlugin) {
+      throw new Error('Expected github-tools plugin to be discovered.');
+    }
 
     expect(plugins).toHaveLength(2);
-    expect(plugins.find((plugin) => plugin.pluginId === 'github-tools@openai-curated')).toMatchObject({
+    expect(githubPlugin.bundledSubagents?.map((subagent) => subagent.name)).toEqual(['reviewer', 'yaml-runner']);
+    expect(githubPlugin).toMatchObject({
       host: 'codex',
       pluginName: 'github-tools',
       version: 'abc123',
@@ -92,6 +112,16 @@ describe('plugin inventory', () => {
         expect.objectContaining({
           name: 'github',
           configPath: path.join(codexRoot, '.mcp.json'),
+        }),
+      ],
+      bundledSubagents: [
+        expect.objectContaining({
+          name: 'reviewer',
+          path: path.join(codexRoot, 'agents', 'reviewer.md'),
+        }),
+        expect.objectContaining({
+          name: 'yaml-runner',
+          path: path.join(codexRoot, 'agents', 'yaml-runner.yaml'),
         }),
       ],
       unsupportedAssets: [
@@ -113,6 +143,7 @@ describe('plugin inventory', () => {
       pluginName: 'jira-tools',
       bundledSkills: [expect.objectContaining({ name: 'jira' })],
       bundledMcps: [expect.objectContaining({ name: 'jira' })],
+      bundledSubagents: [expect.objectContaining({ name: 'jira-triage' })],
     });
   });
 

@@ -6,9 +6,10 @@ import type {
   SkillInventorySnapshot,
   SkillRecord,
   SkillScanSource,
+  SubagentRecord,
 } from '@shared/contracts';
 
-export type PrimaryTab = 'home' | 'skills' | 'mcps' | 'agents' | 'plugins' | 'audit' | 'settings';
+export type PrimaryTab = 'home' | 'skills' | 'mcps' | 'subagents' | 'agents' | 'plugins' | 'audit' | 'settings';
 
 export interface InventorySection<T> {
   title: string;
@@ -66,6 +67,10 @@ export function getMcpTableRows(snapshot: SkillInventorySnapshot): McpRecord[] {
   return [...(snapshot.mcps ?? [])].sort(compareMcpTableRows);
 }
 
+export function getSubagentTableRows(snapshot: SkillInventorySnapshot): SubagentRecord[] {
+  return [...(snapshot.subagents ?? [])].sort(compareSubagentTableRows);
+}
+
 export function getMcpSections(snapshot: SkillInventorySnapshot): InventorySection<McpRecord>[] {
   const mcps = snapshot.mcps ?? [];
   const attentionRows = mcps
@@ -101,6 +106,46 @@ export function getMcpSections(snapshot: SkillInventorySnapshot): InventorySecti
     tone: 'healthy',
     rows: healthyRows,
     emptyMessage: 'MCP servers with matching setup show up here.',
+  });
+
+  return sections;
+}
+
+export function getSubagentSections(snapshot: SkillInventorySnapshot): InventorySection<SubagentRecord>[] {
+  const subagents = snapshot.subagents ?? [];
+  const attentionRows = subagents
+    .filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'active')
+    .sort(compareIssueDenseSubagentRows);
+  const mutedRows = subagents
+    .filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'dismissed')
+    .sort(compareIssueDenseSubagentRows);
+  const healthyRows = subagents
+    .filter((subagent) => subagent.status === 'healthy')
+    .sort(compareAlphabeticallyByName);
+
+  const sections: InventorySection<SubagentRecord>[] = [
+    {
+      title: 'Needs attention',
+      tone: 'attention',
+      rows: attentionRows,
+      emptyMessage: 'No subagent setup issues need attention right now.',
+    },
+  ];
+
+  if (mutedRows.length > 0) {
+    sections.push({
+      title: 'Dismissed issues',
+      tone: 'muted',
+      rows: mutedRows,
+      emptyMessage: 'Hidden subagent issues stay here so you can review them later.',
+    });
+  }
+
+  sections.push({
+    title: 'Healthy',
+    tone: 'healthy',
+    rows: healthyRows,
+    emptyMessage: 'Subagents with matching setup show up here.',
   });
 
   return sections;
@@ -171,6 +216,22 @@ export function filterMcpRows(rows: McpRecord[], query: string): McpRecord[] {
   return rows.filter((row) => matchesSearchFields(normalizedQuery, [getMcpDisplayName(row), row.name]));
 }
 
+export function filterSubagentRows(rows: SubagentRecord[], query: string): SubagentRecord[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+
+  if (!normalizedQuery) {
+    return rows;
+  }
+
+  return rows.filter((row) => matchesSearchFields(normalizedQuery, [
+    getSubagentDisplayName(row),
+    row.name,
+    row.description,
+    ...row.locations.map((location) => location.agentLabel),
+    ...row.locations.map((location) => location.path),
+  ]));
+}
+
 export function filterAgentRows(rows: AgentRecord[], query: string): AgentRecord[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
@@ -189,6 +250,8 @@ export function filterAgentRows(rows: AgentRecord[], query: string): AgentRecord
       row.skillsLocation.displayPath,
       row.mcpConfigLocation.path,
       row.mcpConfigLocation.displayPath,
+      row.subagentsLocation?.path,
+      row.subagentsLocation?.displayPath,
       row.configLocation?.path,
       row.configLocation?.displayPath,
       row.executableLocation?.path,
@@ -215,6 +278,7 @@ export function filterPluginRows(rows: PluginRecord[], query: string): PluginRec
     row.source?.repository,
     ...row.bundledSkills.map((skill) => skill.name),
     ...row.bundledMcps.map((mcp) => mcp.name),
+    ...(row.bundledSubagents ?? []).map((subagent) => subagent.name),
   ]));
 }
 
@@ -341,6 +405,23 @@ function compareMcpTableRows(left: McpRecord, right: McpRecord): number {
   return compareAlphabeticallyByMcpName(left, right);
 }
 
+function compareSubagentTableRows(left: SubagentRecord, right: SubagentRecord): number {
+  const presentationRank = getSubagentTablePresentationRank(left) - getSubagentTablePresentationRank(right);
+  if (presentationRank !== 0) {
+    return presentationRank;
+  }
+
+  if (left.presentation === 'active' && right.presentation === 'active') {
+    return compareIssueDenseSubagentRows(left, right);
+  }
+
+  if (left.presentation === 'dismissed' && right.presentation === 'dismissed') {
+    return compareIssueDenseSubagentRows(left, right);
+  }
+
+  return compareAlphabeticallyBySubagentName(left, right);
+}
+
 function compareIssueDenseMcpRows(left: McpRecord, right: McpRecord): number {
   const issueCountDifference = getMcpIssueCount(right) - getMcpIssueCount(left);
   if (issueCountDifference !== 0) {
@@ -348,6 +429,20 @@ function compareIssueDenseMcpRows(left: McpRecord, right: McpRecord): number {
   }
 
   return compareAlphabeticallyByMcpName(left, right);
+}
+
+function compareIssueDenseSubagentRows(left: SubagentRecord, right: SubagentRecord): number {
+  const issueCountDifference = right.issueReasons.length - left.issueReasons.length;
+  if (issueCountDifference !== 0) {
+    return issueCountDifference;
+  }
+
+  return compareAlphabeticallyBySubagentName(left, right);
+}
+
+function compareAlphabeticallyBySubagentName(left: SubagentRecord, right: SubagentRecord): number {
+  return getSubagentDisplayName(left).localeCompare(getSubagentDisplayName(right), undefined, { sensitivity: 'base' })
+    || left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
 }
 
 function getSkillTablePresentationRank(skill: SkillRecord): number {
@@ -370,6 +465,26 @@ function getMcpTablePresentationRank(mcp: McpRecord): number {
     case 'none':
       return 2;
   }
+}
+
+function getSubagentTablePresentationRank(subagent: SubagentRecord): number {
+  switch (subagent.presentation) {
+    case 'active':
+      return 0;
+    case 'dismissed':
+      return 1;
+    case 'none':
+      return 2;
+  }
+}
+
+export function getSubagentDisplayName(subagent: Pick<SubagentRecord, 'name' | 'displayName'>): string {
+  return subagent.displayName?.trim() || stripPluginQualifier(subagent.name);
+}
+
+function stripPluginQualifier(value: string): string {
+  const qualifierEnd = value.indexOf(':');
+  return qualifierEnd > 0 ? value.slice(qualifierEnd + 1) : value;
 }
 
 function getStableRank(skill: SkillRecord): number {

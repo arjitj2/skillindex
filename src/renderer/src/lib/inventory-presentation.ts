@@ -7,11 +7,15 @@ import type {
   SkillInventorySnapshot,
   SkillIssueReason,
   SkillRecord,
+  SubagentIssueReason,
+  SubagentPresentation,
+  SubagentRecord,
 } from '@shared/contracts';
 
 type InventoryStatusFilter = 'all';
 export type SkillStatusFilter = InventoryStatusFilter | SkillDriftPresentation;
 export type McpStatusFilter = InventoryStatusFilter | McpPresentation;
+export type SubagentStatusFilter = InventoryStatusFilter | SubagentPresentation;
 
 export function compareNewestCandidate(
   left: SkillRecord['detailDiagnostics']['duplicateCandidates'][number],
@@ -51,6 +55,18 @@ export function getPillToneForMcp(mcp: McpRecord): 'attention' | 'healthy' | 'mu
   }
 
   if (mcp.status === 'healthy') {
+    return 'healthy';
+  }
+
+  return 'attention';
+}
+
+export function getPillToneForSubagent(subagent: SubagentRecord): 'attention' | 'healthy' | 'muted' {
+  if (subagent.presentation === 'dismissed') {
+    return 'muted';
+  }
+
+  if (subagent.status === 'healthy') {
     return 'healthy';
   }
 
@@ -276,6 +292,33 @@ export function getMcpStatusLabels(mcp: McpRecord): string[] {
   return ['Healthy'];
 }
 
+export function getSubagentStatusLabels(subagent: SubagentRecord): string[] {
+  if (subagent.issueReasons.length > 0) {
+    return subagent.issueReasons.map(formatSubagentIssueReason);
+  }
+
+  return ['Healthy'];
+}
+
+export function formatSubagentIssueReason(reason: SubagentIssueReason): string {
+  switch (reason) {
+    case 'missing-universal':
+      return 'Missing Universal';
+    case 'missing-from-agents':
+      return 'Missing From Agents';
+    case 'definition-mismatch':
+      return 'Definition Mismatch';
+    case 'identical-copies':
+      return 'Identical Copies';
+    case 'broken-symlink':
+      return 'Broken Symlink';
+    case 'wrong-symlink-target':
+      return 'Wrong Symlink Target';
+    case 'invalid-definition':
+      return 'Invalid Definition';
+  }
+}
+
 function compareSkillIssueReasons(left: SkillIssueReason, right: SkillIssueReason): number {
   return getSkillIssueRank(left) - getSkillIssueRank(right);
 }
@@ -316,6 +359,14 @@ export function getSkillRowDescription(skill: SkillRecord): string {
 }
 
 export function filterMcpRowsByStatus(rows: McpRecord[], filter: McpStatusFilter): McpRecord[] {
+  if (filter === 'all') {
+    return rows;
+  }
+
+  return rows.filter((row) => row.presentation === filter);
+}
+
+export function filterSubagentRowsByStatus(rows: SubagentRecord[], filter: SubagentStatusFilter): SubagentRecord[] {
   if (filter === 'all') {
     return rows;
   }

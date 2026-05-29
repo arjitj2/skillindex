@@ -10,6 +10,7 @@ import {
   type SkillInventorySnapshot,
   type SkillIndexDesktopApi,
   type SkillIndexDevApi,
+  type SubagentPresentation,
 } from '@shared/contracts';
 
 import { representativeInventorySnapshot, representativeSeededFixtures } from '../representative-preview-data';
@@ -236,7 +237,7 @@ function toggleBrowserPreviewDismissal(snapshot: SkillInventorySnapshot, request
       }
       : skill);
     nextSnapshot.counts = recomputeSkillCounts(nextSnapshot);
-  } else {
+  } else if ('mcpName' in request) {
     nextSnapshot.mcps = (nextSnapshot.mcps ?? []).map((mcp) => mcp.name === request.mcpName
       ? {
         ...mcp,
@@ -244,6 +245,14 @@ function toggleBrowserPreviewDismissal(snapshot: SkillInventorySnapshot, request
       }
       : mcp);
     nextSnapshot.mcpCounts = recomputeMcpCounts(nextSnapshot);
+  } else {
+    nextSnapshot.subagents = (nextSnapshot.subagents ?? []).map((subagent) => subagent.name === request.subagentName
+      ? {
+        ...subagent,
+        presentation: toggleSubagentPresentation(subagent.presentation),
+      }
+      : subagent);
+    nextSnapshot.subagentCounts = recomputeSubagentCounts(nextSnapshot);
   }
 
   nextSnapshot.homeSummary = {
@@ -271,6 +280,10 @@ function toggleMcpPresentation(presentation: McpPresentation): McpPresentation {
   return presentation === 'dismissed' ? 'active' : 'dismissed';
 }
 
+function toggleSubagentPresentation(presentation: SubagentPresentation): SubagentPresentation {
+  return presentation === 'dismissed' ? 'active' : 'dismissed';
+}
+
 function recomputeSkillCounts(snapshot: SkillInventorySnapshot): SkillInventorySnapshot['counts'] {
   return {
     totalSkills: snapshot.skills.length,
@@ -291,5 +304,15 @@ function recomputeMcpCounts(snapshot: SkillInventorySnapshot): NonNullable<Skill
     attentionMcps: mcps.filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'active').length,
     healthyMcps: mcps.filter((mcp) => mcp.status === 'healthy').length,
     dismissedAttentionMcps: mcps.filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'dismissed').length,
+  };
+}
+
+function recomputeSubagentCounts(snapshot: SkillInventorySnapshot): NonNullable<SkillInventorySnapshot['subagentCounts']> {
+  const subagents = snapshot.subagents ?? [];
+  return {
+    totalSubagents: subagents.length,
+    attentionSubagents: subagents.filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'active').length,
+    healthySubagents: subagents.filter((subagent) => subagent.status === 'healthy').length,
+    dismissedAttentionSubagents: subagents.filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'dismissed').length,
   };
 }

@@ -4,13 +4,11 @@ import { ArrowRight, Check, Folder, GitBranch, Info, X } from 'lucide-react';
 import skillIndexMarkCream from '../assets/skill-index-mark-cream.svg';
 
 export function OnboardingFlow({
-  errorMessage,
   isCompleting,
   onChoosePreferredSource,
   onComplete,
   universalSkillsPath,
 }: {
-  errorMessage: string | null;
   isCompleting: boolean;
   onChoosePreferredSource: () => Promise<string | null>;
   onComplete: (preferredSourcePath: string | null) => Promise<void>;
@@ -48,7 +46,6 @@ export function OnboardingFlow({
             <StepOne onContinue={() => setStep(2)} />
           ) : (
             <StepTwo
-              errorMessage={errorMessage}
               isChoosingPreferredSource={isChoosingPreferredSource}
               isCompleting={isCompleting}
               preferredSourcePath={preferredSourcePath}
@@ -141,7 +138,6 @@ function StepOne({ onContinue }: { onContinue: () => void }) {
 }
 
 function StepTwo({
-  errorMessage,
   isChoosingPreferredSource,
   isCompleting,
   preferredSourcePath,
@@ -151,7 +147,6 @@ function StepTwo({
   onClearPreferredSource,
   onComplete,
 }: {
-  errorMessage: string | null;
   isChoosingPreferredSource: boolean;
   isCompleting: boolean;
   preferredSourcePath: string | null;
@@ -244,8 +239,6 @@ function StepTwo({
         <Info aria-hidden="true" size={14} />
         <span>Manage these later in <strong>Settings {'->'} Custom scan paths</strong>. Skill Index never moves files without your approval.</span>
       </div>
-
-      {errorMessage ? <p className="onboarding-error" role="alert">{errorMessage}</p> : null}
 
       <div className="onboarding-pane-spacer" />
 

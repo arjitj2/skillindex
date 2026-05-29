@@ -11,7 +11,7 @@ import type {
   InspectorVariantModel,
 } from '../lib/detail-inspector-model';
 import { formatDiffLine, formatInspectorDisplayPath, truncateMiddle } from '../lib/inventory-presentation';
-import { PLUGIN_MCP_TOOLTIP, PLUGIN_SKILL_TOOLTIP, PluginTooltipIndicator } from './ui';
+import { PLUGIN_MCP_TOOLTIP, PLUGIN_SKILL_TOOLTIP, PLUGIN_SUBAGENT_TOOLTIP, PluginTooltipIndicator } from './ui';
 
 export interface DetailInspectorFooterAction {
   detail?: string;
@@ -27,7 +27,6 @@ export function DetailInspectorPanel({
   ariaLabel = 'Detail inspector',
   closeLabel = 'Close',
   entityKind = 'skill',
-  errorMessage = null,
   footerActions,
   model,
   onClose,
@@ -41,8 +40,7 @@ export function DetailInspectorPanel({
 }: {
   ariaLabel?: string;
   closeLabel?: string;
-  entityKind?: 'skill' | 'mcp';
-  errorMessage?: string | null;
+  entityKind?: 'skill' | 'mcp' | 'subagent';
   footerActions?: DetailInspectorFooterAction[];
   model: InspectorModel;
   onClose: () => void;
@@ -87,7 +85,7 @@ export function DetailInspectorPanel({
     ? getDiffStats(activeProblem.diffLines)
     : null;
   const showVariantPreviewHeader = activeProblem.kind === 'variant-resolution'
-    ? !(activeProblem.key === 'missing-canonical' && !activeProblem.baselineVariant)
+    ? !((activeProblem.key === 'missing-canonical' || activeProblem.key === 'missing-universal') && !activeProblem.baselineVariant)
     : false;
   const shouldRenderPlainPath = (problemKey: InspectorModel['problems'][number]['key']) =>
     problemKey === 'missing-symlinks' || problemKey === 'broken-symlink';
@@ -104,7 +102,11 @@ export function DetailInspectorPanel({
     `detail-inspector-panel--${entityKind}`,
     paneClassName,
   ].filter(Boolean).join(' ');
-  const pluginTooltip = entityKind === 'mcp' ? PLUGIN_MCP_TOOLTIP : PLUGIN_SKILL_TOOLTIP;
+  const pluginTooltip = entityKind === 'mcp'
+    ? PLUGIN_MCP_TOOLTIP
+    : entityKind === 'subagent'
+      ? PLUGIN_SUBAGENT_TOOLTIP
+      : PLUGIN_SKILL_TOOLTIP;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -166,8 +168,6 @@ export function DetailInspectorPanel({
           <span className="detail-inspector-panel__updated-copy">{model.header.updatedLabel}</span>
         </div>
       </section>
-
-      {errorMessage ? <p className="inline-error-banner">{errorMessage}</p> : null}
 
       {model.provenanceSummary.length > 0 ? (
         <section className="detail-inspector-panel__provenance-block" aria-label={`${ariaLabel} provenance`}>
@@ -266,7 +266,7 @@ export function DetailInspectorPanel({
                           aria-pressed={isSelected}
                           className={[
                             'detail-inspector-panel__variant-card',
-                            entityKind === 'skill' ? 'detail-inspector-panel__variant-card--skill' : 'detail-inspector-panel__variant-card--mcp',
+                            entityKind === 'mcp' ? 'detail-inspector-panel__variant-card--mcp' : 'detail-inspector-panel__variant-card--skill',
                             isSelected ? 'detail-inspector-panel__variant-card--selected' : '',
                             isCanonicalComparison ? 'detail-inspector-panel__variant-card--canonical-compare' : '',
                             isCanonical && !isCanonicalComparison && !isSelected ? 'detail-inspector-panel__variant-card--canonical' : '',
@@ -657,7 +657,7 @@ function InspectorVariantPicker({
   selectedPath,
   variants,
 }: {
-  entityKind: 'skill' | 'mcp';
+  entityKind: 'skill' | 'mcp' | 'subagent';
   formatPath: (value: string, maxLength: number) => string;
   listTitle: string;
   onVariantSelect?: (path: string) => void;
@@ -682,7 +682,7 @@ function InspectorVariantPicker({
               aria-pressed={isSelected}
               className={[
                 'detail-inspector-panel__variant-card',
-                entityKind === 'skill' ? 'detail-inspector-panel__variant-card--skill' : 'detail-inspector-panel__variant-card--mcp',
+                entityKind === 'mcp' ? 'detail-inspector-panel__variant-card--mcp' : 'detail-inspector-panel__variant-card--skill',
                 isSelected ? 'detail-inspector-panel__variant-card--selected' : '',
                 isBaseline && !isSelected ? 'detail-inspector-panel__variant-card--canonical' : '',
               ].filter(Boolean).join(' ')}

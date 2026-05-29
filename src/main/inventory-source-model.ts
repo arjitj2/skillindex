@@ -88,6 +88,7 @@ export async function buildInventoryAgents(
     supportedAgents.map(async (agent) => {
       const skillsExists = await pathExists(agent.skillsLocation.path);
       const mcpExists = await pathExists(agent.mcpConfigLocation.path);
+      const subagentsExists = await pathExists(agent.subagentsLocation?.path);
       const configExists = await pathExists(agent.configLocation?.path);
       const executablePath = await resolveExecutablePath(agent.executableLocation?.path, options.env);
       const executableExists = Boolean(executablePath);
@@ -101,6 +102,12 @@ export async function buildInventoryAgents(
             exists: mcpExists,
           }
         : agent.mcpConfigLocation;
+      const subagentsLocation: AgentLocationRecord | undefined = agent.subagentsLocation
+        ? {
+            ...agent.subagentsLocation,
+            exists: subagentsExists,
+          }
+        : undefined;
       const configLocation: AgentLocationRecord | undefined = agent.configLocation
         ? {
             ...agent.configLocation,
@@ -120,6 +127,7 @@ export async function buildInventoryAgents(
         installState: agent.installState,
         skillsLocation,
         mcpConfigLocation,
+        subagentsLocation,
         configLocation,
         executableLocation,
       };
@@ -135,6 +143,7 @@ export function buildInventoryAgentsSync(
   return supportedAgents.map((agent) => {
     const skillsExists = pathExistsSync(agent.skillsLocation.path);
     const mcpExists = pathExistsSync(agent.mcpConfigLocation.path);
+    const subagentsExists = pathExistsSync(agent.subagentsLocation?.path);
     const configExists = pathExistsSync(agent.configLocation?.path);
     const executablePath = resolveExecutablePathSync(agent.executableLocation?.path, options.env);
     const executableExists = Boolean(executablePath);
@@ -148,6 +157,12 @@ export function buildInventoryAgentsSync(
           exists: mcpExists,
         }
       : agent.mcpConfigLocation;
+    const subagentsLocation: AgentLocationRecord | undefined = agent.subagentsLocation
+      ? {
+          ...agent.subagentsLocation,
+          exists: subagentsExists,
+        }
+      : undefined;
     const configLocation: AgentLocationRecord | undefined = agent.configLocation
       ? {
           ...agent.configLocation,
@@ -167,6 +182,7 @@ export function buildInventoryAgentsSync(
       installState: agent.installState,
       skillsLocation,
       mcpConfigLocation,
+      subagentsLocation,
       configLocation,
       executableLocation,
     };
@@ -439,6 +455,12 @@ function createAgentRecord(
           ? path.join(displayHomeDir, ...family.agentConfigRelativeParts)
           : undefined);
   const executablePath = sandboxRuntimePaths?.executablePath ?? family.expectedExecutableNames?.[0];
+  const subagentsPath = sandboxRuntimePaths?.subagentsDir
+    ?? (family.resolveLiveSubagentsDir
+        ? family.resolveLiveSubagentsDir(liveResolutionContext)
+        : family.subagentGlobalDirRelativeParts
+          ? path.join(displayHomeDir, ...family.subagentGlobalDirRelativeParts)
+          : undefined);
   const skillsPath = family.skillStorageKind === 'local-directory'
     ? resolvePhysicalSkillsDir(
         scope,
@@ -465,6 +487,9 @@ function createAgentRecord(
     mcpParserKind: family.mcpParserKind,
     mcpWriteDialect: family.mcpWriteDialect,
     mcpSupportedTransports: family.mcpSupportedTransports,
+    subagentConfigKind: family.subagentConfigKind,
+    subagentParserKind: family.subagentParserKind,
+    subagentWriteDialect: family.subagentWriteDialect,
     metadataSources: family.metadataSources,
     icon: family.icon,
     skillsLocation: skillsPath
@@ -490,6 +515,18 @@ function createAgentRecord(
           state: 'unavailable',
           exists: false,
           reason: 'not-supported',
+        },
+    subagentsLocation: subagentsPath
+      ? {
+          state: 'available',
+          path: subagentsPath,
+          displayPath: collapseHomePath(subagentsPath, displayHomeDir),
+          exists: false,
+        }
+      : {
+          state: 'unavailable',
+          exists: false,
+          reason: family.subagentConfigKind === 'account-managed' ? 'account-managed' : 'not-supported',
         },
     configLocation: configPath
       ? {
