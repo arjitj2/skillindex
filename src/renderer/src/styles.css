@@ -5082,7 +5082,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .onboarding-flow-lines path,
   .onboarding-progress div,
-  .onboarding-button {
+  .onboarding-button,
+  .app-toast-copy-trace-button,
+  .app-toast-trace-button {
     animation: none;
     transition: none;
   }
@@ -5163,6 +5165,81 @@ body {
   font-size: 12px;
   line-height: 16px;
   color: var(--text-secondary);
+}
+
+.app-toast-trace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.app-toast-trace-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px 0 7px;
+  border: 1px solid rgba(186, 26, 26, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #8f1717;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+  transition:
+    background-color 160ms cubic-bezier(0.25, 1, 0.5, 1),
+    border-color 160ms cubic-bezier(0.25, 1, 0.5, 1),
+    color 160ms cubic-bezier(0.25, 1, 0.5, 1),
+    transform 120ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.app-toast-trace-button:hover {
+  border-color: rgba(186, 26, 26, 0.34);
+  background: rgba(255, 255, 255, 0.92);
+  color: #6f1111;
+}
+
+.app-toast-trace-button:focus-visible {
+  outline: 2px solid rgba(186, 26, 26, 0.22);
+  outline-offset: 2px;
+}
+
+.app-toast-trace-button:active {
+  transform: translateY(1px);
+}
+
+.app-toast-copy-trace-button {
+  flex: 0 0 auto;
+  border-color: rgba(186, 26, 26, 0.2);
+  background: rgba(255, 255, 255, 0.72);
+  color: #8f1717;
+}
+
+.app-toast-copy-trace-button:hover {
+  border-color: rgba(186, 26, 26, 0.34);
+  background: rgba(255, 255, 255, 0.92);
+  color: #6f1111;
+}
+
+.app-toast-trace {
+  max-height: 156px;
+  margin: 6px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid rgba(186, 26, 26, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.58);
+  color: #6f1111;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .app-toast-action {
@@ -5692,6 +5769,35 @@ body {
 
 .toolbar-button--loading {
   opacity: 0.72;
+}
+
+.toolbar-button--cancelable {
+  padding-right: 3px;
+  cursor: default;
+}
+
+.toolbar-button-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.toolbar-button-cancel:hover {
+  background: var(--bg-panel-muted);
+  color: var(--text-primary);
+}
+
+.toolbar-button-cancel svg {
+  width: 12px;
+  height: 12px;
 }
 
 .toolbar-button--subtle {

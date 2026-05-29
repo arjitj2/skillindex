@@ -38,6 +38,7 @@ export function SubagentsWorkspaceView({
   isDismissingDrift,
   isResolvingIssue,
   isRescanning,
+  onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
   onResolveIssue,
@@ -60,6 +61,7 @@ export function SubagentsWorkspaceView({
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
   isRescanning: boolean;
+  onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
@@ -106,7 +108,7 @@ export function SubagentsWorkspaceView({
   return (
     <main className="workspace-view">
       <PageTopBar
-        actions={<RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />}
+        actions={<RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />}
         search={(
           <HeaderSearch
             inputRef={searchInputRef}

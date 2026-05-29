@@ -20,6 +20,7 @@ const { inventoryRuntime } = vi.hoisted(() => ({
     scanInventory: vi.fn(),
     rescanInventory: vi.fn(),
     testMcpConnectivity: vi.fn(),
+    cancelMcpConnectivityTest: vi.fn(),
     addSkill: vi.fn(),
     addMcpServer: vi.fn(),
     resolveIssue: vi.fn(),
@@ -431,6 +432,27 @@ describe('registerIpcHandlers', () => {
     await testConnectivityHandler();
 
     expect(inventoryRuntime.testMcpConnectivity).toHaveBeenCalledWith(expect.objectContaining({}));
+  });
+
+  it('registers a standalone MCP connectivity cancellation handler', async () => {
+    electronMocks.ipcHandle.mockClear();
+    inventoryRuntime.cancelMcpConnectivityTest.mockClear();
+
+    registerIpcHandlers();
+
+    const cancelConnectivityHandler = electronMocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === IPC_CHANNELS.cancelMcpConnectivityTest,
+    )?.[1] as (() => Promise<unknown>) | undefined;
+
+    expect(cancelConnectivityHandler).toBeTypeOf('function');
+
+    if (!cancelConnectivityHandler) {
+      throw new Error('Expected the MCP connectivity cancellation IPC handler to be registered.');
+    }
+
+    await cancelConnectivityHandler();
+
+    expect(inventoryRuntime.cancelMcpConnectivityTest).toHaveBeenCalledTimes(1);
   });
 });
 

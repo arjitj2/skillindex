@@ -174,6 +174,24 @@ describe('verifyMcpConnection transport setup', () => {
     expect(sdkRecords.clients[0]?.closed).toBe(true);
   });
 
+  it('skips connection setup when the connectivity check is already canceled', async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const result = await verifyMcpConnection(mcpLocation(), {
+      checkedAt: '2026-05-04T12:00:00.000Z',
+      signal: abortController.signal,
+    });
+
+    expect(result).toEqual({
+      status: 'skipped',
+      checkedAt: '2026-05-04T12:00:00.000Z',
+      error: 'MCP connectivity check canceled.',
+    });
+    expect(sdkRecords.clients).toEqual([]);
+    expect(sdkRecords.stdioTransports).toEqual([]);
+  });
+
   it('uses OpenCode-style environment fields for stdio transports', async () => {
     await verifyMcpConnection(mcpLocation({
       command: 'bun',

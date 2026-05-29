@@ -45,6 +45,7 @@ describe('App shell inventory views', () => {
   let scanInventoryMock: Mock<SkillIndexDesktopApi['scanInventory']>;
   let rescanInventoryMock: Mock<SkillIndexDesktopApi['rescanInventory']>;
   let testMcpConnectivityMock: Mock<SkillIndexDesktopApi['testMcpConnectivity']>;
+  let cancelMcpConnectivityTestMock: Mock<SkillIndexDesktopApi['cancelMcpConnectivityTest']>;
   let addSkillMock: Mock<SkillIndexDesktopApi['addSkill']>;
   let addMcpServerMock: Mock<SkillIndexDesktopApi['addMcpServer']>;
   let makeCanonicalMock: Mock<SkillIndexDesktopApi['resolveIssue']>;
@@ -76,6 +77,7 @@ describe('App shell inventory views', () => {
     scanInventoryMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     rescanInventoryMock = vi.fn().mockResolvedValue(createReconciledInventorySnapshot());
     testMcpConnectivityMock = vi.fn().mockResolvedValue(createReconciledInventorySnapshot());
+    cancelMcpConnectivityTestMock = vi.fn().mockResolvedValue(undefined);
     addSkillMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     addMcpServerMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     makeCanonicalMock = vi.fn().mockResolvedValue(createCanonicalizedDivergedInventorySnapshot());
@@ -129,6 +131,7 @@ describe('App shell inventory views', () => {
       scanInventory: scanInventoryMock,
       rescanInventory: rescanInventoryMock,
       testMcpConnectivity: testMcpConnectivityMock,
+      cancelMcpConnectivityTest: cancelMcpConnectivityTestMock,
       addSkill: addSkillMock,
       addMcpServer: addMcpServerMock,
       resolveIssue: makeCanonicalMock,
@@ -320,6 +323,11 @@ describe('App shell inventory views', () => {
     const preferredSourcePath = '/Users/arjitjaiswal/repos/published-skills';
     readSettingsMock.mockResolvedValueOnce(createSettingsState([], null, null));
     chooseDirectoryMock.mockResolvedValueOnce(preferredSourcePath);
+    setPreferredCanonicalSourcePathMock.mockResolvedValueOnce(createSettingsState(
+      [preferredSourcePath],
+      preferredSourcePath,
+      null,
+    ));
     completeOnboardingMock.mockResolvedValueOnce(createSettingsState(
       [preferredSourcePath],
       preferredSourcePath,
@@ -351,15 +359,145 @@ describe('App shell inventory views', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
 
     await waitFor(() => {
-      expect(completeOnboardingMock).toHaveBeenCalledWith({
-        preferredCanonicalSourcePath: preferredSourcePath,
-      });
+      expect(setPreferredCanonicalSourcePathMock).toHaveBeenCalledWith(preferredSourcePath);
     });
     await waitFor(() => {
-      expect(scanInventoryMock).toHaveBeenCalledTimes(1);
+      expect(rescanInventoryMock).toHaveBeenCalledTimes(1);
     });
-    expect(completeOnboardingMock.mock.invocationCallOrder[0]).toBeLessThan(scanInventoryMock.mock.invocationCallOrder[0]);
+    await waitFor(() => {
+      expect(completeOnboardingMock).toHaveBeenCalledWith({});
+    });
+    expect(setPreferredCanonicalSourcePathMock.mock.invocationCallOrder[0]).toBeLessThan(rescanInventoryMock.mock.invocationCallOrder[0]);
+    expect(rescanInventoryMock.mock.invocationCallOrder[0]).toBeLessThan(completeOnboardingMock.mock.invocationCallOrder[0]);
     expect(await screen.findByRole('navigation', { name: /Primary/i })).toBeInTheDocument();
+  });
+
+  it('keeps first-run onboarding incomplete when the initial scan fails', async () => {
+    readSettingsMock.mockResolvedValueOnce(createSettingsState([], null, null));
+    rescanInventoryMock.mockRejectedValueOnce(new Error('Scan failed during onboarding.'));
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: /^How it fits together$/i, level: 1 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Continue/i }));
+    expect(await screen.findByRole('heading', { name: /^Where your skills live$/i, level: 1 })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
+
+    await waitFor(() => {
+      expect(rescanInventoryMock).toHaveBeenCalledTimes(1);
+    });
+    expect(completeOnboardingMock).not.toHaveBeenCalled();
+    const toast = await screen.findByRole('status');
+    expect(within(toast).getByText('Onboarding failed')).toBeInTheDocument();
+    expect(within(toast).getByText('Scan failed during onboarding.')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: /Primary/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^Where your skills live$/i, level: 1 })).toBeInTheDocument();
+  });
+
+  it('shows, expands, and copies the failed first-run scan trace from the audit log', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+      },
+    });
+    readSettingsMock.mockResolvedValueOnce(createSettingsState([], null, null));
+    rescanInventoryMock.mockRejectedValueOnce(new Error('Failed to parse Skill Index config.'));
+    readAuditLogMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(createAuditOperations({
+        kind: 'inventory-rescan',
+        title: 'Inventory rescan failed',
+        summary: 'Manual inventory rescan failed before the latest snapshot could be saved.',
+        status: 'failed',
+        undoState: 'not-undoable',
+        actionCount: 0,
+        actions: [],
+        failure: {
+          message: 'Failed to parse Skill Index config.',
+          trace: 'Error: Failed to parse Skill Index config.\\n    at scanSkillInventory (src/main/skill-inventory.ts:1:1)',
+        },
+      }));
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: /^How it fits together$/i, level: 1 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Continue/i }));
+    expect(await screen.findByRole('heading', { name: /^Where your skills live$/i, level: 1 })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
+
+    await waitFor(() => {
+      expect(readAuditLogMock).toHaveBeenCalledWith({ limit: 1 });
+    });
+    expect(screen.queryByText(/scanSkillInventory/)).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /^Show failure trace$/i }));
+
+    const inlineTrace = await screen.findByText(/scanSkillInventory/);
+    expect(inlineTrace.textContent).toBe(
+      'Error: Failed to parse Skill Index config.\n    at scanSkillInventory (src/main/skill-inventory.ts:1:1)',
+    );
+    expect(inlineTrace.textContent).not.toContain('\\n');
+    expect(screen.getByRole('button', { name: /^Hide failure trace$/i })).toBeInTheDocument();
+
+    const copyTraceButton = await screen.findByRole('button', { name: /^Copy failure trace$/i });
+    fireEvent.click(copyTraceButton);
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(expect.stringContaining(
+        'Error: Failed to parse Skill Index config.\n    at scanSkillInventory',
+      ));
+    });
+    expect(screen.getByRole('button', { name: /^Failure trace copied$/i })).toBeInTheDocument();
+  });
+
+  it('clears a persisted onboarding preferred source before retrying without one', async () => {
+    const preferredSourcePath = '/Users/arjitjaiswal/repos/problem-skills';
+    readSettingsMock.mockResolvedValueOnce(createSettingsState([], null, null));
+    chooseDirectoryMock.mockResolvedValueOnce(preferredSourcePath);
+    setPreferredCanonicalSourcePathMock.mockResolvedValueOnce(createSettingsState(
+      [preferredSourcePath],
+      preferredSourcePath,
+      null,
+    ));
+    clearPreferredCanonicalSourcePathMock.mockResolvedValueOnce(createSettingsState([], null, null));
+    rescanInventoryMock
+      .mockRejectedValueOnce(new Error('Scan failed during onboarding.'))
+      .mockResolvedValueOnce(createInventorySnapshot());
+    completeOnboardingMock.mockResolvedValueOnce(createSettingsState(
+      [],
+      null,
+      '2026-05-19T06:30:00.000Z',
+    ));
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: /^How it fits together$/i, level: 1 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Continue/i }));
+    expect(await screen.findByRole('heading', { name: /^Where your skills live$/i, level: 1 })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Browse/i }));
+    expect(await screen.findByText(preferredSourcePath)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
+
+    await waitFor(() => {
+      expect(rescanInventoryMock).toHaveBeenCalledTimes(1);
+    });
+    expect(completeOnboardingMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Remove preferred source$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Scan my machine$/i }));
+
+    await waitFor(() => {
+      expect(clearPreferredCanonicalSourcePathMock).toHaveBeenCalledTimes(1);
+      expect(rescanInventoryMock).toHaveBeenCalledTimes(2);
+      expect(completeOnboardingMock).toHaveBeenCalledWith({});
+    });
+    expect(setPreferredCanonicalSourcePathMock.mock.invocationCallOrder[0]).toBeLessThan(rescanInventoryMock.mock.invocationCallOrder[0]);
+    expect(clearPreferredCanonicalSourcePathMock.mock.invocationCallOrder[0]).toBeLessThan(rescanInventoryMock.mock.invocationCallOrder[1]);
   });
 
   it('holds startup UI instead of flashing the app shell while first-run settings load', async () => {
@@ -907,7 +1045,8 @@ describe('App shell inventory views', () => {
 
     expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toBeEnabled();
     expect(within(settingsSourceControl).getByRole('radio', { name: /Live/i })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Testing MCP connectivity/i })).toBeDisabled();
+    expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
 
     connectivityDeferred.resolve(createReconciledInventorySnapshot());
 
@@ -916,6 +1055,74 @@ describe('App shell inventory views', () => {
       expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toBeEnabled();
       expect(within(settingsSourceControl).getByRole('radio', { name: /Live/i })).toBeEnabled();
     });
+  });
+
+  it('cancels live MCP connectivity testing without applying the eventual test result', async () => {
+    const rescanDeferred = createDeferred<SkillInventorySnapshot>();
+    const connectivityDeferred = createDeferred<SkillInventorySnapshot>();
+    rescanInventoryMock.mockReturnValueOnce(rescanDeferred.promise);
+    testMcpConnectivityMock.mockReturnValueOnce(connectivityDeferred.promise);
+
+    render(<App />);
+
+    await openSettings();
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Inventory source' })).getByRole('radio', { name: /Live/i }));
+    rescanDeferred.resolve(createInventorySnapshot());
+
+    await waitFor(() => {
+      expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
+    });
+
+    const cancelButton = screen.getByRole('button', { name: /Cancel MCP connectivity test/i });
+    expect(cancelButton).toBeEnabled();
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(cancelMcpConnectivityTestMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: /^Rescan$/i })).toBeEnabled();
+    });
+
+    connectivityDeferred.resolve(createMcpConnectionFailedInventorySnapshot());
+
+    await openMcps();
+
+    expect(screen.queryByText('Connection Failed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /healthy-mcp Healthy/i })).toBeInTheDocument();
+  });
+
+  it('runs manual rescans structurally before starting cancelable MCP connectivity in live mode', async () => {
+    const liveShellState = createShellState({
+      devTools: {
+        ...createShellState().devTools!,
+        inventoryMode: 'live',
+      },
+    });
+    const rescanDeferred = createDeferred<SkillInventorySnapshot>();
+    const connectivityDeferred = createDeferred<SkillInventorySnapshot>();
+    getShellStateMock.mockResolvedValue(liveShellState);
+    rescanInventoryMock.mockReturnValueOnce(rescanDeferred.promise);
+    testMcpConnectivityMock.mockReturnValueOnce(connectivityDeferred.promise);
+
+    render(<App />);
+
+    await screen.findByLabelText(/Home summary metrics/i);
+    fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));
+
+    await waitFor(() => {
+      expect(rescanInventoryMock).toHaveBeenCalledWith({ verifyMcpConnectivity: false });
+    });
+    expect(testMcpConnectivityMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^Rescanning…$/i })).toBeDisabled();
+
+    rescanDeferred.resolve(createInventorySnapshot());
+
+    await waitFor(() => {
+      expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
+    });
+
+    connectivityDeferred.resolve(createReconciledInventorySnapshot());
   });
 
   it('keeps issue actions enabled while MCP connectivity testing runs in the background', async () => {
@@ -932,7 +1139,8 @@ describe('App shell inventory views', () => {
 
     await waitFor(() => {
       expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('button', { name: /Testing MCP connectivity/i })).toBeDisabled();
+      expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
     });
 
     await openSkills();
@@ -3055,6 +3263,44 @@ function createReconciledInventorySnapshot(): SkillInventorySnapshot {
       identicalDriftSkills: 2,
       divergedDriftSkills: 1,
       dismissedDriftSkills: 1,
+    },
+  });
+}
+
+function createMcpConnectionFailedInventorySnapshot(): SkillInventorySnapshot {
+  const snapshot = createInventorySnapshot();
+  const mcps = (snapshot.mcps ?? []).map<NonNullable<SkillInventorySnapshot['mcps']>[number]>((mcp) => {
+    if (mcp.name !== 'healthy-mcp') {
+      return mcp;
+    }
+
+    return {
+      ...mcp,
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['connection-failed'],
+      locations: mcp.locations.map((location, index) => index === 0
+        ? {
+            ...location,
+            connectivity: {
+              status: 'failed',
+              checkedAt: '2026-05-28T12:00:00.000Z',
+              error: 'Canceled run should not apply this result.',
+            },
+          }
+        : location),
+    };
+  });
+
+  return withSnapshotDetailDiagnostics({
+    ...snapshot,
+    scannedAt: '2026-04-09T00:00:10.000Z',
+    mcps,
+    mcpCounts: {
+      totalMcps: mcps.length,
+      attentionMcps: mcps.filter((mcp) => mcp.presentation === 'active' && mcp.status === 'needs-attention').length,
+      healthyMcps: mcps.filter((mcp) => mcp.status === 'healthy').length,
+      dismissedAttentionMcps: mcps.filter((mcp) => mcp.presentation === 'dismissed').length,
     },
   });
 }

@@ -147,7 +147,7 @@ describe('App search behavior', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^Rescan$/i }));
 
-    const loadingButton = await screen.findByRole('button', { name: /^Testing MCP connectivity…$/i });
+    const loadingButton = await screen.findByRole('button', { name: /^Rescanning…$/i });
     expect(loadingButton).toBeDisabled();
     expect(loadingButton).toHaveAttribute('aria-busy', 'true');
 
@@ -240,6 +240,7 @@ function createDesktopApi(inventorySnapshot: SkillInventorySnapshot): SkillIndex
     scanInventory: vi.fn().mockResolvedValue(inventorySnapshot),
     rescanInventory: vi.fn().mockResolvedValue(inventorySnapshot),
     testMcpConnectivity: vi.fn().mockResolvedValue(inventorySnapshot),
+    cancelMcpConnectivityTest: vi.fn().mockResolvedValue(undefined),
     addSkill: vi.fn().mockResolvedValue(inventorySnapshot),
     addMcpServer: vi.fn().mockResolvedValue(inventorySnapshot),
     resolveIssue: vi.fn().mockResolvedValue(inventorySnapshot),

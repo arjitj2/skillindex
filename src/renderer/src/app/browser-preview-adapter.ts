@@ -74,6 +74,7 @@ const browserPreviewApi: SkillIndexDesktopApi = {
   scanInventory: () => Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot)),
   rescanInventory: () => resolveWithOptionalPreviewHold(cloneInventorySnapshot(browserPreviewSnapshot)),
   testMcpConnectivity: () => resolveWithOptionalPreviewHold(cloneInventorySnapshot(browserPreviewSnapshot)),
+  cancelMcpConnectivityTest: () => Promise.resolve(),
   addSkill: (request: AddSkillRequest) => {
     void request;
     return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));
@@ -106,8 +107,23 @@ const browserPreviewApi: SkillIndexDesktopApi = {
   onAuditUpdated: () => () => undefined,
   addCustomScanPath: () => Promise.resolve(cloneSettingsState(browserPreviewSettingsState)),
   removeCustomScanPath: () => Promise.resolve(cloneSettingsState(browserPreviewSettingsState)),
-  setPreferredCanonicalSourcePath: () => Promise.resolve(cloneSettingsState(browserPreviewSettingsState)),
-  clearPreferredCanonicalSourcePath: () => Promise.resolve(cloneSettingsState(browserPreviewSettingsState)),
+  setPreferredCanonicalSourcePath: (scanPath) => {
+    browserPreviewSettingsState = {
+      ...browserPreviewSettingsState,
+      customScanPaths: browserPreviewSettingsState.customScanPaths.includes(scanPath)
+        ? browserPreviewSettingsState.customScanPaths
+        : [...browserPreviewSettingsState.customScanPaths, scanPath],
+      preferredCanonicalSourcePath: scanPath,
+    };
+    return Promise.resolve(cloneSettingsState(browserPreviewSettingsState));
+  },
+  clearPreferredCanonicalSourcePath: () => {
+    browserPreviewSettingsState = {
+      ...browserPreviewSettingsState,
+      preferredCanonicalSourcePath: null,
+    };
+    return Promise.resolve(cloneSettingsState(browserPreviewSettingsState));
+  },
   setDevSidebarInventorySourceSwitcherVisible: (visible) => {
     browserPreviewSettingsState = {
       ...browserPreviewSettingsState,
@@ -116,11 +132,20 @@ const browserPreviewApi: SkillIndexDesktopApi = {
     return Promise.resolve(cloneSettingsState(browserPreviewSettingsState));
   },
   completeOnboarding: (request) => {
+    const hasPreferredCanonicalSourcePathRequest = Object.hasOwn(request, 'preferredCanonicalSourcePath');
+    const preferredCanonicalSourcePath = hasPreferredCanonicalSourcePathRequest
+      ? request.preferredCanonicalSourcePath ?? null
+      : browserPreviewSettingsState.preferredCanonicalSourcePath;
+    const customScanPaths = hasPreferredCanonicalSourcePathRequest
+      && preferredCanonicalSourcePath
+      && !browserPreviewSettingsState.customScanPaths.includes(preferredCanonicalSourcePath)
+      ? [...browserPreviewSettingsState.customScanPaths, preferredCanonicalSourcePath]
+      : browserPreviewSettingsState.customScanPaths;
     browserPreviewSettingsState = {
       ...browserPreviewSettingsState,
-      customScanPaths: request.preferredCanonicalSourcePath ? [request.preferredCanonicalSourcePath] : [],
+      customScanPaths,
       onboardingCompletedAt: new Date().toISOString(),
-      preferredCanonicalSourcePath: request.preferredCanonicalSourcePath ?? null,
+      preferredCanonicalSourcePath,
     };
     return Promise.resolve(cloneSettingsState(browserPreviewSettingsState));
   },

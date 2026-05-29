@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { Undo2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Undo2 } from 'lucide-react';
 
 import {
   type AddSkillRequest,
@@ -83,6 +83,11 @@ function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot):
   ];
 }
 
+interface OnboardingPreferredSourceSelection {
+  didChangePreferredSource: boolean;
+  preferredSourcePath: string | null;
+}
+
 function getResolveIssueRequestKey(request: ResolveIssueRequest): string {
   return [
     request.entity,
@@ -97,6 +102,27 @@ function comparePluginsForTable(left: PluginRecord, right: PluginRecord): number
     || left.pluginName.localeCompare(right.pluginName, undefined, { sensitivity: 'base' })
     || (left.version ?? '').localeCompare(right.version ?? '', undefined, { sensitivity: 'base' })
     || left.rootPath.localeCompare(right.rootPath);
+}
+
+function getErrorTrace(error: unknown): string | null {
+  if (error instanceof Error) {
+    return error.stack ?? error.message;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const stack = 'stack' in error && typeof error.stack === 'string' ? error.stack : null;
+    const message = 'message' in error && typeof error.message === 'string' ? error.message : null;
+    return stack ?? message;
+  }
+
+  return typeof error === 'string' ? error : null;
+}
+
+function normalizeTraceText(trace: string): string {
+  return trace
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t');
 }
 
 function getPluginSelectionKey(plugin: PluginRecord): string {
@@ -163,8 +189,11 @@ export default function App() {
     id: number;
     tone: 'error' | 'success';
     title: string;
+    trace?: string;
     undoOperationId?: string;
   } | null>(null);
+  const [expandedToastTraceId, setExpandedToastTraceId] = useState<number | null>(null);
+  const [toastTraceCopyState, setToastTraceCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [isUndoingToastOperation, setIsUndoingToastOperation] = useState(false);
   const [pendingInventoryOperation, setPendingInventoryOperation] = useState<PendingInventoryOperation | null>(null);
   const [isAutoResolving, setIsAutoResolving] = useState(false);
@@ -225,13 +254,17 @@ export default function App() {
     description: string,
     undoOperation?: AuditOperation | null,
     tone: 'error' | 'success' = 'success',
+    trace?: string | null,
   ) => {
     appToastIdRef.current += 1;
+    setExpandedToastTraceId(null);
+    setToastTraceCopyState('idle');
     setAppToast({
       id: appToastIdRef.current,
       tone,
       title,
       description,
+      trace: trace ? normalizeTraceText(trace) : undefined,
       undoOperationId: undoOperation?.undoState === 'available' ? undoOperation.id : undefined,
     });
   }, []);
@@ -240,13 +273,14 @@ export default function App() {
     title: string,
     error: unknown,
     fallbackMessage = 'Unknown preload error',
+    traceOverride?: string | null,
   ): string => {
     const description = typeof error === 'string'
       ? error
       : error instanceof Error
         ? error.message
         : fallbackMessage;
-    showAppToast(title, description, null, 'error');
+    showAppToast(title, description, null, 'error', traceOverride ?? getErrorTrace(error));
     return description;
   }, [showAppToast]);
 
@@ -294,6 +328,16 @@ export default function App() {
       });
   }, [applyInventorySnapshot, desktopApi, showErrorToast]);
 
+  const cancelMcpConnectivityTest = useCallback(() => {
+    mcpConnectivityRunIdRef.current += 1;
+    setIsTestingMcpConnectivity(false);
+
+    void desktopApi.cancelMcpConnectivityTest()
+      .catch((error) => {
+        showErrorToast('MCP connectivity cancellation failed', error);
+      });
+  }, [desktopApi, showErrorToast]);
+
   const triggerRescan = useCallback(async ({
     pendingOperation = null,
     shouldManagePendingOperation = true,
@@ -326,11 +370,13 @@ export default function App() {
       if (showSuccessToast) {
         showAppToast('Inventory refreshed', 'Manual rescan completed successfully.');
       }
+      return true;
     } catch (error) {
       if (showSuccessToast) {
         setAppToast(null);
       }
       showErrorToast('Inventory refresh failed', error);
+      return false;
     } finally {
       setIsRescanning(false);
       if (shouldManagePendingOperation) {
@@ -340,8 +386,15 @@ export default function App() {
   }, [applyInventorySnapshot, desktopApi, showAppToast, showErrorToast]);
 
   const triggerManualRescan = useCallback(async () => {
-    await triggerRescan({ showSuccessToast: true });
-  }, [triggerRescan]);
+    const didRescan = await triggerRescan({
+      showSuccessToast: true,
+      verifyMcpConnectivity: false,
+    });
+
+    if (didRescan && inventorySourceMode === 'live') {
+      startMcpConnectivityTest();
+    }
+  }, [inventorySourceMode, startMcpConnectivityTest, triggerRescan]);
 
   useEffect(() => {
     if (!appToast) {
@@ -350,12 +403,26 @@ export default function App() {
 
     const timeoutId = window.setTimeout(() => {
       setAppToast((currentToast) => (currentToast?.id === appToast.id ? null : currentToast));
-    }, 2800);
+    }, appToast.trace ? 8000 : 2800);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
   }, [appToast]);
+
+  useEffect(() => {
+    if (toastTraceCopyState === 'idle') {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setToastTraceCopyState('idle');
+    }, toastTraceCopyState === 'copied' ? 1800 : 2400);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [toastTraceCopyState]);
 
   useEffect(() => {
     if (!inventorySnapshot?.scannedAt) {
@@ -1390,37 +1457,62 @@ export default function App() {
     }
   }, [desktopApi, showErrorToast]);
 
-  const completeOnboarding = useCallback(async (preferredSourcePath: string | null) => {
+  const readLatestFailedAuditTrace = useCallback(async () => {
+    try {
+      const latestOperations = await desktopApi.readAuditLog({ limit: 1 });
+      return latestOperations.find((operation) => operation.status === 'failed' && operation.failure?.trace)
+        ?.failure?.trace ?? null;
+    } catch {
+      return null;
+    }
+  }, [desktopApi]);
+
+  const completeOnboarding = useCallback(async ({
+    didChangePreferredSource,
+    preferredSourcePath,
+  }: OnboardingPreferredSourceSelection) => {
     setIsCompletingOnboarding(true);
+    let failureTrace: string | null = null;
 
     try {
       if (shellState?.devTools && devApi) {
         await devApi.setInventoryMode(shellState.devTools.inventoryMode);
       }
 
-      const nextSettingsState = await desktopApi.completeOnboarding(
-        preferredSourcePath
-          ? { preferredCanonicalSourcePath: preferredSourcePath }
-          : {},
-      );
-      const nextInventorySnapshot = await desktopApi.scanInventory();
+      if (didChangePreferredSource) {
+        if (preferredSourcePath) {
+          await desktopApi.setPreferredCanonicalSourcePath(preferredSourcePath);
+        } else {
+          await desktopApi.clearPreferredCanonicalSourcePath();
+        }
+      }
+      let nextInventorySnapshot: SkillInventorySnapshot;
+      try {
+        nextInventorySnapshot = await desktopApi.rescanInventory();
+      } catch (scanError) {
+        failureTrace = await readLatestFailedAuditTrace() ?? getErrorTrace(scanError);
+        throw scanError;
+      }
+      const nextSettingsState = await desktopApi.completeOnboarding({});
 
       setSettingsState(nextSettingsState);
       setIsPreviewingOnboarding(false);
       applyInventorySnapshot(nextInventorySnapshot);
     } catch (error) {
-      showErrorToast('Onboarding failed', error, 'Failed to complete onboarding.');
+      showErrorToast('Onboarding failed', error, 'Failed to complete onboarding.', failureTrace);
     } finally {
       setIsCompletingOnboarding(false);
     }
-  }, [applyInventorySnapshot, desktopApi, devApi, shellState?.devTools, showErrorToast]);
+  }, [applyInventorySnapshot, desktopApi, devApi, readLatestFailedAuditTrace, shellState?.devTools, showErrorToast]);
 
   const openOnboardingFromDevelopment = useCallback(() => {
+    setAppToast(null);
     setIsPreviewingOnboarding(true);
   }, []);
 
   const isInventoryRefreshActive = isRescanning;
   const isRescanActionBusy = isRescanning || isTestingMcpConnectivity;
+  const onCancelMcpConnectivityTest = isTestingMcpConnectivity ? cancelMcpConnectivityTest : undefined;
   if (!hasLoadedStartupState) {
     return <StartupScreen appName={APP_NAME} />;
   }
@@ -1438,6 +1530,7 @@ export default function App() {
           isAutoResolving={isAutoResolving}
           isRescanning={isRescanActionBusy}
           onAutoResolve={() => { void handleAutoResolve(); }}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onNavigateToSkills={navigateToSkills}
           onSelectMcp={openMcpFromHome}
           onRescan={triggerManualRescan}
@@ -1455,6 +1548,7 @@ export default function App() {
           isApplyingCapabilityAction={isApplyingCapabilityAction}
           isRescanning={isRescanActionBusy}
           onAddSkill={handleAddSkill}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
           onApplyCapabilityAction={handleCapabilityAction}
@@ -1491,6 +1585,7 @@ export default function App() {
           mcpInspectorModel={selectedMcpInspectorModel}
           sandboxRoot={shellState?.devTools?.sandboxRoot ?? null}
           onAddMcpServer={handleAddMcpServer}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
@@ -1514,6 +1609,7 @@ export default function App() {
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
           isRescanning={isRescanActionBusy}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetSubagentSelection}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
@@ -1539,6 +1635,7 @@ export default function App() {
         <AgentsWorkspaceView
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onRescan={triggerManualRescan}
           onSearchQueryChange={setAgentSearchQuery}
           rows={agentRows}
@@ -1552,6 +1649,7 @@ export default function App() {
         <PluginsWorkspaceView
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onRescan={triggerManualRescan}
           onSearchQueryChange={setPluginSearchQuery}
           onSelectMcpAsset={openMcpFromHome}
@@ -1578,6 +1676,7 @@ export default function App() {
           auditOperations={auditOperations}
           isRescanning={isRescanActionBusy}
           isUndoingOperation={isUndoingToastOperation}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onUndoOperation={(operationId) => {
             void handleUndoToastOperation(operationId);
           }}
@@ -1608,6 +1707,7 @@ export default function App() {
           isUpdatingSettings={isUpdatingSettings}
           inventorySnapshot={inventorySnapshot}
           onOpenOnboarding={openOnboardingFromDevelopment}
+          onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onRescan={triggerManualRescan}
           pendingInventoryOperation={pendingInventoryOperation}
           preferredCanonicalSourcePathInput={preferredCanonicalSourcePathInput}
@@ -1620,6 +1720,20 @@ export default function App() {
       break;
   }
 
+  const appToastTrace = appToast?.trace && appToast.trace !== appToast.description ? appToast.trace : null;
+  const appToastTraceElementId = appToast ? `app-toast-trace-${appToast.id}` : undefined;
+  const isAppToastTraceExpanded = Boolean(appToast && expandedToastTraceId === appToast.id);
+  const copyAppToastTrace = (trace: string) => {
+    if (!navigator.clipboard?.writeText) {
+      setToastTraceCopyState('failed');
+      return;
+    }
+
+    void navigator.clipboard.writeText(trace)
+      .then(() => setToastTraceCopyState('copied'))
+      .catch(() => setToastTraceCopyState('failed'));
+  };
+
   const appToastRegion = appToast ? (
     <div aria-live="polite" className="app-toast-region" role="status">
       <section className={`app-toast app-toast--${appToast.tone}`} aria-label={appToast.title}>
@@ -1629,6 +1743,51 @@ export default function App() {
         <div className="app-toast-copy">
           <strong>{appToast.title}</strong>
           <p>{appToast.description}</p>
+          {appToastTrace && appToastTraceElementId ? (
+            <div className="app-toast-trace-actions">
+              <button
+                aria-expanded={isAppToastTraceExpanded}
+                aria-label={isAppToastTraceExpanded ? 'Hide failure trace' : 'Show failure trace'}
+                aria-controls={appToastTraceElementId}
+                className="app-toast-trace-button"
+                title={isAppToastTraceExpanded ? 'Hide failure trace' : 'Show failure trace'}
+                type="button"
+                onClick={() => {
+                  setExpandedToastTraceId(isAppToastTraceExpanded ? null : appToast.id);
+                }}
+              >
+                {isAppToastTraceExpanded
+                  ? <ChevronUp aria-hidden="true" size={13} />
+                  : <ChevronDown aria-hidden="true" size={13} />}
+                <span>{isAppToastTraceExpanded ? 'Hide trace' : 'Show trace'}</span>
+              </button>
+              <button
+                aria-label={toastTraceCopyState === 'copied'
+                  ? 'Failure trace copied'
+                  : toastTraceCopyState === 'failed'
+                    ? 'Copy failure trace failed'
+                    : 'Copy failure trace'}
+                className={[
+                  'audit-copy-trace-button',
+                  'app-toast-copy-trace-button',
+                  toastTraceCopyState === 'copied' ? 'audit-copy-trace-button--copied' : '',
+                  toastTraceCopyState === 'failed' ? 'audit-copy-trace-button--failed' : '',
+                ].filter(Boolean).join(' ')}
+                title="Copy failure trace"
+                type="button"
+                onClick={() => copyAppToastTrace(appToastTrace)}
+              >
+                <span className="audit-copy-trace-button__icon" aria-hidden="true">
+                  <Copy className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--copy" strokeWidth={2} />
+                  <Check className="audit-copy-trace-button__glyph audit-copy-trace-button__glyph--check" strokeWidth={2.3} />
+                </span>
+                <span>{toastTraceCopyState === 'failed' ? 'Copy failed' : 'Copy trace'}</span>
+              </button>
+            </div>
+          ) : null}
+          {appToastTrace && appToastTraceElementId && isAppToastTraceExpanded ? (
+            <pre className="app-toast-trace" id={appToastTraceElementId}>{appToastTrace}</pre>
+          ) : null}
         </div>
         {appToast.undoOperationId ? (
           <button

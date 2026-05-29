@@ -702,6 +702,61 @@ describe('inventory runtime', () => {
     });
   }, 10000);
 
+  it('cancels MCP connectivity testing without publishing failed connection results', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-cancel-mcp-connectivity-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const connectivityDeferred = createDeferred<McpConnectivityRecord>();
+    let connectivityProbeStarted = false;
+
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+
+    const updates: SkillInventorySnapshot[] = [];
+    runtime.onDidUpdate((snapshot) => {
+      updates.push(snapshot);
+    });
+
+    await seedRepresentativeFixtures({ paths });
+    const initialSnapshot = await runtime.scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    const connectivityPromise = runtime.testMcpConnectivity({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      mcpConnectivityConcurrency: 1,
+      verifyMcpConnectivity: async () => {
+        connectivityProbeStarted = true;
+        return connectivityDeferred.promise;
+      },
+    });
+
+    await waitFor(() => {
+      expect(connectivityProbeStarted).toBe(true);
+    });
+
+    runtime.cancelMcpConnectivityTest();
+
+    connectivityDeferred.resolve({
+      status: 'failed',
+      checkedAt: '2026-05-28T12:00:00.000Z',
+      error: 'Canceled run should not publish this failure.',
+    });
+
+    const canceledSnapshot = await connectivityPromise;
+
+    expect(canceledSnapshot).toBe(initialSnapshot);
+    expect(updates).toHaveLength(1);
+    expect((updates[0].mcps ?? []).flatMap((mcp) => mcp.issueReasons)).not.toContain('connection-failed');
+  }, 10000);
+
   it('keeps accepted plugin alternates during watcher refresh after creating missing symlinks', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-'));
     const paths = resolveSkillIndexPaths({
@@ -955,6 +1010,50 @@ describe('inventory runtime', () => {
         message: 'Skill "healthy-skill" no longer has Missing Symlinks. Refresh inventory and try again if it still needs attention.',
       },
     });
+  });
+
+  it('audits failed manual rescans with a shareable failure trace', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-failed-rescan-audit-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const auditUpdates: AuditOperation[][] = [];
+    runtime.onDidAuditUpdate((operations) => {
+      auditUpdates.push(operations);
+    });
+
+    await writeSkillFile(paths.sandboxAgentsSkillsDir, 'healthy-skill', '# Healthy skill\n', '2026-04-09T00:00:00.000Z');
+    await runtime.scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    await writeFile(paths.configFile, '{not-json', 'utf8');
+
+    await expect(runtime.rescanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow('Failed to parse Skill Index config');
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation).toMatchObject({
+      kind: 'inventory-rescan',
+      title: 'Inventory rescan failed',
+      status: 'failed',
+      undoState: 'not-undoable',
+    });
+    expect(operation.failure?.message).toContain('Failed to parse Skill Index config');
+    expect(operation.failure?.trace).toContain('Failed to parse Skill Index config');
+    expect(auditUpdates.at(-1)?.[0]).toMatchObject({
+      kind: 'inventory-rescan',
+      status: 'failed',
+    });
+    expect(auditUpdates.at(-1)?.[0]?.failure?.message).toContain('Failed to parse Skill Index config');
   });
 });
 

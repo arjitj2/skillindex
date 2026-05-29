@@ -50,6 +50,8 @@ interface WatchSourceEvent {
   filePath?: string;
 }
 
+type InventoryRescanAuditTrigger = 'manual' | 'watch';
+
 type WatchSource = (source: SkillScanSource, onChange: (event: WatchSourceEvent) => void) => ClosableWatcher;
 
 interface CreateInventoryRuntimeOptions {
@@ -64,6 +66,7 @@ export interface InventoryRuntime {
   scanInventory(options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   rescanInventory(options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   testMcpConnectivity(options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
+  cancelMcpConnectivityTest(): void;
   addSkill(request: AddSkillRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   addMcpServer(request: AddMcpServerRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
@@ -97,6 +100,8 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   let refreshInFlight: Promise<SkillInventorySnapshot> | null = null;
   let committedSnapshotRevision = 0;
   let watchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let mcpConnectivityRunId = 0;
+  let activeMcpConnectivityAbortController: AbortController | null = null;
 
   const emit = (snapshot: SkillInventorySnapshot) => {
     for (const subscriber of subscribers) {
@@ -126,6 +131,26 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       subscriber(operations);
     }
     return operations;
+  };
+
+  const auditFailedInventoryRescan = async (
+    error: unknown,
+    scanOptions: ScanSkillInventoryOptions,
+    trigger: InventoryRescanAuditTrigger,
+  ) => {
+    const isManual = trigger === 'manual';
+    const auditService = getAuditService(scanOptions);
+    await auditService.runOperation({
+      kind: 'inventory-rescan',
+      title: isManual ? 'Inventory rescan failed' : 'Background inventory rescan failed',
+      summary: isManual
+        ? 'Manual inventory rescan failed before the latest snapshot could be saved.'
+        : 'File watcher-triggered inventory rescan failed before the latest snapshot could be saved.',
+      sourceMode: resolveAuditSourceMode(scanOptions),
+      affectedPaths: [],
+      undoable: false,
+    }, () => Promise.reject(error instanceof Error ? error : new Error(String(error)))).catch(() => undefined);
+    await emitAudit(scanOptions).catch(() => undefined);
   };
 
   const syncWatchers = (sources: SkillScanSource[]) => {
@@ -178,31 +203,64 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   const runPassiveMcpConnectivityScan = async (optionsOverride: ScanSkillInventoryOptions = {}): Promise<SkillInventorySnapshot> => {
     const { verifyMcpConnectivity, ...persistentOptionsOverride } = optionsOverride;
     delete persistentOptionsOverride.writeCache;
+    delete persistentOptionsOverride.mcpConnectivityAbortSignal;
+    activeMcpConnectivityAbortController?.abort();
+    const abortController = new AbortController();
+    activeMcpConnectivityAbortController = abortController;
+    const runId = mcpConnectivityRunId + 1;
+    mcpConnectivityRunId = runId;
     const scanOptions: ScanSkillInventoryOptions = {
       ...lastScanOptions,
       ...persistentOptionsOverride,
       verifyMcpConnectivity: verifyMcpConnectivity ?? true,
+      mcpConnectivityAbortSignal: abortController.signal,
       writeCache: false,
     };
     const revisionAtStart = committedSnapshotRevision;
 
-    const snapshot = await scanSkillInventory(scanOptions);
+    try {
+      const snapshot = await scanSkillInventory(scanOptions);
 
-    if (committedSnapshotRevision !== revisionAtStart && currentSnapshot) {
-      await writeSkillInventorySnapshotCache(currentSnapshot, lastScanOptions);
-      return currentSnapshot;
+      if (abortController.signal.aborted || runId !== mcpConnectivityRunId) {
+        return currentSnapshot ?? snapshot;
+      }
+
+      if (committedSnapshotRevision !== revisionAtStart && currentSnapshot) {
+        await writeSkillInventorySnapshotCache(currentSnapshot, lastScanOptions);
+        return currentSnapshot;
+      }
+
+      lastScanOptions = { ...lastScanOptions, ...persistentOptionsOverride };
+      commitSnapshot(snapshot);
+      await writeSkillInventorySnapshotCache(snapshot, lastScanOptions);
+      return snapshot;
+    } finally {
+      if (activeMcpConnectivityAbortController === abortController) {
+        activeMcpConnectivityAbortController = null;
+      }
+    }
+  };
+
+  const cancelMcpConnectivityTest = () => {
+    if (!activeMcpConnectivityAbortController) {
+      return;
     }
 
-    lastScanOptions = { ...lastScanOptions, ...persistentOptionsOverride };
-    commitSnapshot(snapshot);
-    await writeSkillInventorySnapshotCache(snapshot, lastScanOptions);
-    return snapshot;
+    activeMcpConnectivityAbortController.abort();
+    activeMcpConnectivityAbortController = null;
+    mcpConnectivityRunId += 1;
+  };
+
+  const resolvePersistentRefreshOptions = (optionsOverride?: ScanSkillInventoryOptions): ScanSkillInventoryOptions => {
+    const persistentOptionsOverride = { ...(optionsOverride ?? {}) };
+    delete persistentOptionsOverride.verifyMcpConnectivity;
+    return optionsOverride ? { ...lastScanOptions, ...persistentOptionsOverride } : { ...lastScanOptions };
   };
 
   const refreshInventory = async (optionsOverride?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot> => {
     // Connectivity probing is an explicit one-shot choice; keep source options sticky without making later watcher refreshes inherit probe cost.
-    const { verifyMcpConnectivity, ...persistentOptionsOverride } = optionsOverride ?? {};
-    lastScanOptions = optionsOverride ? { ...lastScanOptions, ...persistentOptionsOverride } : { ...lastScanOptions };
+    const verifyMcpConnectivity = optionsOverride?.verifyMcpConnectivity;
+    lastScanOptions = resolvePersistentRefreshOptions(optionsOverride);
 
     if (refreshInFlight) {
       queuedFullRefresh = true;
@@ -261,7 +319,12 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       return refreshInFlight;
     }
 
+    const auditScanOptions = { ...lastScanOptions };
     refreshInFlight = refreshFromWatchEvents(events)
+      .catch(async (error: unknown) => {
+        await auditFailedInventoryRescan(error, auditScanOptions, 'watch');
+        throw error;
+      })
       .finally(() => {
         refreshInFlight = null;
         drainQueuedRefreshes();
@@ -296,7 +359,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
 
     if (queuedWatchEvents.length > 0) {
       const queuedEvents = queuedWatchEvents.splice(0, queuedWatchEvents.length);
-      void runWatchRefresh(queuedEvents);
+      void runWatchRefresh(queuedEvents).catch(() => undefined);
     }
   };
 
@@ -310,7 +373,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
     watchRefreshTimer = setTimeout(() => {
       watchRefreshTimer = null;
       const queuedEvents = pendingWatchEvents.splice(0, pendingWatchEvents.length);
-      void runWatchRefresh(queuedEvents);
+      void runWatchRefresh(queuedEvents).catch(() => undefined);
     }, watchDebounceMs);
   };
 
@@ -324,11 +387,18 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       return refreshInventory(optionsOverride);
     },
     async rescanInventory(optionsOverride = {}) {
-      return refreshInventory(optionsOverride);
+      const auditScanOptions = resolvePersistentRefreshOptions(optionsOverride);
+      try {
+        return await refreshInventory(optionsOverride);
+      } catch (error) {
+        await auditFailedInventoryRescan(error, auditScanOptions, 'manual');
+        throw error;
+      }
     },
     async testMcpConnectivity(optionsOverride = {}) {
       return runPassiveMcpConnectivityScan(optionsOverride);
     },
+    cancelMcpConnectivityTest,
     async addSkill(request, optionsOverride = {}) {
       if (refreshInFlight) {
         await refreshInFlight;
@@ -459,6 +529,8 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       };
     },
     dispose() {
+      cancelMcpConnectivityTest();
+
       if (watchRefreshTimer) {
         clearTimeout(watchRefreshTimer);
         watchRefreshTimer = null;

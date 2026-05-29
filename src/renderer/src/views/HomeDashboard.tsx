@@ -271,6 +271,7 @@ export function HomeDashboard({
   isAutoResolving,
   isRescanning,
   onAutoResolve,
+  onCancelMcpConnectivityTest,
   onNavigateToSkills,
   onRescan,
   onSelectMcp,
@@ -282,6 +283,7 @@ export function HomeDashboard({
   isAutoResolving: boolean;
   isRescanning: boolean;
   onAutoResolve: () => void;
+  onCancelMcpConnectivityTest?: () => void;
   onNavigateToSkills: () => void;
   onRescan: () => Promise<void>;
   onSelectMcp: (mcpName: string) => void;
@@ -301,7 +303,7 @@ export function HomeDashboard({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onRescan={onRescan} />
+          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
         )}
         title="Home"
       />

@@ -49,11 +49,11 @@ function renderAgentsView(rows: AgentRecord[], options: { isRescanning?: boolean
 }
 
 describe('AgentsWorkspaceView', () => {
-  it('uses MCP connectivity loading copy for the global rescan action', () => {
+  it('uses rescan loading copy for the global rescan action', () => {
     renderAgentsView([createAgent()], { isRescanning: true });
 
-    expect(screen.getByRole('button', { name: 'Testing MCP connectivity…' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Rescanning…' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rescanning…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Testing MCP connectivity…' })).not.toBeInTheDocument();
   });
 
   it('groups agents by installed state and shows location headers in the section header', () => {
