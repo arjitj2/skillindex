@@ -10,7 +10,7 @@ import {
 } from '@shared/skill-index-paths';
 
 import { buildInventoryAgents } from '@main/inventory-source-model';
-import { scanSkillInventory, type ScanSkillInventoryOptions } from '@main/skill-inventory';
+import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import {
   buildSkillsCliAddEnvironment,
   runSkillsAdd,
@@ -55,7 +55,7 @@ export async function addSkill(
     await (options.runSkillsAdd ?? runSkillsAdd)(source, buildSkillsCliAddEnvironment(installTargets.scope, options, paths));
   }
 
-  return scanSkillInventory({
+  return scanInventory({
     ...options,
     includeSandboxSources: installTargets.scope === 'sandbox',
     includeLiveSources: installTargets.scope === 'live',

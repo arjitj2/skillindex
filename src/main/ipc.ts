@@ -29,7 +29,7 @@ import {
   setDevSidebarInventorySourceSwitcherVisible,
   setPreferredCanonicalSourcePath,
 } from '@main/settings-state';
-import { readCachedSkillInventorySync } from '@main/skill-inventory';
+import { readCachedInventorySync } from '@main/scan-inventory';
 import { isDevToolsEnabled } from '@main/dev-tools';
 import { resolveInventoryScanOptions, setInventoryMode } from '@main/inventory-mode-session';
 import {
@@ -125,7 +125,7 @@ export function registerIpcHandlers(): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   ipcMain.on(IPC_CHANNELS.readInitialInventoryBootstrap, (event) => {
-    event.returnValue = readCachedSkillInventorySync(resolveInventoryScanOptions());
+    event.returnValue = readCachedInventorySync(resolveInventoryScanOptions());
   });
   ipcMain.handle(IPC_CHANNELS.readSettings, () => readSettingsState(resolveInventoryScanOptions()));
   ipcMain.handle(IPC_CHANNELS.readCachedInventory, () =>

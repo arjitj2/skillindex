@@ -5,12 +5,12 @@ import path from 'node:path';
 
 import type { AgentLocationRecord, AgentRecord, ScanInventoryOptions, SkillScanSource } from '@shared/contracts';
 import {
-  KNOWN_AGENT_FAMILIES,
+  AGENT_CATALOG,
   deriveAgentDefaultHomeDir,
   resolveAgentHomeRelativePath,
-  type KnownAgentFamily,
-  type KnownAgentFamilyDefinition,
-} from '@shared/known-agent-catalog';
+  type AgentCatalogFamily,
+  type AgentCatalogEntry,
+} from '@shared/agent-catalog';
 import { CANONICAL_USER_SKILLS_DISPLAY_PATH, type SkillIndexPaths } from '@shared/skill-index-paths';
 import {
   createSandboxPluginSource,
@@ -25,9 +25,9 @@ export interface BuildInventorySourceModelOptions extends ScanInventoryOptions {
   preferredCanonicalSourcePath?: string | null;
 }
 
-type InventoryAgentFamily = KnownAgentFamily;
+type InventoryAgentFamily = AgentCatalogFamily;
 
-const INVENTORY_AGENT_FAMILIES: readonly KnownAgentFamilyDefinition[] = KNOWN_AGENT_FAMILIES;
+const INVENTORY_AGENT_FAMILIES: readonly AgentCatalogEntry[] = AGENT_CATALOG;
 const ALL_AGENT_FAMILIES = INVENTORY_AGENT_FAMILIES.map((family) => family.family);
 
 export function buildRegisteredInventorySources(
@@ -287,7 +287,7 @@ function createCompatibleSourceDefinitions(
 function resolvePhysicalSkillsDir(
   scope: 'sandbox' | 'live',
   rootDir: string,
-  family: KnownAgentFamilyDefinition,
+  family: AgentCatalogEntry,
   displayPath: string,
   liveResolutionContext: { env?: NodeJS.ProcessEnv; homeDir: string },
 ): string {
@@ -295,7 +295,7 @@ function resolvePhysicalSkillsDir(
     return resolveSandboxSkillsDir(rootDir, displayPath);
   }
 
-  if (displayPath === family.upstreamDefaultGlobalSkillsDir) {
+  if (displayPath === family.nativeGlobalSkillsDir) {
     return family.resolveLiveSkillsDir(liveResolutionContext);
   }
 
@@ -431,7 +431,7 @@ function createSourceLabel(displayPath: string): string {
 
 function createAgentRecord(
   scope: 'sandbox' | 'live',
-  family: KnownAgentFamilyDefinition,
+  family: AgentCatalogEntry,
   rootDir: string,
   displayHomeDir: string,
   env?: NodeJS.ProcessEnv,
@@ -629,7 +629,7 @@ function getSelectedFamilies(env: NodeJS.ProcessEnv): {
 }
 
 function isSelectedInventoryAgent(
-  family: KnownAgentFamilyDefinition,
+  family: AgentCatalogEntry,
   selection: {
     agents: Set<InventoryAgentFamily>;
     sourceKeys: Set<string>;

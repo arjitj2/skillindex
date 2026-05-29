@@ -1,6 +1,6 @@
 import { getInventoryMode } from '@main/inventory-mode-session';
 import { isDevToolsEnabled } from '@main/dev-tools';
-import { readCachedSkillInventory, scanSkillInventory, type ScanSkillInventoryOptions } from '@main/skill-inventory';
+import { readCachedInventory, scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import type { InventorySourceMode, SkillInventorySnapshot } from '@shared/contracts';
 import type { ResolveSkillIndexPathOptions, SkillIndexPaths } from '@shared/skill-index-paths';
 
@@ -28,19 +28,19 @@ export async function ensureRepresentativeSandboxFixturesForDev(
     includeLiveSources: false,
   };
 
-  const cachedSnapshot = await readCachedSkillInventory(scanOptions);
+  const cachedSnapshot = await readCachedInventory(scanOptions);
   if (hasInventory(cachedSnapshot)) {
     return false;
   }
 
-  const diskSnapshot = await scanSkillInventory(scanOptions);
+  const diskSnapshot = await scanInventory(scanOptions);
   if (hasInventory(diskSnapshot)) {
     return false;
   }
 
   const { seedRepresentativeFixtures } = await import('@main/sandbox-fixtures');
   await seedRepresentativeFixtures(scanOptions);
-  await scanSkillInventory(scanOptions);
+  await scanInventory(scanOptions);
   return true;
 }
 

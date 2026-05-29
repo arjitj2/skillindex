@@ -17,29 +17,20 @@ direction and maintenance cost.
 
 ## Where Agent Changes Go
 
-- `src/shared/upstream-agent-catalog.ts` is a vendored snapshot from
-  `vercel-labs/skills` `src/agents.ts`. Refresh it from upstream when upstream
-  adds agents or changes declared skill directories/install detection, and
-  before each release-readiness sweep. Do not use it for Skill Index-only
-  corrections.
-- `src/shared/verified-agent-skill-directories.ts` is where primary-doc or
-  source-verified skill-directory facts override stale or incomplete upstream
-  data. Include evidence URLs.
-- `src/shared/agent-catalog-overrides.ts` is for Skill Index enrichment:
-  MCP/config paths, parser kinds, icons, ignored subpaths, executable hints, and
-  source notes. Do not rewrite skill directories here.
-- `src/shared/known-agent-catalog.ts` merges upstream, verified facts, and
-  overrides. App code should read from this file, but contributors usually
-  should not hard-code new facts here.
-- `docs/reference/agent-catalog-file-hierarchy.md` explains which source files
-  own each layer of agent catalog data. Update it when the maintenance workflow
-  changes.
+- `src/shared/agent-catalog.ts` is the canonical source for agent facts:
+  labels, aliases, install detection, skill directories, MCP config paths,
+  parser/write dialects, subagent directories/formats, icons, and source notes.
+  Keep related facts inside the relevant agent entry.
+- `docs/reference/agent-catalog-file-hierarchy.md` explains the catalog
+  architecture. Update it when the maintenance workflow changes.
+- `docs/reference/agent-catalog-maintenance-guide.md` gives the review and test
+  checklist for agent metadata changes.
 - `.agents/skills/skillindex-testing/SKILL.md` is this repo's agent testing
   guide. Keep it project-focused and free of machine-specific paths.
 
-Follow `docs/reference/upstream-agent-catalog-refresh-guide.md` when rerunning the
-`vercel-labs/skills` refresh. Preserve the local browser-safe adaptations in the
-vendored file.
+External catalogs can be useful research inputs, but Skill Index does not vendor
+or refresh them directly. Fold documented facts into `src/shared/agent-catalog.ts`
+with primary source links.
 
 ## Pull Requests
 

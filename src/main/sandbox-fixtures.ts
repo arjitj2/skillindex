@@ -14,7 +14,7 @@ import {
 import { updateTomlMcpServerArray, updateTomlMcpServers } from '@shared/toml-mcp';
 
 import { buildRegisteredInventorySources, buildInventoryAgents } from '@main/inventory-source-model';
-import { scanSkillInventory } from '@main/skill-inventory';
+import { scanInventory } from '@main/scan-inventory';
 
 export interface SeedRepresentativeFixturesOptions extends ResolveSkillIndexPathOptions {
   paths?: SkillIndexPaths;
@@ -1385,7 +1385,7 @@ export async function seedRepresentativeFixtures(
     await writeGeneratedHealthySkillSymlinksForAgents(sourceById, sandboxAgents, REPRESENTATIVE_SKILL_AGENT_IDS);
   }
 
-  const seededInventory = await scanSkillInventory({
+  const seededInventory = await scanInventory({
     paths,
     includeSandboxSources: true,
     includeLiveSources: false,

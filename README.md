@@ -133,7 +133,7 @@ Before opening a PR, read [CONTRIBUTING.md](CONTRIBUTING.md). For source layout,
 Reference docs:
 
 - [Agent catalog file hierarchy](docs/reference/agent-catalog-file-hierarchy.md)
-- [Upstream agent catalog refresh guide](docs/reference/upstream-agent-catalog-refresh-guide.md)
+- [Agent catalog maintenance guide](docs/reference/agent-catalog-maintenance-guide.md)
 - [Inventory issue taxonomy](docs/reference/inventory-issue-taxonomy.md)
 
 Security issues should be reported through GitHub Security Advisories, not public issues. See [SECURITY.md](SECURITY.md).

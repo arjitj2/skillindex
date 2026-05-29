@@ -1,9 +1,9 @@
 import type { AgentRecord, SeedRepresentativeFixturesResult, SkillInventorySnapshot } from '@shared/contracts';
 import {
-  KNOWN_AGENT_FAMILIES,
+  AGENT_CATALOG,
   deriveAgentDefaultHomeDir,
   resolveAgentHomeRelativePath,
-} from '@shared/known-agent-catalog';
+} from '@shared/agent-catalog';
 
 export const representativeInventorySnapshot: SkillInventorySnapshot = normalizeRepresentativeSkillPackagePaths({
   ...withSnapshotDetailDiagnostics({
@@ -1528,7 +1528,7 @@ function buildRepresentativeAgents(
   rootDir: string,
   options: { cursorInstalled?: boolean; windsurfInstalled?: boolean } = {},
 ): AgentRecord[] {
-  return KNOWN_AGENT_FAMILIES.map((family) => {
+  return AGENT_CATALOG.map((family) => {
     const id = `sandbox-${family.family}`;
     const installState: AgentRecord['installState'] =
       family.family === 'codex'

@@ -92,8 +92,8 @@ vi.mock('@main/sandbox-fixtures', () => ({
   seedRepresentativeFixtures: vi.fn(),
 }));
 
-vi.mock('@main/skill-inventory', () => ({
-  readCachedSkillInventorySync: vi.fn(),
+vi.mock('@main/scan-inventory', () => ({
+  readCachedInventorySync: vi.fn(),
 }));
 
 describe('registerIpcHandlers', () => {

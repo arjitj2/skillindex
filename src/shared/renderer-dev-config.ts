@@ -1,4 +1,4 @@
-import { getRenderableAgentIconOrigins } from './agent-catalog-overrides';
+import { getRenderableAgentIconOrigins } from './agent-catalog';
 
 export const DEFAULT_RENDERER_PORT = 5600;
 export const RENDERER_CONNECT_SRC_PLACEHOLDER = '__SKILL_INDEX_RENDERER_CONNECT_SRC__';

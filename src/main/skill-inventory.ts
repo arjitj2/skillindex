@@ -1,31 +1,23 @@
 import { createHash } from 'node:crypto';
-import { accessSync, constants, readFileSync, type Dirent } from 'node:fs';
+import { readFileSync, type Dirent } from 'node:fs';
 import { lstat, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
   AgentLocationRecord,
   AgentInventoryCounts,
-  AgentMcpParserKind,
-  AgentMcpSupportedTransport,
   AgentRecord,
-  DismissDriftRequest,
   HomeSummary,
   McpConnectivityRecord,
   McpConfiguredTransportKind,
-  McpDefinitionObject,
-  McpDefinitionValue,
   McpInventoryCounts,
   McpExpectedLocationRecord,
   McpIssueReason,
   McpLocationRecord,
   McpRecord,
-  McpServerDefinitions,
-  RemoteMcpTransportKind,
   McpTransportKind,
   PluginRecord,
   PluginSourceRef,
-  ScanInventoryOptions,
   SkillDetailDiagnostics,
   SkillDefinitionIssue,
   SkillDiffFileRecord,
@@ -51,54 +43,26 @@ import type {
   SubagentRecord,
 } from '@shared/contracts';
 import { buildTextDiffLines } from '@shared/text-diff';
-import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
-import { isMcpDefinitionObject, isMcpServerDefinitions, normalizeMcpDefinitionForComparison } from '@shared/mcp-definition';
 import {
   ensureSkillIndexSandboxLayout,
   ensureSkillIndexLayout,
   readSkillIndexConfig,
-  readSkillIndexConfigSync,
   resolveSkillIndexPathsForScanOptions,
   writeSkillIndexConfig,
   type ResolveSkillIndexPathOptions,
-  type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
+import { applyDefaultInventoryMode, type ScanSkillInventoryOptions } from '@main/inventory-scan-options';
 import {
   buildRegisteredInventorySources,
-  buildInventoryAgentsSync,
-  buildInventoryAgents,
-  filterInstalledInventorySourcesSync,
-  filterInstalledInventorySources,
 } from '@main/inventory-source-model';
-import { sanitizeJsonc, stableStringify } from '@main/json-utils';
-import { verifyMcpConnection } from '@main/mcp-connectivity';
-import { buildPluginSkillScanSources, scanPluginInventory } from '@main/plugin-inventory';
-import { collectSubagentRecords, countSubagents } from '@main/subagent-inventory';
-
-export interface ScanSkillInventoryOptions extends ScanInventoryOptions, ResolveSkillIndexPathOptions {
-  paths?: SkillIndexPaths;
-  verifyMcpConnectivity?: boolean | McpConnectivityVerifier;
-  mcpConnectivityAbortSignal?: AbortSignal;
-  mcpConnectivityTimeoutMs?: number;
-  mcpConnectivityConcurrency?: number;
-  writeCache?: boolean;
-}
-
-export interface McpConnectivityProbeTarget {
-  name: string;
-  location: McpLocationRecord;
-  definition: McpDefinitionObject;
-}
-
-export interface McpConnectivityVerifierContext {
-  signal?: AbortSignal;
-}
-
-export type McpConnectivityVerifier = (
-  target: McpConnectivityProbeTarget,
-  context?: McpConnectivityVerifierContext,
-) => Promise<McpConnectivityRecord>;
+import {
+  applyDismissedMcpState,
+  countMcps,
+  emptyMcpInventoryCounts,
+  reconcileCachedMcps,
+} from '@main/mcp-inventory';
+import { applyDismissedSubagentState, countSubagents } from '@main/subagent-inventory';
 
 interface IndexedSkillLocation extends SkillLocationRecord {
   entrypointContent?: string;
@@ -113,42 +77,10 @@ interface SkillPackageEntry {
   rootPath: string;
 }
 
-interface McpOwnerRecord extends McpExpectedLocationRecord {
-  configExists: boolean;
-  parseable: boolean;
-  parserKind: AgentMcpParserKind;
-  mcpSupportedTransports?: AgentMcpSupportedTransport[];
-  plugin?: PluginSourceRef;
-}
-
-interface ParsedMcpEntry {
-  name: string;
-  location: McpLocationRecord;
-  definition: McpDefinitionObject;
-}
-
-interface ParsedMcpConfigResult {
-  entries: ParsedMcpEntry[];
-  configIssue: McpRecord | null;
-  owner: McpOwnerRecord;
-}
-
-interface ResolvedMcpConnection {
-  command?: string;
-  url?: string;
-  transport?: McpConfiguredTransportKind;
-  invalidDetails: string[];
-}
-
 interface SkillUniversalDecisionContext {
   decision: SkillUniversalDecision;
   acceptedAlternateOnly: boolean;
   resolvedUniversalPaths: string[];
-}
-
-interface NormalizedExplicitMcpTransport {
-  transport?: McpConfiguredTransportKind;
-  invalidDetail?: string;
 }
 
 const REQUIRED_FRONT_MATTER_FIELDS: SkillFrontMatterRequiredField[] = ['name', 'description'];
@@ -165,9 +97,22 @@ export interface WatchedSkillInventoryEvent {
   filePath: string;
 }
 
-export async function scanSkillInventory(options: ScanSkillInventoryOptions = {}): Promise<SkillInventorySnapshot> {
-  const scanOptions = applyDefaultInventoryMode(options);
-  const { agents, config, paths, registeredSources, sources, plugins } = await resolveScanContext(scanOptions);
+export interface CollectSkillInventoryRecordsOptions {
+  sources: SkillScanSource[];
+  registeredSources: SkillScanSource[];
+  agents: AgentRecord[];
+  config: {
+    skillUniversalDecisions?: SkillUniversalDecision[];
+    dismissedDriftSignatures: string[];
+  };
+}
+
+export async function collectSkillInventoryRecords({
+  sources,
+  registeredSources,
+  agents,
+  config,
+}: CollectSkillInventoryRecordsOptions): Promise<SkillRecord[]> {
   const groupedLocations = new Map<string, IndexedSkillLocation[]>();
 
   for (const source of sources) {
@@ -181,227 +126,20 @@ export async function scanSkillInventory(options: ScanSkillInventoryOptions = {}
   }
 
   const allSkillLocations = [...groupedLocations.values()].flat();
-  const skills = [...groupedLocations.entries()]
+  return [...groupedLocations.entries()]
     .map(([name, locations]) => applyDriftPresentation(
       classifySkillLocations(name, locations, registeredSources, agents, {
         installedSources: sources,
-        universalDecisionContext: findSkillUniversalDecisionContext(name, locations, config.skillUniversalDecisions ?? [], allSkillLocations),
+        universalDecisionContext: findSkillUniversalDecisionContext(
+          name,
+          locations,
+          config.skillUniversalDecisions ?? [],
+          allSkillLocations,
+        ),
       }),
       config.dismissedDriftSignatures,
     ))
     .sort(compareSkillNames);
-  const mcps = (await collectMcpRecords(agents, sources, plugins, scanOptions)).map((mcp) =>
-    applyMcpPresentation(mcp, config.dismissedMcpSignatures)).sort(compareMcps);
-  const mcpCounts = countMcps(mcps);
-  const subagents = collectSubagentRecords({
-    agents,
-    plugins,
-    paths,
-    includeLiveSources: scanOptions.includeLiveSources,
-    includeSandboxSources: scanOptions.includeSandboxSources,
-  }).map((subagent) => applySubagentPresentation(subagent, config.dismissedSubagentSignatures));
-  const subagentCounts = countSubagents(subagents);
-  const agentCounts = countAgents(agents);
-
-  const snapshot: SkillInventorySnapshot = {
-    scannedAt: new Date().toISOString(),
-    sourceIds: sources.map((source) => source.id),
-    sources,
-    plugins,
-    skills,
-    counts: countSkills(skills),
-    mcps,
-    mcpCounts,
-    subagents,
-    subagentCounts,
-    agents,
-    agentCounts,
-    homeSummary: buildHomeSummary(countSkills(skills), mcpCounts, agentCounts),
-  };
-
-  await persistDismissedDriftSignatures(paths.configFile, skills, scanOptions);
-  if (scanOptions.writeCache !== false) {
-    await writeSkillInventoryCache(paths.cacheFile, snapshot);
-  }
-
-  return snapshot;
-}
-
-export async function writeSkillInventorySnapshotCache(
-  snapshot: SkillInventorySnapshot,
-  options: ScanSkillInventoryOptions = {},
-): Promise<void> {
-  const paths = options.paths ?? resolveSkillIndexPathsForScanOptions(options);
-  await writeSkillInventoryCache(paths.cacheFile, snapshot);
-}
-
-export async function readCachedSkillInventory(
-  options: ScanSkillInventoryOptions = {},
-): Promise<SkillInventorySnapshot | null> {
-  const scanOptions = applyDefaultInventoryMode(options);
-  const { agents, config, paths, registeredSources, sources, plugins } = await resolveScanContext(scanOptions);
-  const cachedSnapshot = await readSkillInventoryCache(paths.cacheFile);
-  if (!cachedSnapshot) {
-    return null;
-  }
-
-  return reconcileSkillInventorySnapshot(
-    cachedSnapshot,
-    registeredSources,
-    sources,
-    agents,
-    plugins,
-    config.skillUniversalDecisions ?? [],
-    config.dismissedDriftSignatures,
-    config.dismissedMcpSignatures,
-    config.dismissedSubagentSignatures,
-  );
-}
-
-export function readCachedSkillInventorySync(
-  options: ScanSkillInventoryOptions = {},
-): SkillInventorySnapshot | null {
-  const scanOptions = applyDefaultInventoryMode(options);
-  const paths = resolveSkillIndexPathsForScanOptions(scanOptions);
-  const config = readSkillIndexConfigSync(paths.configFile, scanOptions);
-  const registeredSources = buildRegisteredInventorySources({
-    ...scanOptions,
-    paths,
-    customScanPaths: config.customScanPaths,
-    preferredCanonicalSourcePath: config.preferredCanonicalSourcePath,
-  });
-  const sources = filterInstalledInventorySourcesSync(registeredSources);
-  const agents = buildInventoryAgentsSync({
-    ...scanOptions,
-    paths,
-    customScanPaths: config.customScanPaths,
-  });
-  const cachedSnapshot = readSkillInventoryCacheSync(paths.cacheFile);
-  if (!cachedSnapshot) {
-    return null;
-  }
-  const cachedPluginSources = cachedSnapshot.sources.filter((source) => source.kind === 'plugin');
-  const activeRegisteredSources = mergeCachedPluginSources(registeredSources, cachedPluginSources);
-  const activeSources = mergeCachedPluginSources(sources, cachedPluginSources);
-
-  return reconcileSkillInventorySnapshot(
-    cachedSnapshot,
-    activeRegisteredSources,
-    activeSources,
-    agents,
-    cachedSnapshot.plugins ?? [],
-    config.skillUniversalDecisions ?? [],
-    config.dismissedDriftSignatures,
-    config.dismissedMcpSignatures,
-    config.dismissedSubagentSignatures,
-  );
-}
-
-function mergeCachedPluginSources(sources: SkillScanSource[], cachedPluginSources: SkillScanSource[]): SkillScanSource[] {
-  const sourceIds = new Set(sources.map((source) => source.id));
-  return [
-    ...sources,
-    ...cachedPluginSources.filter((source) => !sourceIds.has(source.id)),
-  ];
-}
-
-export async function dismissSkillDrift(
-  request: DismissDriftRequest,
-  options: ScanSkillInventoryOptions & { snapshot?: SkillInventorySnapshot } = {},
-): Promise<SkillInventorySnapshot> {
-  const scanOptions = applyDefaultInventoryMode(options);
-  const paths = resolveSkillIndexPathsForScanOptions(scanOptions);
-  await ensureSkillIndexLayout(paths);
-  if (scanOptions.includeSandboxSources === true) {
-    await ensureSkillIndexSandboxLayout(paths);
-  }
-
-  const config = await readSkillIndexConfig(paths.configFile, scanOptions);
-  const snapshot = scanOptions.snapshot ?? await scanSkillInventory({
-    ...scanOptions,
-    paths,
-  });
-  if ('skillName' in request) {
-    const skill = snapshot.skills.find((candidate) => candidate.name === request.skillName);
-
-    if (!skill || !skill.isDrifted || !skill.driftSignature) {
-      throw new Error(`Only drifted skills can be dismissed or undismissed: ${request.skillName}`);
-    }
-
-    const dismissedDriftSignatures = skill.driftPresentation === 'dismissed'
-      ? config.dismissedDriftSignatures.filter((signature) => signature !== skill.driftSignature)
-      : [...new Set([...config.dismissedDriftSignatures, skill.driftSignature])];
-
-    await writeSkillIndexConfig(paths.configFile, {
-      ...config,
-      dismissedDriftSignatures,
-    });
-
-    const nextSnapshot = applyDismissedDriftState({
-      ...snapshot,
-      scannedAt: new Date().toISOString(),
-    }, dismissedDriftSignatures, snapshot.sources);
-    await writeSkillInventoryCache(paths.cacheFile, nextSnapshot);
-
-    return nextSnapshot;
-  }
-
-  if ('subagentName' in request) {
-    const subagent = (snapshot.subagents ?? []).find((candidate) => candidate.name === request.subagentName);
-
-    if (!subagent || subagent.status !== 'needs-attention' || !subagent.signature) {
-      throw new Error(`Only attention subagents can be dismissed or undismissed: ${request.subagentName}`);
-    }
-
-    const dismissedSubagentSignatures = subagent.presentation === 'dismissed'
-      ? config.dismissedSubagentSignatures.filter((signature) => signature !== subagent.signature)
-      : [...new Set([...config.dismissedSubagentSignatures, subagent.signature])];
-
-    await writeSkillIndexConfig(paths.configFile, {
-      ...config,
-      dismissedSubagentSignatures,
-    });
-
-    const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
-    const subagentCounts = countSubagents(subagents);
-    const nextSnapshot: SkillInventorySnapshot = {
-      ...snapshot,
-      scannedAt: new Date().toISOString(),
-      subagents,
-      subagentCounts,
-    };
-    await writeSkillInventoryCache(paths.cacheFile, nextSnapshot);
-
-    return nextSnapshot;
-  }
-
-  const mcp = (snapshot.mcps ?? []).find((candidate) => candidate.name === request.mcpName);
-  if (!mcp || mcp.status !== 'needs-attention' || !mcp.signature) {
-    throw new Error(`Only attention MCPs can be dismissed or undismissed: ${request.mcpName}`);
-  }
-
-  const dismissedMcpSignatures = mcp.presentation === 'dismissed'
-    ? config.dismissedMcpSignatures.filter((signature) => signature !== mcp.signature)
-    : [...new Set([...config.dismissedMcpSignatures, mcp.signature])];
-
-  await writeSkillIndexConfig(paths.configFile, {
-    ...config,
-    dismissedMcpSignatures,
-  });
-
-  const mcps = applyDismissedMcpState(snapshot.mcps ?? [], dismissedMcpSignatures);
-  const mcpCounts = countMcps(mcps);
-  const agentCounts = snapshot.agentCounts ?? countAgents(snapshot.agents ?? []);
-  const nextSnapshot: SkillInventorySnapshot = {
-    ...snapshot,
-    scannedAt: new Date().toISOString(),
-    mcps,
-    mcpCounts,
-    homeSummary: buildHomeSummary(snapshot.counts, mcpCounts, agentCounts),
-  };
-  await writeSkillInventoryCache(paths.cacheFile, nextSnapshot);
-
-  return nextSnapshot;
 }
 
 export async function reconcileWatchedSkillInventoryEvent(
@@ -601,11 +339,7 @@ async function collectLocationsFromSource(
   const npxLockCache: NpxSkillLockCache = new Map();
   const locations = await Promise.all(
     filePaths.map(async ({ rootPath, name }) => {
-      const record = await safeReadSkillLocation(rootPath, source, npxLockCache);
-      if (!record) {
-        return null;
-      }
-
+      const record = await readSkillLocation(rootPath, source, npxLockCache);
       return {
         name: createInventorySkillName(name, source),
         record,
@@ -613,7 +347,7 @@ async function collectLocationsFromSource(
     }),
   );
 
-  return locations.filter((location): location is { name: string; record: IndexedSkillLocation } => location !== null);
+  return locations;
 }
 
 function createInventorySkillName(skillName: string, source: SkillScanSource): string {
@@ -904,19 +638,15 @@ function getOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-async function safeReadSkillLocation(
-  filePath: string,
-  source: SkillScanSource,
-  npxLockCache?: NpxSkillLockCache,
-): Promise<IndexedSkillLocation | null> {
+async function safeReadSkillLocation(filePath: string, source: SkillScanSource): Promise<IndexedSkillLocation | null> {
   try {
-    return await readSkillLocation(filePath, source, npxLockCache);
+    return await readSkillLocation(filePath, source);
   } catch {
     return null;
   }
 }
 
-function countSkills(skills: SkillRecord[]): SkillInventoryCounts {
+export function countSkills(skills: SkillRecord[]): SkillInventoryCounts {
   return skills.reduce<SkillInventoryCounts>(
     (counts, skill) => {
       counts.totalSkills += 1;
@@ -964,365 +694,7 @@ function countSkills(skills: SkillRecord[]): SkillInventoryCounts {
   );
 }
 
-async function collectMcpRecords(
-  agents: AgentRecord[],
-  sources: SkillScanSource[],
-  plugins: PluginRecord[],
-  options: ScanSkillInventoryOptions = {},
-): Promise<McpRecord[]> {
-  const owners = collectMcpOwners(agents, sources, plugins);
-  const groupedLocations = new Map<string, McpLocationRecord[]>();
-  const probeTargets: McpConnectivityProbeTarget[] = [];
-  const configIssueRecords: McpRecord[] = [];
-  const scannedOwners: McpOwnerRecord[] = [];
-  const parsedConfigs: ParsedMcpConfigResult[] = [];
-
-  for (const owner of owners) {
-    const result = await readMcpConfig(owner);
-    scannedOwners.push(result.owner);
-
-    if (result.configIssue) {
-      configIssueRecords.push(result.configIssue);
-      continue;
-    }
-
-    parsedConfigs.push(result);
-  }
-
-  const pluginMcpIndex = buildPluginMcpIndex(parsedConfigs);
-  for (const result of parsedConfigs) {
-    for (const entry of result.entries) {
-      const inventoryMcpName = createInventoryMcpName(entry, result.owner, pluginMcpIndex);
-      const existing = groupedLocations.get(inventoryMcpName) ?? [];
-      existing.push(entry.location);
-      groupedLocations.set(inventoryMcpName, existing);
-
-      if ((entry.location.invalidDetails?.length ?? 0) === 0) {
-        probeTargets.push({
-          name: inventoryMcpName,
-          location: entry.location,
-          definition: entry.definition,
-        });
-      }
-    }
-  }
-
-  await verifyMcpProbeTargets(probeTargets, options);
-
-  const parsedOwners = scannedOwners.filter((owner) => owner.parseable);
-  const records = [...groupedLocations.entries()].map(([name, locations]) =>
-    classifyMcpLocations(name, locations, parsedOwners));
-
-  return [...configIssueRecords, ...records];
-}
-
-interface PluginMcpIndexEntry {
-  inventoryName: string;
-  definitionComparisonKey?: string;
-}
-
-function buildPluginMcpIndex(results: ParsedMcpConfigResult[]): Map<string, PluginMcpIndexEntry[]> {
-  const pluginMcpIndex = new Map<string, PluginMcpIndexEntry[]>();
-
-  for (const result of results) {
-    if (!result.owner.plugin) {
-      continue;
-    }
-
-    for (const entry of result.entries) {
-      const existing = pluginMcpIndex.get(entry.name) ?? [];
-      existing.push({
-        inventoryName: `${result.owner.plugin.pluginName}:${entry.name}`,
-        definitionComparisonKey: entry.location.definitionComparisonKey,
-      });
-      pluginMcpIndex.set(entry.name, existing);
-    }
-  }
-
-  return pluginMcpIndex;
-}
-
-function createInventoryMcpName(
-  entry: ParsedMcpEntry,
-  owner: McpOwnerRecord,
-  pluginMcpIndex: Map<string, PluginMcpIndexEntry[]>,
-): string {
-  if (owner.plugin) {
-    return `${owner.plugin.pluginName}:${entry.name}`;
-  }
-
-  const pluginCandidates = pluginMcpIndex.get(entry.name) ?? [];
-  const matchingDefinitionCandidates = pluginCandidates.filter((candidate) =>
-    candidate.definitionComparisonKey === entry.location.definitionComparisonKey);
-
-  if (matchingDefinitionCandidates.length === 1) {
-    return matchingDefinitionCandidates[0].inventoryName;
-  }
-
-  if (pluginCandidates.length === 1) {
-    return pluginCandidates[0].inventoryName;
-  }
-
-  return entry.name;
-}
-
-async function verifyMcpProbeTargets(
-  targets: McpConnectivityProbeTarget[],
-  options: ScanSkillInventoryOptions,
-): Promise<void> {
-  const verifier = resolveMcpConnectivityVerifier(options);
-  if (!verifier || targets.length === 0 || options.mcpConnectivityAbortSignal?.aborted) {
-    return;
-  }
-
-  await mapWithConcurrency(
-    targets,
-    Math.max(1, options.mcpConnectivityConcurrency ?? 3),
-    async (target) => {
-      if (options.mcpConnectivityAbortSignal?.aborted) {
-        return;
-      }
-
-      target.location.connectivity = await verifier(target, {
-        signal: options.mcpConnectivityAbortSignal,
-      });
-    },
-    () => !options.mcpConnectivityAbortSignal?.aborted,
-  );
-}
-
-function resolveMcpConnectivityVerifier(options: ScanSkillInventoryOptions): McpConnectivityVerifier | null {
-  if (typeof options.verifyMcpConnectivity === 'function') {
-    return options.verifyMcpConnectivity;
-  }
-
-  if (!options.verifyMcpConnectivity) {
-    return null;
-  }
-
-  return async (target, context) => {
-    if (target.location.scope === 'sandbox') {
-      return {
-        status: 'skipped',
-        checkedAt: new Date().toISOString(),
-        error: 'Sandbox MCP connectivity is not verified from the live process.',
-      };
-    }
-
-    return verifyMcpConnection(target.location, {
-      definition: target.definition,
-      signal: context?.signal,
-      timeoutMs: options.mcpConnectivityTimeoutMs,
-    });
-  };
-}
-
-async function mapWithConcurrency<T>(
-  items: T[],
-  concurrency: number,
-  run: (item: T) => Promise<void>,
-  shouldContinue: () => boolean = () => true,
-): Promise<void> {
-  let nextIndex = 0;
-  const workerCount = Math.min(concurrency, items.length);
-
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (shouldContinue() && nextIndex < items.length) {
-      const item = items[nextIndex];
-      nextIndex += 1;
-      if (item !== undefined) {
-        await run(item);
-      }
-    }
-  }));
-}
-
-function classifyMcpLocations(
-  name: string,
-  locations: McpLocationRecord[],
-  expectedOwners: McpOwnerRecord[],
-): McpRecord {
-  const sortedLocations = [...locations].sort((left, right) =>
-    left.configPath.localeCompare(right.configPath) || left.agentId.localeCompare(right.agentId));
-  const ownersByAgentId = new Map(expectedOwners.map((owner) => [owner.agentId, owner]));
-  const supportedLocations = sortedLocations.filter((location) => {
-    const owner = ownersByAgentId.get(location.agentId);
-    return !owner || isMcpTransportSupportedByOwner(owner, location.transport);
-  });
-  const issueLocations = supportedLocations.length > 0 ? supportedLocations : sortedLocations;
-  const normalizedDefinitions = new Set(issueLocations.map((location) => getMcpDefinitionComparisonKey(location)));
-  const invalidDefinition = issueLocations.some((location) => (location.invalidDetails?.length ?? 0) > 0);
-  const connectionFailed = issueLocations.some((location) => location.connectivity?.status === 'failed');
-  const pluginConfigName = getPluginConfigNameForRecord(name, sortedLocations);
-  const presentAgentIds = new Set(sortedLocations
-    .filter((location) =>
-      !pluginConfigName
-      || location.agentId.startsWith('plugin:')
-      || location.configName === pluginConfigName)
-    .map((location) => location.agentId));
-  const expectedOwnersForRecord = expectedOwners.filter((owner) => !owner.plugin);
-  const recordTransport = getMcpRecordTransport(issueLocations);
-  const expectedLocations = expectedOwnersForRecord.map((owner) => buildMcpExpectedLocation(owner, recordTransport));
-  const missingLocations = expectedLocations.filter((location) =>
-    location.supportStatus !== 'unsupported' && !presentAgentIds.has(location.agentId));
-  const issueReasons: McpIssueReason[] = [];
-
-  if (invalidDefinition) {
-    issueReasons.push('invalid-definition');
-  }
-
-  if (connectionFailed) {
-    issueReasons.push('connection-failed');
-  }
-
-  if (normalizedDefinitions.size > 1) {
-    issueReasons.push('definition-mismatch');
-  }
-
-  if (missingLocations.length > 0) {
-    issueReasons.push('missing-from-agents');
-  }
-
-  const status = issueReasons.length > 0 ? 'needs-attention' : 'healthy';
-
-  return {
-    name,
-    status,
-    presentation: status === 'needs-attention' ? 'active' : 'none',
-    locations: sortedLocations,
-    expectedLocations,
-    missingLocations,
-    issueReasons,
-    signature: status === 'needs-attention'
-      ? createMcpSignature(
-        name,
-        sortedLocations,
-        expectedLocations,
-        missingLocations,
-      )
-      : undefined,
-  };
-}
-
-function buildMcpExpectedLocation(
-  owner: McpOwnerRecord,
-  transport: McpConfiguredTransportKind | undefined,
-): McpExpectedLocationRecord {
-  const unsupportedTransport = transport && !isMcpTransportSupportedByOwner(owner, transport)
-    ? transport
-    : undefined;
-
-  return {
-    agentId: owner.agentId,
-    agentLabel: owner.agentLabel,
-    scope: owner.scope,
-    configPath: owner.configPath,
-    ...(unsupportedTransport
-      ? {
-          supportStatus: 'unsupported' as const,
-          unsupportedReason: getMcpUnsupportedReason(owner, unsupportedTransport),
-          unsupportedTransport,
-        }
-      : {}),
-  };
-}
-
-function getMcpUnsupportedReason(
-  owner: Pick<McpOwnerRecord, 'mcpSupportedTransports'>,
-  unsupportedTransport: McpConfiguredTransportKind,
-): NonNullable<McpExpectedLocationRecord['unsupportedReason']> {
-  const supportedTransports = owner.mcpSupportedTransports ?? [];
-  const supportsAnyRemoteTransport = supportedTransports.some(isRemoteMcpTransport);
-
-  return isRemoteMcpTransport(unsupportedTransport) && !supportsAnyRemoteTransport
-    ? 'remote-mcp-not-supported'
-    : 'transport-not-supported';
-}
-
-function getMcpRecordTransport(locations: McpLocationRecord[]): McpConfiguredTransportKind | undefined {
-  const transports = [...new Set(locations
-    .map((location) => location.transport)
-    .filter((transport): transport is McpConfiguredTransportKind => isMcpConfiguredTransportKind(transport)))];
-
-  if (transports.length === 1) {
-    return transports[0];
-  }
-
-  const remoteTransports = transports.filter(isRemoteMcpTransport);
-  return remoteTransports.length === transports.length && remoteTransports.length > 0
-    ? remoteTransports[0]
-    : undefined;
-}
-
-function isMcpTransportSupportedByOwner(
-  owner: Pick<McpOwnerRecord, 'mcpSupportedTransports'>,
-  transport: McpTransportKind | undefined,
-): boolean {
-  if (!isMcpConfiguredTransportKind(transport)) {
-    return true;
-  }
-
-  return !owner.mcpSupportedTransports || owner.mcpSupportedTransports.includes(transport);
-}
-
-function applyMcpPresentation(mcp: McpRecord, dismissedMcpSignatures: string[]): McpRecord {
-  if (mcp.status !== 'needs-attention' || !mcp.signature) {
-    return mcp;
-  }
-
-  return {
-    ...mcp,
-    presentation: dismissedMcpSignatures.includes(mcp.signature) ? 'dismissed' : 'active',
-  };
-}
-
-function applyDismissedMcpState(mcps: McpRecord[], dismissedMcpSignatures: string[]): McpRecord[] {
-  return mcps.map((mcp) => applyMcpPresentation(mcp, dismissedMcpSignatures));
-}
-
-function applySubagentPresentation(subagent: SubagentRecord, dismissedSubagentSignatures: string[]): SubagentRecord {
-  if (subagent.status !== 'needs-attention' || !subagent.signature) {
-    return subagent;
-  }
-
-  return {
-    ...subagent,
-    presentation: dismissedSubagentSignatures.includes(subagent.signature) ? 'dismissed' : 'active',
-  };
-}
-
-function applyDismissedSubagentState(
-  subagents: SubagentRecord[],
-  dismissedSubagentSignatures: string[],
-): SubagentRecord[] {
-  return subagents.map((subagent) => applySubagentPresentation(subagent, dismissedSubagentSignatures));
-}
-
-function countMcps(mcps: McpRecord[]): McpInventoryCounts {
-  return mcps.reduce<McpInventoryCounts>(
-    (counts, mcp) => {
-      counts.totalMcps += 1;
-
-      if (mcp.status === 'healthy') {
-        counts.healthyMcps += 1;
-      } else if (mcp.presentation === 'dismissed') {
-        counts.dismissedAttentionMcps += 1;
-      } else {
-        counts.attentionMcps += 1;
-      }
-
-      return counts;
-    },
-    {
-      totalMcps: 0,
-      attentionMcps: 0,
-      healthyMcps: 0,
-      dismissedAttentionMcps: 0,
-    },
-  );
-}
-
-function countAgents(agents: AgentRecord[]): AgentInventoryCounts {
+export function countAgents(agents: AgentRecord[]): AgentInventoryCounts {
   return agents.reduce<AgentInventoryCounts>(
     (counts, agent) => {
       counts.totalAgents += 1;
@@ -1342,16 +714,7 @@ function countAgents(agents: AgentRecord[]): AgentInventoryCounts {
   );
 }
 
-function emptyMcpInventoryCounts(): McpInventoryCounts {
-  return {
-    totalMcps: 0,
-    attentionMcps: 0,
-    healthyMcps: 0,
-    dismissedAttentionMcps: 0,
-  };
-}
-
-function emptyAgentInventoryCounts(): AgentInventoryCounts {
+export function emptyAgentInventoryCounts(): AgentInventoryCounts {
   return {
     totalAgents: 0,
     installedAgents: 0,
@@ -1359,7 +722,7 @@ function emptyAgentInventoryCounts(): AgentInventoryCounts {
   };
 }
 
-function buildHomeSummary(
+export function buildHomeSummary(
   skillCounts: SkillInventoryCounts,
   mcpCounts: McpInventoryCounts,
   agentCounts: AgentInventoryCounts,
@@ -1391,7 +754,7 @@ function applyDriftPresentation(skill: SkillRecord, dismissedDriftSignatures: st
   };
 }
 
-function applyDismissedDriftState(
+export function applyDismissedDriftState(
   snapshot: SkillInventorySnapshot,
   dismissedDriftSignatures: string[],
   sources: SkillScanSource[] = snapshot.sources,
@@ -1463,11 +826,7 @@ function findSkillUniversalDecisionContext(
   };
 }
 
-function mergeCustomScanPaths(configuredPaths: string[], requestedPaths: string[] | undefined): string[] {
-  return [...new Set([...(requestedPaths ?? []), ...configuredPaths])];
-}
-
-async function persistDismissedDriftSignatures(
+export async function persistDismissedDriftSignatures(
   configFile: string,
   skills: SkillRecord[],
   options: ResolveSkillIndexPathOptions = {},
@@ -1640,82 +999,7 @@ function haveSameSkillScanSources(left: SkillScanSource[], right: SkillScanSourc
     });
 }
 
-async function resolveScanContext(options: ScanSkillInventoryOptions): Promise<{
-  agents: AgentRecord[];
-  config: Awaited<ReturnType<typeof readSkillIndexConfig>>;
-  paths: SkillIndexPaths;
-  registeredSources: SkillScanSource[];
-  sources: SkillScanSource[];
-  plugins: PluginRecord[];
-}> {
-  const scanOptions = applyDefaultInventoryMode(options);
-  const paths = resolveSkillIndexPathsForScanOptions(scanOptions);
-  await ensureSkillIndexLayout(paths);
-  if (scanOptions.includeSandboxSources === true) {
-    await ensureSkillIndexSandboxLayout(paths);
-  }
-  const config = await readSkillIndexConfig(paths.configFile, scanOptions);
-  const customScanPaths = mergeCustomScanPaths(config.customScanPaths, scanOptions.customScanPaths);
-  const plugins = await scanPluginsForOptions(scanOptions, paths);
-  const registeredSources = [
-    ...buildRegisteredInventorySources({
-    ...scanOptions,
-    paths,
-    customScanPaths,
-    preferredCanonicalSourcePath: config.preferredCanonicalSourcePath,
-    }),
-    ...buildPluginSkillScanSources(plugins),
-  ];
-  const sources = await filterInstalledInventorySources(registeredSources);
-  const agents = await buildInventoryAgents({
-    ...scanOptions,
-    paths,
-  });
-
-  return {
-    agents,
-    config,
-    paths,
-    registeredSources,
-    sources,
-    plugins,
-  };
-}
-
-async function scanPluginsForOptions(options: ScanSkillInventoryOptions, paths: SkillIndexPaths): Promise<PluginRecord[]> {
-  const pluginGroups = await Promise.all([
-    options.includeLiveSources === false
-      ? Promise.resolve([])
-      : scanPluginInventory({
-        homeDir: options.homeDir,
-        env: options.env,
-        scope: 'live',
-      }),
-    options.includeSandboxSources === true
-      ? scanPluginInventory({
-        homeDir: paths.sandboxRoot,
-        env: options.env,
-        scope: 'sandbox',
-      })
-      : Promise.resolve([]),
-  ]);
-
-  return pluginGroups.flat();
-}
-
-function applyDefaultInventoryMode<T extends ScanSkillInventoryOptions>(options: T): T {
-  if (options.includeLiveSources !== undefined || options.includeSandboxSources !== undefined) {
-    return options;
-  }
-
-  return {
-    ...options,
-    includeLiveSources: true,
-    includeSandboxSources: false,
-  };
-}
-
-function reconcileSkillInventorySnapshot(
+export function reconcileSkillInventorySnapshot(
   snapshot: SkillInventorySnapshot,
   registeredSources: SkillScanSource[],
   sources: SkillScanSource[],
@@ -1779,26 +1063,30 @@ function reconcileSkillInventorySnapshot(
     .filter((skill): skill is SkillRecord => skill !== null)
     .sort(compareSkillNames);
   const reconciledMcps = applyDismissedMcpState(
-    reconcileCachedMcps(snapshot.mcps ?? [], agents, sources, plugins),
+    reconcileCachedMcps(snapshot.mcps ?? [], activeAgents, activeSources, plugins),
     dismissedMcpSignatures,
   );
   const mcpCounts = countMcps(reconciledMcps);
-  const agentCounts = countAgents(agents);
+  const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+  const subagentCounts = countSubagents(subagents);
+  const agentCounts = countAgents(activeAgents);
   const counts = countSkills(skills);
 
   return applyDismissedDriftState({
     scannedAt: snapshot.scannedAt,
     sourceIds: nextSourceIds,
-    sources,
+    sources: activeSources,
     plugins,
     skills,
     counts,
     mcps: reconciledMcps,
     mcpCounts,
-    agents,
+    subagents,
+    subagentCounts,
+    agents: activeAgents,
     agentCounts,
     homeSummary: buildHomeSummary(counts, mcpCounts, agentCounts),
-    }, dismissedDriftSignatures, activeSources);
+  }, dismissedDriftSignatures, activeSources);
 }
 
 function createDriftSignature(
@@ -2938,73 +2226,6 @@ function pruneCachedSkillDiff(
   };
 }
 
-function reconcileCachedMcps(
-  cachedMcps: McpRecord[],
-  agents: AgentRecord[],
-  sources: SkillScanSource[],
-  plugins: PluginRecord[],
-): McpRecord[] {
-  const activeOwners = collectMcpOwners(agents, sources, plugins);
-  const activeOwnerIds = new Set(activeOwners.map((owner) => owner.agentId));
-  const parseableOwners = activeOwners.filter((owner) => owner.parseable);
-
-  return cachedMcps
-    .map((mcp) => {
-      const locations = mcp.locations.filter((location) => activeOwnerIds.has(location.agentId));
-      const expectedLocations = (mcp.expectedLocations ?? []).filter((location) => activeOwnerIds.has(location.agentId));
-      const missingLocations = (mcp.missingLocations ?? []).filter((location) => activeOwnerIds.has(location.agentId));
-      if (locations.length === 0 && expectedLocations.length === 0 && missingLocations.length === 0) {
-        return null;
-      }
-
-      if (locations.length === 0) {
-        return {
-          ...mcp,
-          expectedLocations,
-          missingLocations,
-          signature: mcp.status === 'needs-attention' ? createMcpSignature(mcp.name, locations, expectedLocations, missingLocations) : undefined,
-        };
-      }
-
-      return classifyMcpLocations(mcp.name, locations, parseableOwners);
-    })
-    .filter((mcp): mcp is McpRecord => mcp !== null)
-    .sort(compareMcps);
-}
-
-function createMcpSignature(
-  name: string,
-  locations: McpLocationRecord[],
-  expectedLocations: McpExpectedLocationRecord[] = [],
-  missingLocations: McpExpectedLocationRecord[] = [],
-): string {
-  return JSON.stringify({
-    name,
-    locations: locations.map((location) => ({
-      agentId: location.agentId,
-      configPath: location.configPath,
-      command: location.command ?? null,
-      args: location.args,
-      definitionComparisonKey: getMcpDefinitionComparisonKey(location),
-      invalidDetails: location.invalidDetails ?? [],
-    })),
-    expectedLocations,
-    missingLocations,
-  });
-}
-
-function compareMcps(left: McpRecord, right: McpRecord): number {
-  if (left.status !== right.status) {
-    return left.status === 'needs-attention' ? -1 : 1;
-  }
-
-  if (left.presentation !== right.presentation) {
-    return left.presentation === 'active' ? -1 : 1;
-  }
-
-  return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
-}
-
 function findSkillLocationByPath(
   snapshot: SkillInventorySnapshot,
   filePath: string,
@@ -3467,483 +2688,7 @@ async function getDirectoryVisitKey(directoryPath: string): Promise<string | nul
   return normalizePath(await safeRealpath(directoryPath) ?? directoryPath);
 }
 
-function collectMcpOwners(agents: AgentRecord[], sources: SkillScanSource[], plugins: PluginRecord[] = []): McpOwnerRecord[] {
-  const owners: McpOwnerRecord[] = [];
-
-  for (const source of sources) {
-    const configPath = getSharedMcpConfigPath(source);
-    if (!configPath) {
-      continue;
-    }
-    const configExists = fileExistsSync(configPath);
-    if (!configExists) {
-      continue;
-    }
-
-    owners.push({
-      agentId: source.id,
-      agentLabel: source.label,
-      scope: source.scope,
-      configPath,
-      configExists,
-      parseable: true,
-      parserKind: 'json-servers',
-    });
-  }
-
-  for (const agent of agents) {
-    if (agent.installState !== 'installed' || agent.mcpConfigLocation.state !== 'available' || !agent.mcpConfigLocation.path) {
-      continue;
-    }
-
-    owners.push({
-      agentId: agent.id,
-      agentLabel: agent.label,
-      scope: agent.scope,
-      configPath: agent.mcpConfigLocation.path,
-      configExists: agent.mcpConfigLocation.exists,
-      parseable: isSupportedMcpParserKind(agent.mcpParserKind ?? 'json-servers'),
-      parserKind: agent.mcpParserKind ?? 'json-servers',
-      mcpSupportedTransports: agent.mcpSupportedTransports,
-    });
-  }
-
-  for (const plugin of plugins) {
-    const sourceId = createPluginMcpOwnerId(plugin);
-    const pluginSource: PluginSourceRef = {
-      host: plugin.host,
-      pluginId: plugin.pluginId,
-      pluginName: plugin.pluginName,
-      version: plugin.version,
-      rootPath: plugin.rootPath,
-      manifestPath: plugin.manifestPath,
-    };
-    const configPaths = [...new Set(plugin.bundledMcps.map((mcp) => mcp.configPath))];
-
-    for (const configPath of configPaths) {
-      owners.push({
-        agentId: sourceId,
-        agentLabel: `${plugin.host === 'codex' ? 'Codex' : 'Claude'} Plugin ${plugin.pluginName}`,
-        scope: plugin.scope ?? 'live',
-        configPath,
-        configExists: fileExistsSync(configPath),
-        parseable: true,
-        parserKind: 'jsonc-mcpServers',
-        plugin: pluginSource,
-      });
-    }
-  }
-
-  return owners.sort((left, right) => left.agentLabel.localeCompare(right.agentLabel, undefined, { sensitivity: 'base' }));
-}
-
-function createPluginMcpOwnerId(plugin: Pick<PluginRecord, 'host' | 'pluginId' | 'version' | 'scope'>): string {
-  const scopePrefix = plugin.scope === 'sandbox' ? 'sandbox:' : '';
-  return `plugin:${scopePrefix}${plugin.host}:${plugin.pluginId}:${plugin.version ?? 'unknown'}`;
-}
-
-async function readMcpConfig(owner: McpOwnerRecord): Promise<ParsedMcpConfigResult> {
-  if (!isSupportedMcpParserKind(owner.parserKind)) {
-    return {
-      entries: [],
-      configIssue: null,
-      owner: {
-        ...owner,
-        parseable: false,
-      },
-    };
-  }
-
-  if (!owner.configExists) {
-    return {
-      entries: [],
-      configIssue: null,
-      owner: {
-        ...owner,
-        parseable: true,
-      },
-    };
-  }
-
-  try {
-    const raw = await readFile(owner.configPath as string, 'utf8');
-    const definitions = parseMcpDefinitions(raw, owner.parserKind, {
-      allowPluginRootDefinitions: Boolean(owner.plugin),
-    });
-    if (!isRecord(definitions)) {
-      return {
-        entries: [],
-        owner: {
-          ...owner,
-          parseable: false,
-        },
-        configIssue: buildInvalidMcpConfigRecord(
-          owner,
-          `Unsupported MCP config structure for parser "${owner.parserKind}".`,
-        ),
-      };
-    }
-
-    const entries = Object.entries(definitions)
-      .sort(([leftName], [rightName]) => leftName.localeCompare(rightName))
-      .map(([name, definition]) => buildMcpEntry(name, definition, owner));
-
-    return {
-      entries,
-      configIssue: null,
-      owner: {
-        ...owner,
-        parseable: true,
-      },
-    };
-  } catch (error) {
-    return {
-      entries: [],
-      owner: {
-        ...owner,
-        parseable: false,
-      },
-      configIssue: buildInvalidMcpConfigRecord(
-        owner,
-        error instanceof Error ? error.message : 'Skill Index could not parse this MCP config.',
-      ),
-    };
-  }
-}
-
-function isSupportedMcpParserKind(parserKind: AgentMcpParserKind): boolean {
-  return parserKind === 'json-servers'
-    || parserKind === 'json-mcpServers'
-    || parserKind === 'json-mcp'
-    || parserKind === 'jsonc-mcpServers'
-    || parserKind === 'jsonc-mcp'
-    || parserKind === 'jsonc-dotted-amp-mcpServers'
-    || parserKind === 'jsonc-dotted-zencoder-mcpServers'
-    || parserKind === 'jsonc-mcp-servers'
-    || parserKind === 'jsonc-opencode-mcp'
-    || parserKind === 'toml'
-    || parserKind === 'toml-mcpServers-array';
-}
-
-function parseMcpDefinitions(
-  raw: string,
-  parserKind: AgentMcpParserKind,
-  options: { allowPluginRootDefinitions?: boolean } = {},
-): McpServerDefinitions | null {
-  if (parserKind === 'toml') {
-    return parseTomlMcpServers(raw);
-  }
-  if (parserKind === 'toml-mcpServers-array') {
-    return parseTomlMcpServerArray(raw);
-  }
-
-  const normalizedRaw = isJsoncMcpParserKind(parserKind)
-    ? sanitizeJsonc(raw)
-    : raw;
-  const parsed = JSON.parse(normalizedRaw) as unknown;
-  if (!isMcpDefinitionObject(parsed)) {
-    return null;
-  }
-
-  switch (parserKind) {
-    case 'json-servers':
-      return getMcpDefinitionsField(parsed, 'servers');
-    case 'json-mcpServers':
-    case 'jsonc-mcpServers':
-      return getMcpDefinitionsField(parsed, 'mcpServers')
-        ?? (options.allowPluginRootDefinitions ? getPluginMcpDefinitions(parsed) : null);
-    case 'json-mcp':
-    case 'jsonc-mcp':
-    case 'jsonc-opencode-mcp':
-      return getMcpDefinitionsField(parsed, 'mcp');
-    case 'jsonc-dotted-amp-mcpServers':
-      return getMcpDefinitionsField(parsed, 'amp.mcpServers');
-    case 'jsonc-dotted-zencoder-mcpServers':
-      return getMcpDefinitionsField(parsed, 'zencoder.mcpServers');
-    case 'jsonc-mcp-servers':
-      return getNestedMcpDefinitionsField(parsed, ['mcp', 'servers']);
-    default:
-      return null;
-  }
-}
-
-function isJsoncMcpParserKind(parserKind: AgentMcpParserKind): boolean {
-  return parserKind === 'jsonc-mcpServers'
-    || parserKind === 'jsonc-mcp'
-    || parserKind === 'jsonc-dotted-amp-mcpServers'
-    || parserKind === 'jsonc-dotted-zencoder-mcpServers'
-    || parserKind === 'jsonc-mcp-servers'
-    || parserKind === 'jsonc-opencode-mcp';
-}
-
-function getMcpDefinitionsField(parsed: McpDefinitionObject, field: string): McpServerDefinitions | null {
-  const definitions = parsed[field];
-  return isMcpServerDefinitions(definitions) ? definitions : null;
-}
-
-function getPluginMcpDefinitions(parsed: McpDefinitionObject): McpServerDefinitions | null {
-  return getMcpDefinitionsField(parsed, 'servers')
-    ?? getMcpDefinitionsField(parsed, 'mcp')
-    ?? (isMcpServerDefinitions(parsed) ? parsed : null);
-}
-
-function getNestedMcpDefinitionsField(parsed: McpDefinitionObject, pathSegments: string[]): McpServerDefinitions | null {
-  let current: McpDefinitionValue | undefined = parsed;
-
-  for (const segment of pathSegments) {
-    if (!isMcpDefinitionObject(current)) {
-      return null;
-    }
-    current = current[segment];
-  }
-
-  return isMcpServerDefinitions(current) ? current : null;
-}
-
-function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpOwnerRecord): ParsedMcpEntry {
-  const invalidDetails: string[] = [];
-  const normalizedDefinition: McpDefinitionObject = isMcpDefinitionObject(definition) ? definition : {};
-  const definitionText = stableStringify(normalizedDefinition, true);
-
-  if (!isMcpDefinitionObject(definition)) {
-    invalidDetails.push('Unsupported server definition. Expected an object.');
-  }
-
-  const connection = resolveMcpConnection(normalizedDefinition);
-  invalidDetails.push(...connection.invalidDetails);
-
-  const args = getMcpArgs(normalizedDefinition);
-
-  const invalidText = invalidDetails.length > 0 ? invalidDetails.join(' ') : undefined;
-
-  return {
-    name,
-    definition: normalizedDefinition,
-    location: {
-      agentId: owner.agentId,
-      agentLabel: owner.agentLabel,
-      scope: owner.scope,
-      configPath: owner.configPath as string,
-      configName: name,
-      transport: connection.transport,
-      command: connection.command,
-      url: connection.url,
-      args,
-      definitionText,
-      definitionComparisonKey: stableStringify(normalizeMcpDefinitionForComparison(normalizedDefinition, connection)),
-      invalidDetails: invalidText ? [invalidText] : undefined,
-      provenance: owner.plugin
-        ? {
-            kind: 'plugin',
-            plugin: {
-              host: owner.plugin.host,
-              pluginId: owner.plugin.pluginId,
-              version: owner.plugin.version,
-            },
-            sourcePath: owner.configPath,
-            discoveredAt: new Date().toISOString(),
-          }
-        : {
-            kind: owner.scope === 'live' && owner.agentId.includes('agents') ? 'universal' : 'agent-local',
-            sourcePath: owner.configPath,
-            discoveredAt: new Date().toISOString(),
-          },
-      canonicalRole: owner.plugin ? 'canonical' : owner.agentId.includes('agents') ? 'canonical' : 'materialized-copy',
-      mutability: owner.plugin ? 'read-only-managed' : 'writable',
-    },
-  };
-}
-
-function getPluginConfigNameForRecord(name: string, locations: McpLocationRecord[]): string | null {
-  const pluginLocation = locations.find((location) =>
-    location.agentId.startsWith('plugin:') && location.configName);
-  if (!pluginLocation?.configName) {
-    return null;
-  }
-
-  return name.includes(':') ? pluginLocation.configName : null;
-}
-
-function getMcpDefinitionComparisonKey(location: McpLocationRecord): string {
-  return location.definitionComparisonKey ?? location.definitionText ?? 'null';
-}
-
-function resolveMcpConnection(definition: McpDefinitionObject): ResolvedMcpConnection {
-  const command = getMcpCommand(definition);
-  const url = getMcpRemoteUrl(definition);
-  const explicitTransport = getExplicitMcpTransport(definition);
-  const inferredTransport = explicitTransport.transport ?? inferMcpTransport({
-    command,
-    url: getNonEmptyString(definition.url),
-    httpUrl: getNonEmptyString(definition.httpUrl),
-  });
-  const invalidDetails: string[] = [];
-
-  if (explicitTransport.invalidDetail) {
-    invalidDetails.push(explicitTransport.invalidDetail);
-  }
-
-  if (explicitTransport.transport === 'stdio' && !command) {
-    invalidDetails.push('Missing command for stdio server.');
-  } else if (isRemoteMcpTransport(explicitTransport.transport) && !url) {
-    invalidDetails.push('Missing url for remote server.');
-  } else if (!command && !url) {
-    invalidDetails.push('Missing connection target.');
-  }
-
-  return {
-    command,
-    url,
-    transport: inferredTransport,
-    invalidDetails,
-  };
-}
-
-function getNonEmptyString(value: McpDefinitionValue | undefined): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-}
-
-function getMcpRemoteUrl(definition: McpDefinitionObject): string | undefined {
-  return getNonEmptyString(definition.httpUrl) ?? getNonEmptyString(definition.url);
-}
-
-function getMcpCommand(definition: McpDefinitionObject): string | undefined {
-  const command = definition.command;
-  if (Array.isArray(command)) {
-    return getNonEmptyString(command[0]);
-  }
-
-  return getNonEmptyString(command);
-}
-
-function getMcpArgs(definition: McpDefinitionObject): string[] {
-  if (Array.isArray(definition.command)) {
-    return definition.command.slice(1).filter((value): value is string => typeof value === 'string');
-  }
-
-  return Array.isArray(definition.args)
-    ? definition.args.filter((value): value is string => typeof value === 'string')
-    : [];
-}
-
-function getExplicitMcpTransport(definition: McpDefinitionObject): NormalizedExplicitMcpTransport {
-  return normalizeMcpTransport(definition.transport) ?? normalizeMcpTransport(definition.type) ?? {};
-}
-
-function inferMcpTransport({
-  command,
-  url,
-  httpUrl,
-}: {
-  command?: string;
-  url?: string;
-  httpUrl?: string;
-}): McpConfiguredTransportKind | undefined {
-  if (command) {
-    return 'stdio';
-  }
-
-  if (httpUrl) {
-    return 'streamable-http';
-  }
-
-  if (url) {
-    return 'http';
-  }
-
-  return undefined;
-}
-
-function normalizeMcpTransport(value: McpDefinitionValue | undefined): NormalizedExplicitMcpTransport | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-
-  switch (normalized) {
-    case 'local':
-    case 'stdio':
-      return { transport: 'stdio' };
-    case 'remote':
-    case 'http':
-      return { transport: 'http' };
-    case 'streamable-http':
-    case 'streamable_http':
-      return { transport: 'streamable-http' };
-    case 'sse':
-      return { transport: 'sse' };
-    default:
-      return { invalidDetail: `Unsupported transport "${value.trim()}".` };
-  }
-}
-
-function isRemoteMcpTransport(transport: McpConfiguredTransportKind | undefined): transport is RemoteMcpTransportKind {
-  return transport === 'http' || transport === 'streamable-http' || transport === 'sse';
-}
-
-function buildInvalidMcpConfigRecord(owner: McpOwnerRecord, detail: string): McpRecord {
-  const location: McpLocationRecord = {
-    agentId: owner.agentId,
-    agentLabel: owner.agentLabel,
-    scope: owner.scope,
-    configPath: owner.configPath as string,
-    args: [],
-    invalidDetails: [detail],
-  };
-
-  return {
-    name: `${owner.agentLabel} MCP config`,
-    status: 'needs-attention',
-    presentation: 'active',
-    locations: [location],
-    expectedLocations: [
-      {
-        agentId: owner.agentId,
-        agentLabel: owner.agentLabel,
-        scope: owner.scope,
-        configPath: owner.configPath,
-      },
-    ],
-    missingLocations: [],
-    issueReasons: ['invalid-definition'],
-    signature: createMcpSignature(
-      `${owner.agentLabel} MCP config`,
-      [location],
-      [
-        {
-          agentId: owner.agentId,
-          agentLabel: owner.agentLabel,
-          scope: owner.scope,
-          configPath: owner.configPath,
-        },
-      ],
-      [],
-    ),
-  };
-}
-
-function getSharedMcpConfigPath(source: SkillScanSource): string | undefined {
-  if (!source.canonical) {
-    return undefined;
-  }
-
-  return path.join(path.dirname(source.skillsDir), 'mcp.json');
-}
-
-function fileExistsSync(filePath: string): boolean {
-  try {
-    accessSync(filePath, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function readSkillInventoryCache(cacheFile: string): Promise<SkillInventorySnapshot | null> {
+export async function readSkillInventoryCache(cacheFile: string): Promise<SkillInventorySnapshot | null> {
   try {
     const raw = await readFile(cacheFile, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
@@ -3953,7 +2698,7 @@ async function readSkillInventoryCache(cacheFile: string): Promise<SkillInventor
   }
 }
 
-function readSkillInventoryCacheSync(cacheFile: string): SkillInventorySnapshot | null {
+export function readSkillInventoryCacheSync(cacheFile: string): SkillInventorySnapshot | null {
   try {
     const raw = readFileSync(cacheFile, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
@@ -3963,7 +2708,7 @@ function readSkillInventoryCacheSync(cacheFile: string): SkillInventorySnapshot 
   }
 }
 
-async function writeSkillInventoryCache(cacheFile: string, snapshot: SkillInventorySnapshot): Promise<void> {
+export async function writeSkillInventoryCache(cacheFile: string, snapshot: SkillInventorySnapshot): Promise<void> {
   await writeFile(cacheFile, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
 }
 
@@ -4332,10 +3077,8 @@ function isSubagentLocationRecord(value: unknown): value is SubagentRecord['loca
     && isString(value.modifiedAt)
     && typeof value.canonical === 'boolean'
     && isSubagentParserKind(value.format)
-    && (value.description === undefined || value.description === null || isString(value.description))
     && (value.definitionText === undefined || isString(value.definitionText))
     && (value.definitionComparisonKey === undefined || isString(value.definitionComparisonKey))
-    && (value.localExtrasKeys === undefined || (Array.isArray(value.localExtrasKeys) && value.localExtrasKeys.every(isString)))
     && (value.invalidDetails === undefined || (Array.isArray(value.invalidDetails) && value.invalidDetails.every(isString)))
     && (value.resolvedPath === undefined || isString(value.resolvedPath))
     && (value.symlinkTarget === undefined || isString(value.symlinkTarget))

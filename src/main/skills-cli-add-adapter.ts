@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { SkillSourceScope } from '@shared/contracts';
 import type { SkillIndexPaths } from '@shared/skill-index-paths';
 
-import type { ScanSkillInventoryOptions } from '@main/skill-inventory';
+import type { ScanSkillInventoryOptions } from '@main/scan-inventory';
 
 export interface SkillsCliAddEnvironment {
   cwd: string;

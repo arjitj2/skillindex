@@ -6,13 +6,13 @@ import { addSkill as addSkillToInventory } from '@main/add-skill';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
 import { applyCapabilityAction as applyCapabilityActionToInventory } from '@main/capability-actions';
 import {
-  dismissSkillDrift,
-  readCachedSkillInventory,
-  reconcileWatchedSkillInventoryEvent,
-  scanSkillInventory,
-  writeSkillInventorySnapshotCache,
+  dismissDrift,
+  readCachedInventory,
+  scanInventory,
+  writeInventorySnapshotCache,
   type ScanSkillInventoryOptions,
-} from '@main/skill-inventory';
+} from '@main/scan-inventory';
+import { reconcileWatchedSkillInventoryEvent } from '@main/skill-inventory';
 import { addMcpServer as addMcpServerToInventory, resolveInventoryIssue } from '@main/issue-resolution';
 import type {
   AddMcpServerRequest,
@@ -193,7 +193,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   const runScan = async (
     verifyMcpConnectivityOverride?: ScanSkillInventoryOptions['verifyMcpConnectivity'],
   ): Promise<SkillInventorySnapshot> => {
-    const snapshot = await scanSkillInventory({
+    const snapshot = await scanInventory({
       ...lastScanOptions,
       verifyMcpConnectivity: verifyMcpConnectivityOverride ?? verifyMcpConnectivityOnFullScan,
     });
@@ -219,20 +219,20 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
     const revisionAtStart = committedSnapshotRevision;
 
     try {
-      const snapshot = await scanSkillInventory(scanOptions);
+      const snapshot = await scanInventory(scanOptions);
 
       if (abortController.signal.aborted || runId !== mcpConnectivityRunId) {
         return currentSnapshot ?? snapshot;
       }
 
       if (committedSnapshotRevision !== revisionAtStart && currentSnapshot) {
-        await writeSkillInventorySnapshotCache(currentSnapshot, lastScanOptions);
+        await writeInventorySnapshotCache(currentSnapshot, lastScanOptions);
         return currentSnapshot;
       }
 
       lastScanOptions = { ...lastScanOptions, ...persistentOptionsOverride };
       commitSnapshot(snapshot);
-      await writeSkillInventorySnapshotCache(snapshot, lastScanOptions);
+      await writeInventorySnapshotCache(snapshot, lastScanOptions);
       return snapshot;
     } finally {
       if (activeMcpConnectivityAbortController === abortController) {
@@ -254,6 +254,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   const resolvePersistentRefreshOptions = (optionsOverride?: ScanSkillInventoryOptions): ScanSkillInventoryOptions => {
     const persistentOptionsOverride = { ...(optionsOverride ?? {}) };
     delete persistentOptionsOverride.verifyMcpConnectivity;
+    delete persistentOptionsOverride.mcpConnectivityAbortSignal;
     return optionsOverride ? { ...lastScanOptions, ...persistentOptionsOverride } : { ...lastScanOptions };
   };
 
@@ -380,7 +381,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   return {
     async readCachedInventory(optionsOverride = {}) {
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
-      return readCachedSkillInventory(lastScanOptions);
+      return readCachedInventory(lastScanOptions);
     },
     async scanInventory(optionsOverride = {}) {
       await startupObservationAid.beforeInitialReconciliation();
@@ -405,7 +406,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       }
 
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
-      const beforeSnapshot = currentSnapshot ?? await scanSkillInventory(lastScanOptions);
+      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
         buildAddSkillAuditRequest(request, beforeSnapshot, lastScanOptions),
         () => addSkillToInventory(request, lastScanOptions),
@@ -420,7 +421,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       }
 
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
-      const beforeSnapshot = currentSnapshot ?? await scanSkillInventory(lastScanOptions);
+      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
         buildAddMcpServerAuditRequest(request, beforeSnapshot, lastScanOptions),
         () => addMcpServerToInventory(request, lastScanOptions),
@@ -434,7 +435,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
         await refreshInFlight;
       }
 
-      const beforeSnapshot = currentSnapshot ?? await scanSkillInventory(lastScanOptions);
+      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
       const auditRequest = buildResolveIssueAuditRequest(request, beforeSnapshot, lastScanOptions);
       try {
         const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
@@ -490,7 +491,7 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
           paths: resolveAuditPaths(lastScanOptions),
           includeCache: true,
         }),
-        () => dismissSkillDrift(request, {
+        () => dismissDrift(request, {
           ...lastScanOptions,
           snapshot: currentSnapshot ?? undefined,
         }),

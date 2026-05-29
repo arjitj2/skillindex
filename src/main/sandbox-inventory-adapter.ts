@@ -1,8 +1,7 @@
 import path from 'node:path';
 
 import type { SkillScanSource } from '@shared/contracts';
-import type { KnownAgentFamilyDefinition } from '@shared/known-agent-catalog';
-import { resolveAgentHomeRelativePath } from '@shared/known-agent-catalog';
+import { resolveAgentHomeRelativePath, type AgentCatalogEntry } from '@shared/agent-catalog';
 import type { SkillIndexPaths } from '@shared/skill-index-paths';
 
 export function createSandboxPluginSource(paths: SkillIndexPaths): SkillScanSource {
@@ -25,7 +24,7 @@ export function resolveSandboxSkillsDir(rootDir: string, displayPath: string): s
 
 export function resolveSandboxAgentRuntimePaths(
   rootDir: string,
-  family: KnownAgentFamilyDefinition,
+  family: AgentCatalogEntry,
 ): {
   installResolutionContext: { cwd: string; env: NodeJS.ProcessEnv; homeDir: string };
   mcpConfigPath?: string;

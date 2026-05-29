@@ -22,10 +22,10 @@ import {
 import { getHomeSummary } from './inventory-view-model';
 import { representativeInventorySnapshot } from './representative-preview-data';
 import {
-  KNOWN_AGENT_FAMILIES,
+  AGENT_CATALOG,
   deriveAgentDefaultHomeDir,
   resolveAgentHomeRelativePath,
-} from '@shared/known-agent-catalog';
+} from '@shared/agent-catalog';
 
 const DEFAULT_DATA_DIR = '/Users/arjitjaiswal/.skillindex';
 const DEFAULT_SANDBOX_ROOT = `${DEFAULT_DATA_DIR}/sandbox`;
@@ -417,7 +417,7 @@ describe('App shell inventory views', () => {
         actions: [],
         failure: {
           message: 'Failed to parse Skill Index config.',
-          trace: 'Error: Failed to parse Skill Index config.\\n    at scanSkillInventory (src/main/skill-inventory.ts:1:1)',
+          trace: 'Error: Failed to parse Skill Index config.\\n    at scanInventory (src/main/scan-inventory.ts:1:1)',
         },
       }));
 
@@ -432,12 +432,12 @@ describe('App shell inventory views', () => {
     await waitFor(() => {
       expect(readAuditLogMock).toHaveBeenCalledWith({ limit: 1 });
     });
-    expect(screen.queryByText(/scanSkillInventory/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scanInventory/)).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: /^Show failure trace$/i }));
 
-    const inlineTrace = await screen.findByText(/scanSkillInventory/);
+    const inlineTrace = await screen.findByText(/scanInventory/);
     expect(inlineTrace.textContent).toBe(
-      'Error: Failed to parse Skill Index config.\n    at scanSkillInventory (src/main/skill-inventory.ts:1:1)',
+      'Error: Failed to parse Skill Index config.\n    at scanInventory (src/main/scan-inventory.ts:1:1)',
     );
     expect(inlineTrace.textContent).not.toContain('\\n');
     expect(screen.getByRole('button', { name: /^Hide failure trace$/i })).toBeInTheDocument();
@@ -447,7 +447,7 @@ describe('App shell inventory views', () => {
 
     await waitFor(() => {
       expect(writeTextMock).toHaveBeenCalledWith(expect.stringContaining(
-        'Error: Failed to parse Skill Index config.\n    at scanSkillInventory',
+        'Error: Failed to parse Skill Index config.\n    at scanInventory',
       ));
     });
     expect(screen.getByRole('button', { name: /^Failure trace copied$/i })).toBeInTheDocument();
@@ -1289,14 +1289,14 @@ describe('App shell inventory views', () => {
 
     const sourceInput = await screen.findByRole('textbox', { name: /Repository or skill URL/i });
     fireEvent.change(sourceInput, {
-      target: { value: 'https://github.com/vercel-labs/agent-skills' },
+      target: { value: 'https://github.com/example/agent-skills' },
     });
     fireEvent.click(screen.getByRole('button', { name: /^Add skill$/i }));
 
     await waitFor(() => {
       expect(addSkillMock).toHaveBeenCalledWith({
         sourceType: 'url',
-        source: 'https://github.com/vercel-labs/agent-skills',
+        source: 'https://github.com/example/agent-skills',
       });
     });
   });
@@ -1350,9 +1350,9 @@ describe('App shell inventory views', () => {
     expect(within(mcpFilters).getByRole('button', { name: /^Healthy4$/i })).toBeInTheDocument();
 
     await openAgents();
-    expect(getAgentDataRows()).toHaveLength(KNOWN_AGENT_FAMILIES.length);
+    expect(getAgentDataRows()).toHaveLength(AGENT_CATALOG.length);
     fireEvent.click(screen.getByRole('button', { name: /^Not installed/i }));
-    expect(getAgentDataRows()).toHaveLength(KNOWN_AGENT_FAMILIES.length - 4);
+    expect(getAgentDataRows()).toHaveLength(AGENT_CATALOG.length - 4);
   });
 
   it('renders MCPs as a master-detail workspace while keeping only active issues in the caution badge', async () => {
@@ -1463,7 +1463,7 @@ describe('App shell inventory views', () => {
     );
 
     const list = getAgentsList();
-    expect(getAgentDataRows()).toHaveLength(KNOWN_AGENT_FAMILIES.length);
+    expect(getAgentDataRows()).toHaveLength(AGENT_CATALOG.length);
 
     expect(within(list).getByText('INSTALLED')).toBeInTheDocument();
     expect(within(list).getByText('NOT INSTALLED')).toBeInTheDocument();
@@ -1485,7 +1485,7 @@ describe('App shell inventory views', () => {
     expect(within(getAgentRow('Windsurf')).getByText('~/.codeium/windsurf/skills')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Not installed/i }));
-    expect(getAgentDataRows()).toHaveLength(KNOWN_AGENT_FAMILIES.length - 4);
+    expect(getAgentDataRows()).toHaveLength(AGENT_CATALOG.length - 4);
     expect(within(getAgentsList()).getByText('Cursor')).toBeInTheDocument();
     expect(within(getAgentsList()).getByText('OpenCode')).toBeInTheDocument();
     expect(within(getAgentsList()).getByText('Windsurf')).toBeInTheDocument();
@@ -4576,7 +4576,7 @@ function deriveSkillIssueReasons(
 }
 
 function buildMockAgents(rootDir: string, options: { windsurfInstalled?: boolean } = {}): AgentRecord[] {
-  return KNOWN_AGENT_FAMILIES.map((family) => {
+  return AGENT_CATALOG.map((family) => {
     const id = `sandbox-${family.family}`;
     const installState: AgentRecord['installState'] =
       family.family === 'codex'
