@@ -655,6 +655,7 @@ export interface HomeSummaryMetric {
 
 export interface HomeSummary {
   skills: HomeSummaryMetric;
+  subagents?: HomeSummaryMetric;
   mcps: HomeSummaryMetric;
   installedAgents: number;
 }

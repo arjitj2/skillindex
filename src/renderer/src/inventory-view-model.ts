@@ -168,8 +168,17 @@ export function getHomeSummary(snapshot: SkillInventorySnapshot | null): HomeSum
       }
     : snapshot?.homeSummary?.mcps ?? { total: 0, healthy: 0, needsAttention: 0 };
 
+  const subagents = snapshot?.subagentCounts
+    ? {
+        total: snapshot.subagentCounts.totalSubagents,
+        healthy: snapshot.subagentCounts.healthySubagents,
+        needsAttention: snapshot.subagentCounts.attentionSubagents,
+      }
+    : snapshot?.homeSummary?.subagents ?? { total: 0, healthy: 0, needsAttention: 0 };
+
   return {
     skills,
+    subagents,
     mcps,
     installedAgents: snapshot?.agentCounts?.installedAgents ?? snapshot?.homeSummary?.installedAgents ?? 0,
   };
