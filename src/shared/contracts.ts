@@ -604,6 +604,7 @@ export interface SubagentLocationRecord {
   modifiedAt: string;
   canonical: boolean;
   format: AgentSubagentParserKind;
+  description?: string | null;
   definitionText?: string;
   definitionComparisonKey?: string;
   localExtrasKeys?: string[];

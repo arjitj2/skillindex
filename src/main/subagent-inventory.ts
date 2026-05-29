@@ -33,6 +33,7 @@ interface SubagentOwnerRecord {
   family?: string;
   scope: SkillSourceScope;
   directoryPath: string;
+  exists?: boolean;
   format: AgentSubagentParserKind;
   writable: boolean;
   canonical: boolean;
@@ -103,7 +104,7 @@ export function collectSubagentRecords({
       agentLabel: `${plugin.host === 'codex' ? 'Codex' : 'Claude'} Plugin ${plugin.pluginName}`,
       scope: plugin.scope ?? 'live',
       directoryPath: plugin.rootPath,
-      format: plugin.host === 'codex' ? 'markdown-frontmatter' : 'markdown-frontmatter',
+      format: 'unknown',
       writable: false,
       canonical: false,
       plugin: pluginSource,
@@ -210,6 +211,7 @@ function collectSubagentOwners({
       family: agent.family,
       scope: agent.scope,
       directoryPath: agent.subagentsLocation.path,
+      exists: agent.subagentsLocation.exists,
       format,
       writable: agent.writable,
       canonical: false,
@@ -221,6 +223,10 @@ function collectSubagentOwners({
 }
 
 function collectSubagentFilePaths(owner: SubagentOwnerRecord): string[] {
+  if (owner.exists === false) {
+    return [];
+  }
+
   let entries;
   try {
     entries = readdirSync(owner.directoryPath, { withFileTypes: true });
@@ -294,6 +300,7 @@ function buildSubagentLocation(
     modifiedAt,
     canonical: owner.canonical,
     format: owner.format,
+    description: parsed.description,
     definitionText: parsed.definitionText,
     definitionComparisonKey,
     localExtrasKeys: localExtrasKeys.length > 0 ? localExtrasKeys : undefined,
@@ -1136,21 +1143,8 @@ function hasRequiredMarkdownField(fields: Record<string, unknown>, field: string
 
 function getSubagentDescription(locations: SubagentLocationRecord[]): string | null {
   for (const location of [...locations].sort((left, right) => Number(right.canonical) - Number(left.canonical))) {
-    try {
-      const parsed = readSubagentDefinition(location.path, {
-        agentId: location.agentId,
-        agentLabel: location.agentLabel,
-        scope: location.scope,
-        directoryPath: location.directoryPath,
-        format: location.format,
-        writable: location.mutability === 'writable',
-        canonical: location.canonical,
-      });
-      if (parsed.description) {
-        return parsed.description;
-      }
-    } catch {
-      continue;
+    if (location.description) {
+      return location.description;
     }
   }
 

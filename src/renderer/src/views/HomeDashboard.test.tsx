@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot } from '@shared/contracts';
+import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SubagentRecord } from '@shared/contracts';
 
 import { getHomeSummary } from '../inventory-view-model';
 import { representativeInventorySnapshot } from '../representative-preview-data';
@@ -87,6 +87,68 @@ describe('HomeDashboard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Skills tab$/i }));
     expect(onNavigateToSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat subagent-only manual attention as healthy', () => {
+    const inventorySnapshot = createNoAttentionSnapshot();
+    const onSelectSubagent = vi.fn();
+    const subagent: SubagentRecord = {
+      name: 'manual-subagent',
+      displayName: 'manual-subagent',
+      description: 'Requires a manual definition choice.',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['definition-mismatch'],
+      locations: [
+        {
+          agentId: 'sandbox-agents-subagents',
+          agentLabel: 'Sandbox .agents',
+          scope: 'sandbox',
+          path: '/tmp/.agents/agents/manual-subagent.md',
+          directoryPath: '/tmp/.agents/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-29T00:00:00.000Z',
+          canonical: true,
+          format: 'markdown-frontmatter',
+          definitionComparisonKey: 'canonical',
+          definitionText: '---\nname: manual-subagent\n---\nCanonical prompt.',
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          path: '/tmp/.claude/agents/manual-subagent.md',
+          directoryPath: '/tmp/.claude/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-29T00:00:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          definitionComparisonKey: 'claude',
+          definitionText: '---\nname: manual-subagent\n---\nClaude prompt.',
+        },
+      ],
+    };
+    inventorySnapshot.subagents = [subagent];
+    inventorySnapshot.subagentCounts = {
+      totalSubagents: 1,
+      healthySubagents: 0,
+      attentionSubagents: 1,
+      dismissedAttentionSubagents: 0,
+    };
+    inventorySnapshot.homeSummary = getHomeSummary(inventorySnapshot);
+
+    renderDashboard({
+      autoResolvableRequests: [],
+      homeSummary: getHomeSummary(inventorySnapshot),
+      inventorySnapshot,
+      onSelectSubagent,
+    });
+
+    expect(screen.getByText(/No safe auto-fixes available/i)).toBeInTheDocument();
+    expect(screen.queryByText('Everything looks good')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Subagents tab$/i }));
+    expect(onSelectSubagent).toHaveBeenCalledWith('manual-subagent');
   });
 
   it('expands, collapses, and applies safe repair requests accessibly', () => {
@@ -326,6 +388,7 @@ function renderDashboard(overrides: Partial<ComponentProps<typeof HomeDashboard>
     onRescan: vi.fn(() => Promise.resolve()),
     onSelectMcp: vi.fn(),
     onSelectSkill: vi.fn(),
+    onSelectSubagent: vi.fn(),
     ...overrides,
   };
 
@@ -347,6 +410,7 @@ function rerenderDashboard(
     onRescan: vi.fn(() => Promise.resolve()),
     onSelectMcp: vi.fn(),
     onSelectSkill: vi.fn(),
+    onSelectSubagent: vi.fn(),
     ...overrides,
   };
 

@@ -3712,7 +3712,9 @@ function hasPluginMcpLocation(mcp: McpRecord): boolean {
 }
 
 function hasPluginSubagentLocation(subagent: SubagentRecord): boolean {
-  return subagent.locations.some((location) => location.provenance?.kind === 'plugin');
+  return subagent.locations.some((location) =>
+    location.agentId.startsWith('plugin:')
+    || location.provenance?.kind === 'plugin');
 }
 
 function compareSkillLocationForProvenance(left: SkillLocationRecord, right: SkillLocationRecord): number {

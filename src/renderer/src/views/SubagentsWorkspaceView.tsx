@@ -313,7 +313,9 @@ function getSubagentDismissActionLabel(subagent: SubagentRecord, isDismissingDri
 }
 
 function hasPluginSubagentLocation(subagent: SubagentRecord): boolean {
-  return subagent.locations.some((location) => location.provenance?.kind === 'plugin');
+  return subagent.locations.some((location) =>
+    location.agentId.startsWith('plugin:')
+    || location.provenance?.kind === 'plugin');
 }
 
 function scrollSelectedInventoryRowIntoView(ariaLabel: string) {

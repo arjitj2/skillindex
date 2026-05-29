@@ -3,7 +3,14 @@ import { useState } from 'react';
 
 import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SkillRecord, SkillScanSource } from '@shared/contracts';
 
-import { getHomeSummary, getMcpDisplayName, getMcpSections, getSkillDisplayName, getSkillSections } from '../inventory-view-model';
+import {
+  getHomeSummary,
+  getMcpDisplayName,
+  getMcpSections,
+  getSkillDisplayName,
+  getSkillSections,
+  getSubagentSections,
+} from '../inventory-view-model';
 import {
   getPillToneForMcp,
   getPillToneForSkill,
@@ -116,14 +123,16 @@ function RepairSurface({
   inventorySnapshot,
   isAutoResolving,
   onAutoResolve,
-  onViewSkills,
+  onViewManualIssues,
+  manualReviewTargetLabel,
 }: {
   autoResolvableRequests: ResolveIssueRequest[];
   hasAttentionIssues: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving: boolean;
+  manualReviewTargetLabel: string;
   onAutoResolve: () => void;
-  onViewSkills: () => void;
+  onViewManualIssues: () => void;
 }) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const reviewPanelId = 'home-auto-repair-review-panel';
@@ -156,7 +165,7 @@ function RepairSurface({
           </div>
           <div className="repair-surface-copy">
             <strong>Everything looks good</strong>
-            <p>All skills and MCPs are healthy — nothing needs attention right now.</p>
+            <p>All skills, MCPs, and subagents are healthy — nothing needs attention right now.</p>
           </div>
         </div>
       </div>
@@ -173,8 +182,8 @@ function RepairSurface({
           <div className="repair-surface-copy">
             <strong>No safe auto-fixes available.</strong>{' '}
             Remaining issues require a manual choice — review them in the{' '}
-            <button className="repair-surface-link" type="button" onClick={onViewSkills}>
-              Skills tab
+            <button className="repair-surface-link" type="button" onClick={onViewManualIssues}>
+              {manualReviewTargetLabel}
             </button>
             .
           </div>
@@ -276,6 +285,7 @@ export function HomeDashboard({
   onRescan,
   onSelectMcp,
   onSelectSkill,
+  onSelectSubagent,
 }: {
   autoResolvableRequests: ResolveIssueRequest[];
   homeSummary: ReturnType<typeof getHomeSummary>;
@@ -288,16 +298,32 @@ export function HomeDashboard({
   onRescan: () => Promise<void>;
   onSelectMcp: (mcpName: string) => void;
   onSelectSkill: (skillName: string) => void;
+  onSelectSubagent: (subagentName: string) => void;
 }) {
   const skillSections = inventorySnapshot ? getSkillSections(inventorySnapshot) : [];
   const mcpSections = inventorySnapshot ? getMcpSections(inventorySnapshot) : [];
+  const subagentSections = inventorySnapshot ? getSubagentSections(inventorySnapshot) : [];
   const skillAttentionRows = skillSections.find((section) => section.tone === 'attention')?.rows ?? [];
   const mcpAttentionRows = mcpSections.find((section) => section.tone === 'attention')?.rows ?? [];
+  const subagentAttentionRows = subagentSections.find((section) => section.tone === 'attention')?.rows ?? [];
   const lastCheckedLabel = formatLastScanLabel(inventorySnapshot?.scannedAt);
   const sourceIndex = inventorySnapshot
     ? new Map(inventorySnapshot.sources.map((source) => [source.id, source]))
     : new Map<string, SkillScanSource>();
-
+  const manualReviewTarget = skillAttentionRows.length > 0
+    ? {
+        label: 'Skills tab',
+        onClick: onNavigateToSkills,
+      }
+    : mcpAttentionRows.length > 0
+      ? {
+          label: 'MCPs tab',
+          onClick: () => onSelectMcp(mcpAttentionRows[0]?.name ?? ''),
+        }
+      : {
+          label: 'Subagents tab',
+          onClick: () => onSelectSubagent(subagentAttentionRows[0]?.name ?? ''),
+        };
 
   return (
     <main className="workspace-view">
@@ -349,11 +375,16 @@ export function HomeDashboard({
 
             <RepairSurface
               autoResolvableRequests={autoResolvableRequests}
-              hasAttentionIssues={skillAttentionRows.length > 0 || mcpAttentionRows.length > 0}
+              hasAttentionIssues={
+                skillAttentionRows.length > 0
+                || mcpAttentionRows.length > 0
+                || subagentAttentionRows.length > 0
+              }
               inventorySnapshot={inventorySnapshot}
               isAutoResolving={isAutoResolving}
+              manualReviewTargetLabel={manualReviewTarget.label}
               onAutoResolve={onAutoResolve}
-              onViewSkills={onNavigateToSkills}
+              onViewManualIssues={manualReviewTarget.onClick}
             />
 
             <AttentionGroupCard

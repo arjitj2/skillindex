@@ -4332,6 +4332,7 @@ function isSubagentLocationRecord(value: unknown): value is SubagentRecord['loca
     && isString(value.modifiedAt)
     && typeof value.canonical === 'boolean'
     && isSubagentParserKind(value.format)
+    && (value.description === undefined || value.description === null || isString(value.description))
     && (value.definitionText === undefined || isString(value.definitionText))
     && (value.definitionComparisonKey === undefined || isString(value.definitionComparisonKey))
     && (value.localExtrasKeys === undefined || (Array.isArray(value.localExtrasKeys) && value.localExtrasKeys.every(isString)))

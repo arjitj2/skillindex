@@ -701,6 +701,8 @@ async function collectPluginSubagents(
 }
 
 async function resolvePluginSubagentPaths(rootPath: string, manifest: PluginManifest): Promise<string[]> {
+  // Claude Code documents plugin subagents under the `agents` manifest key and
+  // both Claude and Codex plugin bundles use `agents/` as the default root.
   const declaredPaths = normalizeManifestPaths(manifest.agents, 'agents').map((relativeAgentPath) =>
     path.resolve(rootPath, relativeAgentPath));
   const paths: string[] = [];

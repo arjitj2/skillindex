@@ -400,6 +400,9 @@ export default function App() {
     if (!appToast) {
       return;
     }
+    if (appToast.trace && expandedToastTraceId === appToast.id) {
+      return;
+    }
 
     const timeoutId = window.setTimeout(() => {
       setAppToast((currentToast) => (currentToast?.id === appToast.id ? null : currentToast));
@@ -408,7 +411,7 @@ export default function App() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [appToast]);
+  }, [appToast, expandedToastTraceId]);
 
   useEffect(() => {
     if (toastTraceCopyState === 'idle') {
@@ -1535,6 +1538,7 @@ export default function App() {
           onSelectMcp={openMcpFromHome}
           onRescan={triggerManualRescan}
           onSelectSkill={openSkillFromHome}
+          onSelectSubagent={openSubagentFromHome}
         />
       );
       break;

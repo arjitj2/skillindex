@@ -239,6 +239,30 @@ describe('plugin inventory', () => {
     });
   });
 
+  it('uses manifest agents paths for plugin subagents when declared', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-plugins-custom-agents-'));
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'anthropic', 'review-tools', '1.0.0');
+
+    await writeJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), {
+      name: 'review-tools',
+      version: '1.0.0',
+      agents: ['./custom-agents/reviewer.md'],
+    });
+    await writeSubagent(path.join(pluginRoot, 'agents', 'ignored-default.md'), 'ignored-default', 'Default agent ignored by manifest override');
+    await writeSubagent(path.join(pluginRoot, 'custom-agents', 'reviewer.md'), 'reviewer', 'Reviews changes from a custom manifest path');
+
+    const plugins = await scanPluginInventory({ homeDir });
+
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].bundledSubagents).toEqual([
+      expect.objectContaining({
+        name: 'reviewer',
+        path: path.join(pluginRoot, 'custom-agents', 'reviewer.md'),
+      }),
+    ]);
+    expect(plugins[0].bundledSubagents?.map((subagent) => subagent.name)).not.toContain('ignored-default');
+  });
+
   it('reads Claude plugin enabled state from user settings', async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-plugins-claude-state-'));
     const enabledRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'anthropic', 'jira-tools', '1.0.0');
