@@ -50,6 +50,7 @@ describe('App shell inventory views', () => {
   let addMcpServerMock: Mock<SkillIndexDesktopApi['addMcpServer']>;
   let makeCanonicalMock: Mock<SkillIndexDesktopApi['resolveIssue']>;
   let dismissDriftMock: Mock<SkillIndexDesktopApi['dismissDrift']>;
+  let removeInventoryItemMock: Mock<SkillIndexDesktopApi['removeInventoryItem']>;
   let applyCapabilityActionMock: Mock<SkillIndexDesktopApi['applyCapabilityAction']>;
   let readAuditLogMock: Mock<SkillIndexDesktopApi['readAuditLog']>;
   let undoAuditOperationMock: Mock<SkillIndexDesktopApi['undoAuditOperation']>;
@@ -82,6 +83,7 @@ describe('App shell inventory views', () => {
     addMcpServerMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     makeCanonicalMock = vi.fn().mockResolvedValue(createCanonicalizedDivergedInventorySnapshot());
     dismissDriftMock = vi.fn().mockResolvedValue(createDismissedIdenticalDriftInventorySnapshot());
+    removeInventoryItemMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     applyCapabilityActionMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     readAuditLogMock = vi.fn().mockResolvedValue([]);
     undoAuditOperationMock = vi.fn().mockResolvedValue({
@@ -136,6 +138,7 @@ describe('App shell inventory views', () => {
       addMcpServer: addMcpServerMock,
       resolveIssue: makeCanonicalMock,
       dismissDrift: dismissDriftMock,
+      removeInventoryItem: removeInventoryItemMock,
       applyCapabilityAction: applyCapabilityActionMock,
       readAuditLog: readAuditLogMock,
       undoAuditOperation: undoAuditOperationMock,
@@ -1657,6 +1660,84 @@ describe('App shell inventory views', () => {
     fireEvent.keyDown(window, { key: 'd' });
     await waitFor(() => {
       expect(dismissDriftMock).toHaveBeenCalledWith({ mcpName: 'broken-mcp' });
+    });
+  });
+
+  it('confirms removal in a styled dialog before removing detail items', async () => {
+    render(<App />);
+    await openSkills();
+
+    fireEvent.click(getSkillRow('identical-drift-skill'));
+    expect(await screen.findByRole('heading', { name: 'identical-drift-skill', level: 3 })).toBeInTheDocument();
+    const removeButton = screen.getByRole('button', { name: /^Remove$/i });
+    expect(within(removeButton).getByText('R')).toHaveClass('detail-inspector-panel__footer-shortcut');
+    expect(removeButton).toHaveAttribute('aria-keyshortcuts', 'R');
+
+    fireEvent.keyDown(window, { key: 'r' });
+    const dialog = await screen.findByRole('dialog', { name: /^Remove skill$/i });
+    expect(dialog).toHaveClass('remove-item-dialog');
+    expect(within(dialog).queryByText(/^Remove from inventory$/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/removed from every location Skill Index currently tracks/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/moved to Trash/i)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+
+    const confirmButton = within(dialog).getByRole('button', { name: /^Yes, remove$/i });
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(removeInventoryItemMock).toHaveBeenCalledWith({
+        entity: 'skill',
+        skillName: 'identical-drift-skill',
+      });
+    });
+
+    cleanup();
+    render(<App />);
+    await openMcps();
+    fireEvent.click(getMcpRow('broken-mcp'));
+    expect(await screen.findByRole('heading', { name: 'broken-mcp', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/i }));
+    const mcpDialog = await screen.findByRole('dialog', { name: /^Remove MCP$/i });
+    expect(within(mcpDialog).getByText(/There are no files to move to Trash/i)).toBeInTheDocument();
+    expect(within(mcpDialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(within(mcpDialog).getByRole('button', { name: /^Yes, remove$/i }));
+    await waitFor(() => {
+      expect(removeInventoryItemMock).toHaveBeenCalledWith({
+        entity: 'mcp',
+        mcpName: 'broken-mcp',
+      });
+    });
+
+    cleanup();
+    const subagentSnapshot = structuredClone(representativeInventorySnapshot);
+    readCachedInventoryMock.mockResolvedValue(subagentSnapshot);
+    scanInventoryMock.mockResolvedValue(subagentSnapshot);
+    removeInventoryItemMock.mockResolvedValue(subagentSnapshot);
+    api = {
+      ...api,
+      readCachedInventory: readCachedInventoryMock,
+      scanInventory: scanInventoryMock,
+      removeInventoryItem: removeInventoryItemMock,
+    };
+    Object.defineProperty(window, 'skillIndex', {
+      value: api,
+      configurable: true,
+      writable: true,
+    });
+    render(<App />);
+    await openSubagents();
+    fireEvent.click(getSubagentRow('reviewer'));
+    expect(await screen.findByRole('heading', { name: 'reviewer', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/i }));
+    const subagentDialog = await screen.findByRole('dialog', { name: /^Remove subagent$/i });
+    expect(within(subagentDialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(within(subagentDialog).getByRole('button', { name: /^Yes, remove$/i }));
+    await waitFor(() => {
+      expect(removeInventoryItemMock).toHaveBeenCalledWith({
+        entity: 'subagent',
+        subagentName: 'reviewer',
+      });
     });
   });
 

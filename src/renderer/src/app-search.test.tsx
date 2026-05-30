@@ -245,6 +245,7 @@ function createDesktopApi(inventorySnapshot: SkillInventorySnapshot): SkillIndex
     addMcpServer: vi.fn().mockResolvedValue(inventorySnapshot),
     resolveIssue: vi.fn().mockResolvedValue(inventorySnapshot),
     dismissDrift: vi.fn().mockResolvedValue(inventorySnapshot),
+    removeInventoryItem: vi.fn().mockResolvedValue(inventorySnapshot),
     applyCapabilityAction: vi.fn().mockResolvedValue(inventorySnapshot),
     readAuditLog: vi.fn().mockResolvedValue([]),
     undoAuditOperation: vi.fn().mockResolvedValue({

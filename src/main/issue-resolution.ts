@@ -51,7 +51,7 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
 }
 
-interface McpMutationTarget {
+export interface McpMutationTarget {
   agentId: string;
   configPath: string;
   parserKind:
@@ -1103,7 +1103,7 @@ function buildWritableMcpMutationTarget(
   return buildMcpMutationTarget(snapshot, agentId, configPath);
 }
 
-async function readWritableMcpDefinitions(target: McpMutationTarget): Promise<McpServerDefinitions> {
+export async function readWritableMcpDefinitions(target: McpMutationTarget): Promise<McpServerDefinitions> {
   let raw: string;
   try {
     raw = await readFile(target.configPath, 'utf8');
@@ -1130,7 +1130,7 @@ function isFileNotFoundError(error: unknown): boolean {
     && (error as { code?: unknown }).code === 'ENOENT';
 }
 
-async function writeMcpDefinitions(
+export async function writeMcpDefinitions(
   configPath: string,
   parserKind: McpMutationTarget['parserKind'],
   definitions: McpServerDefinitions,
@@ -1501,7 +1501,7 @@ function resolveSkillMutationScope(
   return derivedScope;
 }
 
-function isSupportedWritableMcpParser(parserKind: string): parserKind is McpMutationTarget['parserKind'] {
+export function isSupportedWritableMcpParser(parserKind: string): parserKind is McpMutationTarget['parserKind'] {
   return parserKind === 'json-servers'
     || parserKind === 'json-mcpServers'
     || parserKind === 'json-mcp'
@@ -1515,7 +1515,7 @@ function isSupportedWritableMcpParser(parserKind: string): parserKind is McpMuta
     || parserKind === 'toml-mcpServers-array';
 }
 
-function getDefaultMcpWriteDialect(parserKind: McpMutationTarget['parserKind']): AgentMcpWriteDialect {
+export function getDefaultMcpWriteDialect(parserKind: McpMutationTarget['parserKind']): AgentMcpWriteDialect {
   switch (parserKind) {
     case 'jsonc-opencode-mcp':
       return 'json-opencode';

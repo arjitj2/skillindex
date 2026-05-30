@@ -4,6 +4,7 @@ import {
   APP_NAME,
   type DismissDriftRequest,
   type McpPresentation,
+  type RemoveInventoryItemRequest,
   type ResolveIssueRequest,
   type SettingsState,
   type SkillDriftPresentation,
@@ -93,6 +94,10 @@ const browserPreviewApi: SkillIndexDesktopApi = {
   },
   dismissDrift: (request) => {
     browserPreviewSnapshot = toggleBrowserPreviewDismissal(browserPreviewSnapshot, request);
+    return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));
+  },
+  removeInventoryItem: (request) => {
+    browserPreviewSnapshot = removeBrowserPreviewItem(browserPreviewSnapshot, request);
     return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));
   },
   readAuditLog: () => Promise.resolve([]),
@@ -280,20 +285,27 @@ function toggleBrowserPreviewDismissal(snapshot: SkillInventorySnapshot, request
     nextSnapshot.subagentCounts = recomputeSubagentCounts(nextSnapshot);
   }
 
-  nextSnapshot.homeSummary = {
-    skills: {
-      total: nextSnapshot.counts.totalSkills,
-      healthy: nextSnapshot.counts.healthySkills,
-      needsAttention: nextSnapshot.counts.driftedSkills,
-    },
-    mcps: {
-      total: nextSnapshot.mcpCounts?.totalMcps ?? 0,
-      healthy: nextSnapshot.mcpCounts?.healthyMcps ?? 0,
-      needsAttention: nextSnapshot.mcpCounts?.attentionMcps ?? 0,
-    },
-    installedAgents: nextSnapshot.homeSummary?.installedAgents ?? 0,
-  };
+  nextSnapshot.homeSummary = recomputeHomeSummary(nextSnapshot);
 
+  return nextSnapshot;
+}
+
+function removeBrowserPreviewItem(snapshot: SkillInventorySnapshot, request: RemoveInventoryItemRequest): SkillInventorySnapshot {
+  const nextSnapshot = cloneInventorySnapshot(snapshot);
+  nextSnapshot.scannedAt = new Date().toISOString();
+
+  if (request.entity === 'skill') {
+    nextSnapshot.skills = nextSnapshot.skills.filter((skill) => skill.name !== request.skillName);
+    nextSnapshot.counts = recomputeSkillCounts(nextSnapshot);
+  } else if (request.entity === 'mcp') {
+    nextSnapshot.mcps = (nextSnapshot.mcps ?? []).filter((mcp) => mcp.name !== request.mcpName);
+    nextSnapshot.mcpCounts = recomputeMcpCounts(nextSnapshot);
+  } else {
+    nextSnapshot.subagents = (nextSnapshot.subagents ?? []).filter((subagent) => subagent.name !== request.subagentName);
+    nextSnapshot.subagentCounts = recomputeSubagentCounts(nextSnapshot);
+  }
+
+  nextSnapshot.homeSummary = recomputeHomeSummary(nextSnapshot);
   return nextSnapshot;
 }
 
@@ -339,5 +351,28 @@ function recomputeSubagentCounts(snapshot: SkillInventorySnapshot): NonNullable<
     attentionSubagents: subagents.filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'active').length,
     healthySubagents: subagents.filter((subagent) => subagent.status === 'healthy').length,
     dismissedAttentionSubagents: subagents.filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'dismissed').length,
+  };
+}
+
+function recomputeHomeSummary(snapshot: SkillInventorySnapshot): NonNullable<SkillInventorySnapshot['homeSummary']> {
+  return {
+    skills: {
+      total: snapshot.counts.totalSkills,
+      healthy: snapshot.counts.healthySkills,
+      needsAttention: snapshot.counts.driftedSkills,
+    },
+    mcps: {
+      total: snapshot.mcpCounts?.totalMcps ?? 0,
+      healthy: snapshot.mcpCounts?.healthyMcps ?? 0,
+      needsAttention: snapshot.mcpCounts?.attentionMcps ?? 0,
+    },
+    subagents: snapshot.subagentCounts
+      ? {
+          total: snapshot.subagentCounts.totalSubagents,
+          healthy: snapshot.subagentCounts.healthySubagents,
+          needsAttention: snapshot.subagentCounts.attentionSubagents,
+        }
+      : undefined,
+    installedAgents: snapshot.homeSummary?.installedAgents ?? 0,
   };
 }

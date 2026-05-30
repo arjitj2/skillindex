@@ -894,6 +894,69 @@ describe('inventory runtime', () => {
     expect(undoResult.inventorySnapshot?.skills.find((skill) => skill.name === skillName)?.issueReasons).toContain('missing-symlinks');
   });
 
+  it('audits and undoes removing a skill package moved to Trash', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-remove-audit-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const trashedPaths: string[] = [];
+
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+
+    const skillName = 'trashable-skill';
+    const skillPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    await writeSkillFile(paths.sandboxAgentsSkillsDir, skillName, '# Trashable skill\n', '2026-04-09T00:00:00.000Z');
+    await runtime.scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    const removedSnapshot = await runtime.removeInventoryItem(
+      { entity: 'skill', skillName },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        trashItem: async (targetPath) => {
+          trashedPaths.push(targetPath);
+          await rm(targetPath, { recursive: true, force: true });
+        },
+      },
+    );
+
+    expect(trashedPaths).toEqual([skillPath]);
+    expect(removedSnapshot.skills.some((skill) => skill.name === skillName)).toBe(false);
+    await expect(pathExists(skillPath)).resolves.toBe(false);
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation).toMatchObject({
+      kind: 'remove-inventory-item',
+      title: `Removed ${skillName}`,
+      undoState: 'available',
+    });
+    expect(operation.actions).toHaveLength(1);
+    expect(operation.actions[0]).toMatchObject({
+      kind: 'delete-path',
+      path: skillPath,
+      before: { kind: 'directory' },
+      after: { kind: 'absent' },
+    });
+
+    const undoResult = await runtime.undoAuditOperation(operation.id);
+
+    await expect(pathExists(path.join(skillPath, 'SKILL.md'))).resolves.toBe(true);
+    expect(undoResult.auditLog[0]).toMatchObject({
+      id: operation.id,
+      status: 'undone',
+      undoState: 'used',
+    });
+    expect(undoResult.inventorySnapshot?.skills.some((skill) => skill.name === skillName)).toBe(true);
+  });
+
   it('audits Universal decision config writes when resolving plugin-backed skills', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-audit-'));
     const paths = resolveSkillIndexPaths({
