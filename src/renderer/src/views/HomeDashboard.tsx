@@ -291,26 +291,10 @@ function formatCleanGroupCopy(labels: string[]): { label: string; verb: 'is' | '
   };
 }
 
-function getHomeAttentionBadgeTone(label: string): AttentionBadge['tone'] {
-  if (label === 'Healthy') {
-    return 'healthy';
-  }
-
-  if (label === 'Dismissed') {
-    return 'muted';
-  }
-
-  if (label.includes('Diverged') || label.includes('Definition Mismatch')) {
-    return 'attention';
-  }
-
-  return 'warning';
-}
-
 function toHomeAttentionBadges(labels: string[]): AttentionBadge[] {
   return labels.map((label) => ({
     label,
-    tone: getHomeAttentionBadgeTone(label),
+    tone: 'attention',
   }));
 }
 
