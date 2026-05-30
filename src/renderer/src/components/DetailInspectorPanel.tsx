@@ -20,7 +20,7 @@ export interface DetailInspectorFooterAction {
   onClick?: () => void;
   shortcut?: string;
   title?: string;
-  variant?: 'default' | 'strong' | 'subtle' | 'note';
+  variant?: 'danger' | 'default' | 'strong' | 'subtle' | 'note';
 }
 
 export function DetailInspectorPanel({
@@ -107,6 +107,7 @@ export function DetailInspectorPanel({
     : entityKind === 'subagent'
       ? PLUGIN_SUBAGENT_TOOLTIP
       : PLUGIN_SKILL_TOOLTIP;
+  const hasRemoveAction = footerActions?.some((action) => action.variant === 'danger') ?? false;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -583,7 +584,7 @@ export function DetailInspectorPanel({
       ) : null}
 
       {activeTab === 'problems' && footerActions && footerActions.length > 0 ? (
-        <section className="detail-inspector-panel__footer-block">
+        <section className={`detail-inspector-panel__footer-block${hasRemoveAction ? ' detail-inspector-panel__footer-block--with-remove' : ''}`}>
           {activeProblem.actionSummary ? (
             <p className="detail-inspector-panel__action-summary">{activeProblem.actionSummary}</p>
           ) : null}
@@ -599,7 +600,15 @@ export function DetailInspectorPanel({
             }
 
             return (
-              <div className="detail-inspector-panel__footer-action-group" key={action.label}>
+              <div
+                className={[
+                  'detail-inspector-panel__footer-action-group',
+                  action.variant === 'strong' ? 'detail-inspector-panel__footer-action-group--primary' : '',
+                  action.variant === 'subtle' ? 'detail-inspector-panel__footer-action-group--secondary' : '',
+                  action.variant === 'danger' ? 'detail-inspector-panel__footer-action-group--danger' : '',
+                ].filter(Boolean).join(' ')}
+                key={action.label}
+              >
                 <button
                   aria-keyshortcuts={action.shortcut ? action.shortcut.toUpperCase() : undefined}
                   aria-describedby={visibleDetail ? disabledReasonId : undefined}
@@ -607,6 +616,7 @@ export function DetailInspectorPanel({
                     'detail-inspector-panel__footer-action',
                     action.variant === 'strong' ? 'detail-inspector-panel__footer-action--primary' : '',
                     action.variant === 'subtle' ? 'detail-inspector-panel__footer-action--secondary' : '',
+                    action.variant === 'danger' ? 'detail-inspector-panel__footer-action--danger' : '',
                   ].filter(Boolean).join(' ')}
                   disabled={action.disabled}
                   title={action.title}

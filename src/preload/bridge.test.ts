@@ -6,6 +6,7 @@ import {
   type AuditOperation,
   type CapabilityActionRequest,
   IPC_CHANNELS,
+  type RemoveInventoryItemRequest,
   createSkillIndexDevApi,
   createSkillIndexDesktopApi,
   type AppShellState,
@@ -197,6 +198,7 @@ describe('createSkillIndexDesktopApi', () => {
       if (channel === IPC_CHANNELS.resolveIssue) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.applyCapabilityAction) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.dismissDrift) return Promise.resolve(inventorySnapshot);
+      if (channel === IPC_CHANNELS.removeInventoryItem) return Promise.resolve(inventorySnapshot);
       if (channel === IPC_CHANNELS.readAuditLog) return Promise.resolve(auditOperations);
       if (channel === IPC_CHANNELS.undoAuditOperation) return Promise.resolve({
         auditLog: auditOperations,
@@ -270,6 +272,10 @@ describe('createSkillIndexDesktopApi', () => {
     } satisfies CapabilityActionRequest)).resolves.toEqual(inventorySnapshot);
     await expect(api.dismissDrift({ skillName: 'healthy-skill' })).resolves.toEqual(inventorySnapshot);
     await expect(api.dismissDrift({ mcpName: 'healthy-mcp' })).resolves.toEqual(inventorySnapshot);
+    await expect(api.removeInventoryItem({
+      entity: 'skill',
+      skillName: 'healthy-skill',
+    } satisfies RemoveInventoryItemRequest)).resolves.toEqual(inventorySnapshot);
     await expect(api.readAuditLog()).resolves.toEqual(auditOperations);
     await expect(api.undoAuditOperation('audit-operation-1')).resolves.toEqual({
       auditLog: auditOperations,
@@ -341,6 +347,10 @@ describe('createSkillIndexDesktopApi', () => {
     });
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.dismissDrift, {
       mcpName: 'healthy-mcp',
+    });
+    expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.removeInventoryItem, {
+      entity: 'skill',
+      skillName: 'healthy-skill',
     });
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.readAuditLog);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.undoAuditOperation, 'audit-operation-1');

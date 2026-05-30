@@ -20,6 +20,7 @@ export const IPC_CHANNELS = {
   resolveIssue: 'inventory:resolve-issue',
   applyCapabilityAction: 'inventory:apply-capability-action',
   dismissDrift: 'inventory:dismiss-drift',
+  removeInventoryItem: 'inventory:remove-item',
   readAuditLog: 'audit:list',
   undoAuditOperation: 'audit:undo-operation',
   auditUpdated: 'audit:updated',
@@ -758,6 +759,26 @@ export type DismissDriftRequest =
     mcpName?: never;
   };
 
+export type RemoveInventoryItemRequest =
+  | {
+    entity: 'skill';
+    skillName: string;
+    mcpName?: never;
+    subagentName?: never;
+  }
+  | {
+    entity: 'mcp';
+    mcpName: string;
+    skillName?: never;
+    subagentName?: never;
+  }
+  | {
+    entity: 'subagent';
+    subagentName: string;
+    skillName?: never;
+    mcpName?: never;
+  };
+
 export interface SeededFixtureExpectation {
   name: string;
   expectedState: SkillStructuralState;
@@ -814,6 +835,7 @@ export type AuditOperationKind =
   | 'settings-update'
   | 'capability-action'
   | 'dismiss-drift'
+  | 'remove-inventory-item'
   | 'inventory-rescan'
   | 'seed-representative-fixtures'
   | 'undo';
@@ -940,6 +962,7 @@ export interface SkillIndexDesktopApi {
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
   applyCapabilityAction(request: CapabilityActionRequest): Promise<SkillInventorySnapshot>;
   dismissDrift(request: DismissDriftRequest): Promise<SkillInventorySnapshot>;
+  removeInventoryItem(request: RemoveInventoryItemRequest): Promise<SkillInventorySnapshot>;
   readAuditLog(options?: { limit?: number }): Promise<AuditOperation[]>;
   undoAuditOperation(operationId: string): Promise<UndoAuditOperationResult>;
   releaseStartupObservation(): Promise<void>;
@@ -1022,6 +1045,9 @@ export function createSkillIndexDesktopApi(invoke: InvokeLike, subscribe: Subscr
     },
     async dismissDrift(request) {
       return invoke(IPC_CHANNELS.dismissDrift, request) as Promise<SkillInventorySnapshot>;
+    },
+    async removeInventoryItem(request) {
+      return invoke(IPC_CHANNELS.removeInventoryItem, request) as Promise<SkillInventorySnapshot>;
     },
     async readAuditLog(options) {
       return options === undefined

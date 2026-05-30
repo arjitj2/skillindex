@@ -5,6 +5,7 @@ import path from 'node:path';
 import { addSkill as addSkillToInventory } from '@main/add-skill';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
 import { applyCapabilityAction as applyCapabilityActionToInventory } from '@main/capability-actions';
+import { removeInventoryItem as removeInventoryItemFromInventory, type RemoveInventoryItemOptions } from '@main/remove-inventory-item';
 import {
   dismissDrift,
   readCachedInventory,
@@ -20,6 +21,7 @@ import type {
   AuditOperation,
   CapabilityActionRequest,
   DismissDriftRequest,
+  RemoveInventoryItemRequest,
   ResolveIssueRequest,
   SkillInventorySnapshot,
   SkillRecord,
@@ -72,6 +74,7 @@ export interface InventoryRuntime {
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
   applyCapabilityAction(request: CapabilityActionRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   dismissDrift(request: DismissDriftRequest): Promise<SkillInventorySnapshot>;
+  removeInventoryItem(request: RemoveInventoryItemRequest, options?: RemoveInventoryItemOptions): Promise<SkillInventorySnapshot>;
   readAuditLog(options?: { limit?: number }, scanOptions?: ScanSkillInventoryOptions): Promise<AuditOperation[]>;
   undoAuditOperation(operationId: string): Promise<UndoAuditOperationResult>;
   releaseStartupObservation(): void;
@@ -500,6 +503,21 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       await emitAudit(lastScanOptions);
       return nextSnapshot;
     },
+    async removeInventoryItem(request, optionsOverride = {}) {
+      if (refreshInFlight) {
+        await refreshInFlight;
+      }
+
+      lastScanOptions = { ...lastScanOptions, ...optionsOverride };
+      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
+      const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
+        buildRemoveInventoryItemAuditRequest(request, beforeSnapshot, lastScanOptions),
+        () => removeInventoryItemFromInventory(request, lastScanOptions),
+      );
+      commitSnapshot(nextSnapshot);
+      await emitAudit(lastScanOptions);
+      return nextSnapshot;
+    },
     async readAuditLog(optionsOverride = {}, scanOptionsOverride) {
       return getAuditService(scanOptionsOverride ? { ...lastScanOptions, ...scanOptionsOverride } : lastScanOptions)
         .readOperations(optionsOverride);
@@ -607,6 +625,57 @@ function buildResolveIssueAuditRequest(
     affectedPaths,
     undoable: affectedPaths.length > 0,
   };
+}
+
+function buildRemoveInventoryItemAuditRequest(
+  request: RemoveInventoryItemRequest,
+  snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
+): AuditOperationRequest {
+  const sourceMode = resolveAuditSourceMode(options);
+  const entity = getRemoveInventoryItemEntity(request);
+  const affectedPaths = getRemoveInventoryItemAffectedPaths(request, snapshot);
+  const itemLabel = entity.name ?? 'inventory item';
+
+  return {
+    kind: 'remove-inventory-item',
+    title: `Removed ${itemLabel}`,
+    summary: `${affectedPaths.length} ${affectedPaths.length === 1 ? 'location' : 'locations'} removed.`,
+    sourceMode,
+    entity,
+    affectedPaths,
+    undoable: affectedPaths.length > 0,
+  };
+}
+
+function getRemoveInventoryItemEntity(request: RemoveInventoryItemRequest): NonNullable<AuditOperationRequest['entity']> {
+  if (request.entity === 'skill') {
+    return { type: 'skill', name: request.skillName };
+  }
+
+  if (request.entity === 'mcp') {
+    return { type: 'mcp', name: request.mcpName };
+  }
+
+  return { type: 'subagent', name: request.subagentName };
+}
+
+function getRemoveInventoryItemAffectedPaths(
+  request: RemoveInventoryItemRequest,
+  snapshot: SkillInventorySnapshot,
+): string[] {
+  if (request.entity === 'skill') {
+    const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
+    return dedupePaths(skill?.locations.map((location) => location.path) ?? []);
+  }
+
+  if (request.entity === 'mcp') {
+    const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+    return dedupePaths(mcp?.locations.map((location) => location.configPath) ?? []);
+  }
+
+  const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+  return dedupePaths(subagent?.locations.map((location) => location.path) ?? []);
 }
 
 function buildAddSkillAuditRequest(

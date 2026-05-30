@@ -1,5 +1,6 @@
 import type {
   DismissDriftRequest,
+  RemoveInventoryItemRequest,
   ResolveIssueRequest,
   SkillInventorySnapshot,
   SubagentIssueReason,
@@ -37,10 +38,12 @@ export function SubagentsWorkspaceView({
   inventorySnapshot,
   isDismissingDrift,
   isResolvingIssue,
+  isRemovingInventoryItem = false,
   isRescanning,
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
+  onRequestRemove = () => undefined,
   onResolveIssue,
   onRescan,
   onSearchQueryChange,
@@ -60,10 +63,12 @@ export function SubagentsWorkspaceView({
   inventorySnapshot: SkillInventorySnapshot | null;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
+  isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onRequestRemove?: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onRescan: () => Promise<void>;
   onSearchQueryChange: (query: string) => void;
@@ -169,9 +174,11 @@ export function SubagentsWorkspaceView({
             <SubagentDetailPanel
               isDismissingDrift={isDismissingDrift}
               isResolvingIssue={isResolvingIssue}
+              isRemovingInventoryItem={isRemovingInventoryItem}
               inventorySnapshot={inventorySnapshot}
               onClearSelection={onClearSelection}
               onDismissDrift={onDismissDrift}
+              onRequestRemove={onRequestRemove}
               onSelectProblem={onSelectProblem}
               onSelectVariant={onSelectVariant}
               onResolveIssue={onResolveIssue}
@@ -190,9 +197,11 @@ export function SubagentsWorkspaceView({
 function SubagentDetailPanel({
   isDismissingDrift,
   isResolvingIssue,
+  isRemovingInventoryItem,
   inventorySnapshot,
   onClearSelection,
   onDismissDrift,
+  onRequestRemove,
   onSelectProblem,
   onSelectVariant,
   onResolveIssue,
@@ -203,9 +212,11 @@ function SubagentDetailPanel({
 }: {
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
+  isRemovingInventoryItem: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onSelectProblem: (problemKey: SubagentIssueReason | null) => void;
   onSelectVariant: (path: string | null) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
@@ -257,6 +268,18 @@ function SubagentDetailPanel({
             variant: 'note' as const,
           }]
           : []),
+        {
+          disabled: isRemovingInventoryItem,
+          label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
+          onClick: () => {
+            onRequestRemove({
+              entity: 'subagent',
+              subagentName: subagent.name,
+            }, subagent.displayName ?? subagent.name);
+          },
+          shortcut: 'R',
+          variant: 'danger' as const,
+        },
       ]}
       model={selectedSubagentInspectorModel}
       ariaLabel="Subagent detail"

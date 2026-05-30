@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { Check, ChevronDown, ChevronUp, Copy, Undo2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Undo2, X } from 'lucide-react';
 
 import {
   type AddSkillRequest,
@@ -13,6 +13,7 @@ import {
   type InventorySourceMode,
   type McpIssueReason,
   type PluginRecord,
+  type RemoveInventoryItemRequest,
   type ResolveIssueRequest,
   type SettingsState,
   type SkillInventorySnapshot,
@@ -86,6 +87,11 @@ function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot):
 interface OnboardingPreferredSourceSelection {
   didChangePreferredSource: boolean;
   preferredSourcePath: string | null;
+}
+
+interface PendingRemoveItem {
+  label: string;
+  request: RemoveInventoryItemRequest;
 }
 
 function getResolveIssueRequestKey(request: ResolveIssueRequest): string {
@@ -200,6 +206,8 @@ export default function App() {
   const [isResolvingIssue, setIsResolvingIssue] = useState(false);
   const [isApplyingCapabilityAction, setIsApplyingCapabilityAction] = useState(false);
   const [isDismissingDrift, setIsDismissingDrift] = useState(false);
+  const [isRemovingInventoryItem, setIsRemovingInventoryItem] = useState(false);
+  const [pendingRemoveItem, setPendingRemoveItem] = useState<PendingRemoveItem | null>(null);
   const [, setLastScanClockTick] = useState(0);
   const [pendingDriftTransitionSkillName, setPendingDriftTransitionSkillName] = useState<string | null>(null);
   const [selectionOverrideSkillName, setSelectionOverrideSkillName] = useState<string | null>(null);
@@ -1037,6 +1045,56 @@ export default function App() {
     [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast],
   );
 
+  const handleRequestRemoveInventoryItem = useCallback((request: RemoveInventoryItemRequest, label: string) => {
+    setPendingRemoveItem({
+      label,
+      request,
+    });
+  }, []);
+
+  const handleConfirmRemoveInventoryItem = useCallback(async () => {
+    if (!pendingRemoveItem) {
+      return;
+    }
+
+    const { label, request } = pendingRemoveItem;
+    setIsRemovingInventoryItem(true);
+
+    try {
+      const nextInventorySnapshot = await desktopApi.removeInventoryItem(request);
+      applyInventorySnapshot(nextInventorySnapshot);
+      if (request.entity === 'skill') {
+        setSelectedSkillName(null);
+        setSelectionOverrideSkillName(null);
+        setSelectedSkillProblemKey(null);
+        setSelectedSkillVariantPath(null);
+      } else if (request.entity === 'mcp') {
+        setSelectedMcpName(null);
+        setSelectedMcpProblemKey(null);
+        setSelectedMcpVariantPath(null);
+      } else {
+        setSelectedSubagentName(null);
+        setSelectedSubagentProblemKey(null);
+        setSelectedSubagentVariantPath(null);
+      }
+      setPendingRemoveItem(null);
+      await showAppToastWithLatestUndo(
+        'Item removed',
+        `${label} was removed from all tracked locations.`,
+      );
+    } catch (error) {
+      showErrorToast('Remove failed', error);
+    } finally {
+      setIsRemovingInventoryItem(false);
+    }
+  }, [
+    applyInventorySnapshot,
+    desktopApi,
+    pendingRemoveItem,
+    showAppToastWithLatestUndo,
+    showErrorToast,
+  ]);
+
   const handleAutoResolve = useCallback(async () => {
     const startingSnapshot = latestInventorySnapshotRef.current;
     if (!startingSnapshot) {
@@ -1542,6 +1600,7 @@ export default function App() {
           inventorySnapshot={inventorySnapshot}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
+          isRemovingInventoryItem={isRemovingInventoryItem}
           isApplyingCapabilityAction={isApplyingCapabilityAction}
           isRescanning={isRescanActionBusy}
           onAddSkill={handleAddSkill}
@@ -1550,6 +1609,7 @@ export default function App() {
           onResolveIssue={handleResolveIssue}
           onApplyCapabilityAction={handleCapabilityAction}
           onOpenPluginSource={openPluginFromProvenance}
+          onRequestRemove={handleRequestRemoveInventoryItem}
           onRescan={triggerManualRescan}
           rows={skillRows}
           searchInputRef={skillSearchInputRef}
@@ -1577,6 +1637,7 @@ export default function App() {
           isAddingMcpServer={isAddingMcpServer}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
+          isRemovingInventoryItem={isRemovingInventoryItem}
           isRescanning={isRescanActionBusy}
           mcp={selectedMcp}
           mcpInspectorModel={selectedMcpInspectorModel}
@@ -1585,6 +1646,7 @@ export default function App() {
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
+          onRequestRemove={handleRequestRemoveInventoryItem}
           onResolveIssue={handleResolveIssue}
           onRescan={triggerManualRescan}
           onSearchQueryChange={setMcpSearchQuery}
@@ -1605,10 +1667,12 @@ export default function App() {
           inventorySnapshot={inventorySnapshot}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
+          isRemovingInventoryItem={isRemovingInventoryItem}
           isRescanning={isRescanActionBusy}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetSubagentSelection}
           onDismissDrift={handleDismissDrift}
+          onRequestRemove={handleRequestRemoveInventoryItem}
           onResolveIssue={handleResolveIssue}
           onRescan={triggerManualRescan}
           onSearchQueryChange={setSubagentSearchQuery}
@@ -1804,6 +1868,20 @@ export default function App() {
       </section>
     </div>
   ) : null;
+  const removeItemDialog = pendingRemoveItem ? (
+    <RemoveItemDialog
+      isRemoving={isRemovingInventoryItem}
+      item={pendingRemoveItem}
+      onCancel={() => {
+        if (!isRemovingInventoryItem) {
+          setPendingRemoveItem(null);
+        }
+      }}
+      onConfirm={() => {
+        void handleConfirmRemoveInventoryItem();
+      }}
+    />
+  ) : null;
 
   if (shouldShowOnboarding) {
     return (
@@ -1820,6 +1898,7 @@ export default function App() {
           status={autoUpdateStatus}
         />
         {appToastRegion}
+        {removeItemDialog}
       </>
     );
   }
@@ -1863,6 +1942,7 @@ export default function App() {
       </div>
 
       {appToastRegion}
+      {removeItemDialog}
 
       <AutoUpdateDialog
         appName={shellState?.appName ?? APP_NAME}
@@ -1871,6 +1951,105 @@ export default function App() {
       />
     </div>
   );
+}
+
+function RemoveItemDialog({
+  isRemoving,
+  item,
+  onCancel,
+  onConfirm,
+}: {
+  isRemoving: boolean;
+  item: PendingRemoveItem;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const itemKind = formatRemoveItemKind(item.request);
+  const title = `Remove ${itemKind}`;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || isRemoving) {
+        return;
+      }
+
+      event.preventDefault();
+      onCancel();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isRemoving, onCancel]);
+
+  return (
+    <div className="remove-item-dialog-root" role="presentation">
+      <div className="remove-item-dialog-backdrop" />
+      <section aria-label={title} aria-modal="true" className="remove-item-dialog" role="dialog">
+        <div className="remove-item-dialog__header">
+          <div>
+            <h3>{title}</h3>
+          </div>
+          <button
+            aria-label="Close remove dialog"
+            className="remove-item-dialog__close"
+            disabled={isRemoving}
+            type="button"
+            onClick={onCancel}
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </div>
+        <div className="remove-item-dialog__body">
+          <p>
+            <strong>{item.label}</strong>
+            {' will be removed from every location Skill Index currently tracks.'}
+          </p>
+          <p>
+            {getRemoveItemRecoveryCopy(item.request)}
+          </p>
+        </div>
+        <div className="remove-item-dialog__actions">
+          <button
+            className="remove-item-dialog__button remove-item-dialog__button--secondary"
+            disabled={isRemoving}
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="remove-item-dialog__button remove-item-dialog__button--danger"
+            disabled={isRemoving}
+            type="button"
+            onClick={onConfirm}
+          >
+            {isRemoving ? 'Removing...' : 'Yes, remove'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatRemoveItemKind(request: RemoveInventoryItemRequest): string {
+  switch (request.entity) {
+    case 'skill':
+      return 'skill';
+    case 'mcp':
+      return 'MCP';
+    case 'subagent':
+      return 'subagent';
+  }
+}
+
+function getRemoveItemRecoveryCopy(request: RemoveInventoryItemRequest): string {
+  if (request.entity === 'mcp') {
+    return 'MCP config entries are removed from their config files. There are no files to move to Trash.';
+  }
+
+  return 'Files are moved to Trash so you can recover them from Finder. This can affect every agent using it.';
 }
 
 function AutoUpdateDialog({

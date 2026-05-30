@@ -4,6 +4,7 @@ import type {
   McpIssueReason,
   McpRecord,
   RemoteMcpTransportKind,
+  RemoveInventoryItemRequest,
   ResolveIssueRequest,
   SkillInventorySnapshot,
 } from '@shared/contracts';
@@ -37,6 +38,7 @@ export function McpWorkspaceView({
   isAddingMcpServer,
   isDismissingDrift,
   isResolvingIssue,
+  isRemovingInventoryItem = false,
   isRescanning,
   mcp,
   mcpInspectorModel,
@@ -45,6 +47,7 @@ export function McpWorkspaceView({
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
+  onRequestRemove = () => undefined,
   onResolveIssue,
   onRescan,
   onSearchQueryChange,
@@ -61,6 +64,7 @@ export function McpWorkspaceView({
   isAddingMcpServer: boolean;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
+  isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
   mcp: McpRecord | null;
   mcpInspectorModel: InspectorModel | null;
@@ -69,6 +73,7 @@ export function McpWorkspaceView({
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onRequestRemove?: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onRescan: () => Promise<void>;
   onSearchQueryChange: (query: string) => void;
@@ -181,12 +186,14 @@ export function McpWorkspaceView({
               <McpDetailPanel
                 isDismissingDrift={isDismissingDrift}
                 isResolvingIssue={isResolvingIssue}
+                isRemovingInventoryItem={isRemovingInventoryItem}
                 inventorySnapshot={inventorySnapshot}
                 mcp={mcp}
                 mcpInspectorModel={mcpInspectorModel}
                 sandboxRoot={sandboxRoot}
                 onClearSelection={onClearSelection}
                 onDismissDrift={onDismissDrift}
+                onRequestRemove={onRequestRemove}
                 onResolveIssue={onResolveIssue}
                 onSelectProblem={onSelectProblem}
                 onSelectVariant={onSelectVariant}
@@ -511,24 +518,28 @@ function parseKeyValueLines(raw: string): Record<string, string> | undefined {
 function McpDetailPanel({
   isDismissingDrift,
   isResolvingIssue,
+  isRemovingInventoryItem,
   inventorySnapshot,
   mcp,
   mcpInspectorModel,
   sandboxRoot,
   onClearSelection,
   onDismissDrift,
+  onRequestRemove,
   onResolveIssue,
   onSelectProblem,
   onSelectVariant,
 }: {
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
+  isRemovingInventoryItem: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
   mcp: McpRecord;
   mcpInspectorModel: InspectorModel | null;
   sandboxRoot: string | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onSelectProblem: (problemKey: McpIssueReason | null) => void;
   onSelectVariant: (path: string | null) => void;
@@ -579,6 +590,18 @@ function McpDetailPanel({
             variant: 'subtle' as const,
           }]
           : []),
+        {
+          disabled: isRemovingInventoryItem,
+          label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
+          onClick: () => {
+            onRequestRemove({
+              entity: 'mcp',
+              mcpName: mcp.name,
+            }, mcp.name);
+          },
+          shortcut: 'R',
+          variant: 'danger' as const,
+        },
       ]}
       model={mcpInspectorModel}
       paneClassName="mcp-inspector-panel"
