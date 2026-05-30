@@ -2064,13 +2064,17 @@ function getAddedSubagentName(
   nextInventorySnapshot: SkillInventorySnapshot,
 ): string {
   const requestedName = request.name.trim();
+  const previousNames = new Set(previousSnapshot?.subagents?.map((subagent) => subagent.name) ?? []);
+  const addedSubagent = nextInventorySnapshot.subagents?.find((subagent) => !previousNames.has(subagent.name));
+  if (addedSubagent) {
+    return addedSubagent.name;
+  }
+
   if (nextInventorySnapshot.subagents?.some((subagent) => subagent.name === requestedName)) {
     return requestedName;
   }
 
-  const previousNames = new Set(previousSnapshot?.subagents?.map((subagent) => subagent.name) ?? []);
-  const addedSubagent = nextInventorySnapshot.subagents?.find((subagent) => !previousNames.has(subagent.name));
-  return addedSubagent?.name ?? requestedName;
+  return requestedName;
 }
 
 function StartupScreen({ appName }: { appName: string }) {

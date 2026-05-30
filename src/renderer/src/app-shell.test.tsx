@@ -1473,6 +1473,8 @@ describe('App shell inventory views', () => {
   });
 
   it('uses markdown copy for the Add Subagent content path', async () => {
+    readCachedInventoryMock.mockResolvedValue(structuredClone(representativeInventorySnapshot));
+    scanInventoryMock.mockResolvedValue(structuredClone(representativeInventorySnapshot));
     addSubagentMock.mockResolvedValueOnce(createInventorySnapshotWithAddedSubagent('markdown-reviewer'));
     render(<App />);
     fireEvent.click(within(await getPrimaryNavAsync()).getByRole('button', { name: /^Subagents/i }));
@@ -1487,7 +1489,7 @@ describe('App shell inventory views', () => {
     expect(within(dialog).getByRole('textbox', { name: /Markdown contents/i })).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: /Subagent name/i }), {
-      target: { value: 'fallback-reviewer' },
+      target: { value: 'reviewer' },
     });
     fireEvent.change(within(dialog).getByRole('textbox', { name: /Markdown contents/i }), {
       target: {
@@ -1506,7 +1508,7 @@ describe('App shell inventory views', () => {
     await waitFor(() => {
       expect(addSubagentMock).toHaveBeenCalledWith({
         sourceType: 'definition',
-        name: 'fallback-reviewer',
+        name: 'reviewer',
         format: 'markdown-frontmatter',
         definition: [
           '---',
@@ -3057,7 +3059,7 @@ function createInventorySnapshot(): SkillInventorySnapshot {
 }
 
 function createInventorySnapshotWithAddedSubagent(name: string): SkillInventorySnapshot {
-  const snapshot = createInventorySnapshot();
+  const snapshot = structuredClone(representativeInventorySnapshot);
   const addedSubagent: NonNullable<SkillInventorySnapshot['subagents']>[number] = {
     name,
     displayName: name,
