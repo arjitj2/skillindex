@@ -5653,6 +5653,66 @@ body {
   height: 12px;
 }
 
+.add-action-dropdown {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.add-action-dropdown__primary {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.add-action-dropdown__toggle {
+  width: 30px;
+  justify-content: center;
+  padding: 0;
+  border-left-color: rgba(255, 253, 248, 0.24);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.add-action-dropdown__toggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.add-action-dropdown__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgba(18, 18, 16, 0.18);
+}
+
+.add-action-dropdown__item {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.add-action-dropdown__item:hover,
+.add-action-dropdown__item:focus-visible {
+  outline: none;
+  background: var(--bg-panel-muted);
+}
+
 .toolbar-button-icon--loading svg {
   animation: toolbar-button-spin 900ms linear infinite;
   transform-origin: center;

@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { addSkill as addSkillToInventory } from '@main/add-skill';
+import { addSubagent as addSubagentToInventory, resolveAddSubagentName } from '@main/add-subagent';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
 import { applyCapabilityAction as applyCapabilityActionToInventory } from '@main/capability-actions';
 import { removeInventoryItem as removeInventoryItemFromInventory, type RemoveInventoryItemOptions } from '@main/remove-inventory-item';
@@ -18,6 +19,7 @@ import { addMcpServer as addMcpServerToInventory, resolveInventoryIssue } from '
 import type {
   AddMcpServerRequest,
   AddSkillRequest,
+  AddSubagentRequest,
   AuditOperation,
   CapabilityActionRequest,
   DismissDriftRequest,
@@ -29,6 +31,11 @@ import type {
   UndoAuditOperationResult,
 } from '@shared/contracts';
 import { resolveSkillIndexPathsForScanOptions, type SkillIndexPaths } from '@shared/skill-index-paths';
+import {
+  getSubagentFileNameForFormat,
+  isSubagentFormatRenderableFromUniversal,
+  isSupportedSubagentDirectoryFormat,
+} from '@shared/subagent-format-policy';
 import { createStartupObservationAid, type StartupObservationAid } from '@main/startup-observation';
 
 interface ClosableWatcher {
@@ -71,6 +78,7 @@ export interface InventoryRuntime {
   cancelMcpConnectivityTest(): void;
   addSkill(request: AddSkillRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   addMcpServer(request: AddMcpServerRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
+  addSubagent(request: AddSubagentRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
   applyCapabilityAction(request: CapabilityActionRequest, options?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot>;
   dismissDrift(request: DismissDriftRequest): Promise<SkillInventorySnapshot>;
@@ -433,6 +441,21 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       await emitAudit(lastScanOptions);
       return nextSnapshot;
     },
+    async addSubagent(request, optionsOverride = {}) {
+      if (refreshInFlight) {
+        await refreshInFlight;
+      }
+
+      lastScanOptions = { ...lastScanOptions, ...optionsOverride };
+      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
+      const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
+        buildAddSubagentAuditRequest(request, beforeSnapshot, lastScanOptions),
+        () => addSubagentToInventory(request, lastScanOptions),
+      );
+      commitSnapshot(nextSnapshot);
+      await emitAudit(lastScanOptions);
+      return nextSnapshot;
+    },
     async resolveIssue(request) {
       if (refreshInFlight) {
         await refreshInFlight;
@@ -748,6 +771,49 @@ function buildAddMcpServerAuditRequest(
     entity: { type: 'mcp', name: request.name.trim() },
     affectedPaths,
     undoable: affectedPaths.length > 0,
+  };
+}
+
+function buildAddSubagentAuditRequest(
+  request: AddSubagentRequest,
+  snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
+): AuditOperationRequest {
+  const sourceMode = resolveAuditSourceMode(options);
+  const subagentName = resolveAddSubagentName(request);
+  const paths = resolveAuditPathsForOptions(options);
+  const canonicalSkillsDir = sourceMode === 'sandbox'
+    ? paths.sandboxCanonicalUserSkillsDir
+    : paths.liveCanonicalUserSkillsDir || path.join(options.homeDir ?? homedir(), '.agents', 'skills');
+  const canonicalPath = path.join(
+    path.dirname(canonicalSkillsDir),
+    'agents',
+    getSubagentFileNameForFormat({ name: subagentName, format: 'markdown-frontmatter' }),
+  );
+  const linkedPaths = (snapshot.agents ?? [])
+    .filter((agent) =>
+      agent.scope === sourceMode
+      && agent.installState === 'installed'
+      && agent.writable
+      && agent.subagentsLocation?.state === 'available'
+      && Boolean(agent.subagentsLocation.path)
+      && isSupportedSubagentDirectoryFormat(agent.subagentParserKind ?? 'unknown')
+      && isSubagentFormatRenderableFromUniversal(agent.subagentParserKind ?? 'unknown', 'markdown-frontmatter'))
+    .map((agent) => path.join(agent.subagentsLocation?.path as string, getSubagentFileNameForFormat({
+      name: subagentName,
+      format: agent.subagentParserKind ?? 'markdown-frontmatter',
+      family: agent.family,
+      canonicalPath,
+    })));
+
+  return {
+    kind: 'add-subagent',
+    title: `Added subagent ${subagentName}`,
+    summary: `${1 + linkedPaths.length} ${linkedPaths.length === 0 ? 'path' : 'paths'} created.`,
+    sourceMode,
+    entity: { type: 'subagent', name: subagentName },
+    affectedPaths: dedupePaths([canonicalPath, ...linkedPaths]),
+    undoable: true,
   };
 }
 

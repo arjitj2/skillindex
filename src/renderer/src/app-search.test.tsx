@@ -243,6 +243,7 @@ function createDesktopApi(inventorySnapshot: SkillInventorySnapshot): SkillIndex
     cancelMcpConnectivityTest: vi.fn().mockResolvedValue(undefined),
     addSkill: vi.fn().mockResolvedValue(inventorySnapshot),
     addMcpServer: vi.fn().mockResolvedValue(inventorySnapshot),
+    addSubagent: vi.fn().mockResolvedValue(inventorySnapshot),
     resolveIssue: vi.fn().mockResolvedValue(inventorySnapshot),
     dismissDrift: vi.fn().mockResolvedValue(inventorySnapshot),
     removeInventoryItem: vi.fn().mockResolvedValue(inventorySnapshot),

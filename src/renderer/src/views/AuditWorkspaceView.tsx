@@ -15,6 +15,7 @@ interface AuditEventRow {
 }
 
 export function AuditWorkspaceView({
+  addActionControl,
   auditOperations,
   isRescanning,
   isUndoingOperation,
@@ -25,6 +26,7 @@ export function AuditWorkspaceView({
   searchQuery,
   setSearchQuery,
 }: {
+  addActionControl?: ReactNode;
   auditOperations: AuditOperation[];
   isRescanning: boolean;
   isUndoingOperation: boolean;
@@ -78,7 +80,10 @@ export function AuditWorkspaceView({
     <main className="workspace-view workspace-view--audit">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+          <div className="header-action-cluster">
+            <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+            {addActionControl}
+          </div>
         )}
         title="Audit Log"
         search={(

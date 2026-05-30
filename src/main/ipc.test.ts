@@ -23,6 +23,7 @@ const { inventoryRuntime } = vi.hoisted(() => ({
     cancelMcpConnectivityTest: vi.fn(),
     addSkill: vi.fn(),
     addMcpServer: vi.fn(),
+    addSubagent: vi.fn(),
     resolveIssue: vi.fn(),
     applyCapabilityAction: vi.fn(),
     dismissDrift: vi.fn(),

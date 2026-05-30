@@ -1,6 +1,7 @@
 import {
   type AddMcpServerRequest,
   type AddSkillRequest,
+  type AddSubagentRequest,
   APP_NAME,
   type DismissDriftRequest,
   type McpPresentation,
@@ -81,6 +82,10 @@ const browserPreviewApi: SkillIndexDesktopApi = {
     return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));
   },
   addMcpServer: (request: AddMcpServerRequest) => {
+    void request;
+    return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));
+  },
+  addSubagent: (request: AddSubagentRequest) => {
     void request;
     return Promise.resolve(cloneInventorySnapshot(browserPreviewSnapshot));
   },

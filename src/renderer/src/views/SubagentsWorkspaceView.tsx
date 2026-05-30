@@ -1,4 +1,5 @@
 import type {
+  AddSubagentRequest,
   DismissDriftRequest,
   RemoveInventoryItemRequest,
   ResolveIssueRequest,
@@ -6,7 +7,7 @@ import type {
   SubagentIssueReason,
   SubagentRecord,
 } from '@shared/contracts';
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 
 import {
   getSubagentDisplayName,
@@ -35,6 +36,7 @@ import {
 } from '../components/ui';
 
 export function SubagentsWorkspaceView({
+  addActionControl,
   inventorySnapshot,
   isDismissingDrift,
   isResolvingIssue,
@@ -60,6 +62,7 @@ export function SubagentsWorkspaceView({
   selectedSubagentProblemKey,
   statusFilter,
 }: {
+  addActionControl?: ReactNode;
   inventorySnapshot: SkillInventorySnapshot | null;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
@@ -113,7 +116,12 @@ export function SubagentsWorkspaceView({
   return (
     <main className="workspace-view">
       <PageTopBar
-        actions={<RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />}
+        actions={(
+          <div className="header-action-cluster">
+            <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+            {addActionControl}
+          </div>
+        )}
         search={(
           <HeaderSearch
             inputRef={searchInputRef}
@@ -323,6 +331,126 @@ function getSubagentEmptyStateMessage({
     default:
       return 'No subagents found.';
   }
+}
+
+export function AddSubagentModal({
+  isSubmitting,
+  onClose,
+  onSubmit,
+}: {
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (request: AddSubagentRequest) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [markdown, setMarkdown] = useState('');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isSubmitting) {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSubmitting, onClose]);
+
+  useEffect(() => {
+    setSubmitError(null);
+  }, [markdown, name]);
+
+  const canSubmit = name.trim().length > 0 && markdown.trim().length > 0;
+
+  return (
+    <div className="add-skill-modal-root" role="presentation">
+      <div className="add-skill-modal-backdrop" />
+      <section aria-label="Add Subagent" aria-modal="true" className="add-skill-modal add-subagent-modal" role="dialog">
+        <div className="add-skill-modal__header">
+          <h3>Add Subagent</h3>
+          <button
+            aria-label="Close Add Subagent modal"
+            className="add-skill-modal__close"
+            disabled={isSubmitting}
+            type="button"
+            onClick={onClose}
+          >
+            x
+          </button>
+        </div>
+
+        <form
+          className="add-skill-modal__body"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canSubmit || isSubmitting) {
+              return;
+            }
+
+            const request: AddSubagentRequest = {
+              sourceType: 'definition',
+              name,
+              format: 'markdown-frontmatter',
+              definition: markdown,
+            };
+
+            void onSubmit(request).catch((error) => {
+              setSubmitError(error instanceof Error ? error.message : 'Unable to add Subagent.');
+            });
+          }}
+        >
+          <label className="add-skill-modal__field">
+            <span>Subagent name</span>
+            <input
+              className="add-skill-modal__input add-skill-modal__input--mono"
+              placeholder="reviewer"
+              type="text"
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+              }}
+            />
+          </label>
+
+          <label className="add-skill-modal__field">
+            <span>Markdown contents</span>
+            <textarea
+              className="add-skill-modal__textarea add-skill-modal__input--mono"
+              placeholder={'---\nname: reviewer\ndescription: Reviews implementation changes.\n---\nReview the diff and call out correctness risks.'}
+              value={markdown}
+              onChange={(event) => {
+                setMarkdown(event.target.value);
+              }}
+            />
+          </label>
+
+          {submitError ? <p className="add-skill-modal__error">{submitError}</p> : null}
+
+          <div className="add-skill-modal__actions">
+            <button
+              className="add-skill-modal__button add-skill-modal__button--secondary"
+              disabled={isSubmitting}
+              type="button"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+            <button
+              className="add-skill-modal__button add-skill-modal__button--primary"
+              disabled={!canSubmit || isSubmitting}
+              type="submit"
+            >
+              {isSubmitting ? 'Adding Subagent…' : 'Add Subagent'}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
 }
 
 function getSubagentDismissActionLabel(subagent: SubagentRecord, isDismissingDrift: boolean): string {

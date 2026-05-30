@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   cancelMcpConnectivityTest: 'inventory:cancel-mcp-connectivity-test',
   addSkill: 'inventory:add-skill',
   addMcpServer: 'inventory:add-mcp-server',
+  addSubagent: 'inventory:add-subagent',
   resolveIssue: 'inventory:resolve-issue',
   applyCapabilityAction: 'inventory:apply-capability-action',
   dismissDrift: 'inventory:dismiss-drift',
@@ -826,12 +827,33 @@ export type AddMcpServerRequest =
     env?: never;
   };
 
+export type AddSubagentDefinitionFormat = Exclude<AgentSubagentParserKind, 'none' | 'unknown'>;
+
+export type AddSubagentRequest =
+  | {
+    sourceType: 'fields';
+    name: string;
+    description: string;
+    prompt: string;
+    definition?: never;
+    format?: never;
+  }
+  | {
+    sourceType: 'definition';
+    name: string;
+    format: AddSubagentDefinitionFormat;
+    definition: string;
+    description?: never;
+    prompt?: never;
+  };
+
 export type AuditOperationKind =
   | 'resolve-skill-issue'
   | 'resolve-mcp-issue'
   | 'resolve-subagent-issue'
   | 'add-skill'
   | 'add-mcp-server'
+  | 'add-subagent'
   | 'settings-update'
   | 'capability-action'
   | 'dismiss-drift'
@@ -959,6 +981,7 @@ export interface SkillIndexDesktopApi {
   cancelMcpConnectivityTest(): Promise<void>;
   addSkill(request: AddSkillRequest): Promise<SkillInventorySnapshot>;
   addMcpServer(request: AddMcpServerRequest): Promise<SkillInventorySnapshot>;
+  addSubagent(request: AddSubagentRequest): Promise<SkillInventorySnapshot>;
   resolveIssue(request: ResolveIssueRequest): Promise<SkillInventorySnapshot>;
   applyCapabilityAction(request: CapabilityActionRequest): Promise<SkillInventorySnapshot>;
   dismissDrift(request: DismissDriftRequest): Promise<SkillInventorySnapshot>;
@@ -1036,6 +1059,9 @@ export function createSkillIndexDesktopApi(invoke: InvokeLike, subscribe: Subscr
     },
     async addMcpServer(request) {
       return invoke(IPC_CHANNELS.addMcpServer, request) as Promise<SkillInventorySnapshot>;
+    },
+    async addSubagent(request) {
+      return invoke(IPC_CHANNELS.addSubagent, request) as Promise<SkillInventorySnapshot>;
     },
     async resolveIssue(request) {
       return invoke(IPC_CHANNELS.resolveIssue, request) as Promise<SkillInventorySnapshot>;

@@ -1,4 +1,4 @@
-import { useMemo, useState, type RefObject } from 'react';
+import { useMemo, useState, type ReactNode, type RefObject } from 'react';
 
 import type { AgentInstallState, AgentRecord, SkillInventorySnapshot } from '@shared/contracts';
 
@@ -8,6 +8,7 @@ import { AgentStatusRow, EmptyStatePanel, HeaderSearch, InventorySectionBlock, P
 type AgentStatusFilter = 'all' | AgentInstallState;
 
 export function AgentsWorkspaceView({
+  addActionControl,
   inventorySnapshot,
   isRescanning,
   onCancelMcpConnectivityTest,
@@ -17,6 +18,7 @@ export function AgentsWorkspaceView({
   searchInputRef,
   searchQuery,
 }: {
+  addActionControl?: ReactNode;
   inventorySnapshot: SkillInventorySnapshot | null;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
@@ -68,7 +70,10 @@ export function AgentsWorkspaceView({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+          <div className="header-action-cluster">
+            <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+            {addActionControl}
+          </div>
         )}
         search={(
           <HeaderSearch

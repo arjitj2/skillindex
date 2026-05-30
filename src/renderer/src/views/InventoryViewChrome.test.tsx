@@ -27,13 +27,11 @@ function renderSkillsWorkspaceView({
 } = {}) {
   return render(
     <SkillsWorkspaceView
-      isAddingSkill={false}
       inventorySnapshot={inventorySnapshot}
       isDismissingDrift={false}
       isApplyingCapabilityAction={false}
       isResolvingIssue={false}
       isRescanning={isRescanning}
-      onAddSkill={vi.fn(() => Promise.resolve())}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
       onApplyCapabilityAction={vi.fn(() => Promise.resolve())}
@@ -77,14 +75,12 @@ function renderMcpWorkspaceView({
   render(
     <McpWorkspaceView
       inventorySnapshot={inventorySnapshot}
-      isAddingMcpServer={false}
       isDismissingDrift={false}
       isResolvingIssue={false}
       isRescanning={isRescanning}
       mcp={null}
       mcpInspectorModel={null}
       sandboxRoot={null}
-      onAddMcpServer={vi.fn(() => Promise.resolve())}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
       onResolveIssue={vi.fn(() => Promise.resolve())}
@@ -436,14 +432,12 @@ describe('inventory view chrome', () => {
     render(
       <McpWorkspaceView
         inventorySnapshot={representativeInventorySnapshot}
-        isAddingMcpServer={false}
         isDismissingDrift={false}
         isResolvingIssue={false}
         isRescanning={false}
         mcp={null}
         mcpInspectorModel={null}
         sandboxRoot={null}
-        onAddMcpServer={vi.fn(() => Promise.resolve())}
         onClearSelection={vi.fn()}
         onDismissDrift={vi.fn(() => Promise.resolve())}
         onResolveIssue={vi.fn(() => Promise.resolve())}
@@ -577,13 +571,11 @@ describe('inventory view chrome', () => {
 
     const { rerender } = render(
       <SkillsWorkspaceView
-        isAddingSkill={false}
         inventorySnapshot={representativeInventorySnapshot}
         isDismissingDrift={false}
         isApplyingCapabilityAction={false}
         isResolvingIssue={false}
         isRescanning={false}
-        onAddSkill={vi.fn(() => Promise.resolve())}
         onClearSelection={vi.fn()}
         onDismissDrift={vi.fn(() => Promise.resolve())}
         onApplyCapabilityAction={vi.fn(() => Promise.resolve())}
@@ -616,7 +608,6 @@ describe('inventory view chrome', () => {
     rerender(
       <McpWorkspaceView
         inventorySnapshot={representativeInventorySnapshot}
-        isAddingMcpServer={false}
         isDismissingDrift={false}
         isResolvingIssue={false}
         isRescanning={false}
@@ -626,7 +617,6 @@ describe('inventory view chrome', () => {
           selectedVariantPath: '~/.skillindex/sandbox/.agents/mcp.json',
         }, agentIndex) : null}
         sandboxRoot={null}
-        onAddMcpServer={vi.fn(() => Promise.resolve())}
         onClearSelection={vi.fn()}
         onDismissDrift={vi.fn(() => Promise.resolve())}
         onResolveIssue={vi.fn(() => Promise.resolve())}

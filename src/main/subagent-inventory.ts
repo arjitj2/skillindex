@@ -489,6 +489,34 @@ export function readPortableSubagentDefinitionFromFile({
   return toPortableSubagentDefinition(parsed);
 }
 
+export function readPortableSubagentDefinitionFromText({
+  family,
+  fallbackName,
+  format,
+  raw,
+}: {
+  family?: string;
+  fallbackName?: string;
+  format: AgentSubagentParserKind;
+  raw: string;
+}): PortableSubagentDefinition {
+  const parsed = parseSubagentDefinitionText(raw, {
+    agentId: 'portable-reader',
+    agentLabel: 'Portable Reader',
+    family,
+    scope: 'live',
+    directoryPath: '',
+    format,
+    writable: false,
+    canonical: false,
+  }, fallbackName ?? 'subagent');
+  if (parsed.invalidDetails.length > 0) {
+    throw new Error(parsed.invalidDetails.join(' '));
+  }
+
+  return toPortableSubagentDefinition(parsed);
+}
+
 export function renderPortableSubagentDefinition(
   definition: PortableSubagentDefinition,
   format: AgentSubagentParserKind,
@@ -543,7 +571,6 @@ function readSubagentDefinition(
   fallbackName = getSubagentNameFromPath(filePath),
 ): ParsedSubagentDefinition {
   let raw = '';
-  const invalidDetails: string[] = [];
   try {
     raw = readFileSync(filePath, 'utf8');
   } catch {
@@ -564,6 +591,15 @@ function readSubagentDefinition(
     };
   }
 
+  return parseSubagentDefinitionText(raw, owner, fallbackName);
+}
+
+function parseSubagentDefinitionText(
+  raw: string,
+  owner: SubagentOwnerRecord,
+  fallbackName: string,
+): ParsedSubagentDefinition {
+  const invalidDetails: string[] = [];
   try {
     switch (owner.format) {
       case 'codex-toml':

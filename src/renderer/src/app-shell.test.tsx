@@ -48,6 +48,7 @@ describe('App shell inventory views', () => {
   let cancelMcpConnectivityTestMock: Mock<SkillIndexDesktopApi['cancelMcpConnectivityTest']>;
   let addSkillMock: Mock<SkillIndexDesktopApi['addSkill']>;
   let addMcpServerMock: Mock<SkillIndexDesktopApi['addMcpServer']>;
+  let addSubagentMock: Mock<SkillIndexDesktopApi['addSubagent']>;
   let makeCanonicalMock: Mock<SkillIndexDesktopApi['resolveIssue']>;
   let dismissDriftMock: Mock<SkillIndexDesktopApi['dismissDrift']>;
   let removeInventoryItemMock: Mock<SkillIndexDesktopApi['removeInventoryItem']>;
@@ -81,6 +82,7 @@ describe('App shell inventory views', () => {
     cancelMcpConnectivityTestMock = vi.fn().mockResolvedValue(undefined);
     addSkillMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     addMcpServerMock = vi.fn().mockResolvedValue(createInventorySnapshot());
+    addSubagentMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     makeCanonicalMock = vi.fn().mockResolvedValue(createCanonicalizedDivergedInventorySnapshot());
     dismissDriftMock = vi.fn().mockResolvedValue(createDismissedIdenticalDriftInventorySnapshot());
     removeInventoryItemMock = vi.fn().mockResolvedValue(createInventorySnapshot());
@@ -136,6 +138,7 @@ describe('App shell inventory views', () => {
       cancelMcpConnectivityTest: cancelMcpConnectivityTestMock,
       addSkill: addSkillMock,
       addMcpServer: addMcpServerMock,
+      addSubagent: addSubagentMock,
       resolveIssue: makeCanonicalMock,
       dismissDrift: dismissDriftMock,
       removeInventoryItem: removeInventoryItemMock,
@@ -1147,7 +1150,7 @@ describe('App shell inventory views', () => {
     fireEvent.click(getSkillRow('identical-drift-skill'));
 
     expect(await screen.findByRole('button', { name: /^Convert Copies to Symlinks$/i })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /^\+ Add Skill$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Add Skill$/i })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /^Convert Copies to Symlinks$/i }));
 
@@ -1253,7 +1256,7 @@ describe('App shell inventory views', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Add Skill/i }));
 
-    expect(await screen.findByRole('dialog', { name: /Add skill/i })).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: /Add skill/i });
     fireEvent.click(screen.getByRole('tab', { name: /Paste Markdown/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /Skill name/i }), {
       target: { value: 'my-skill-name' },
@@ -1262,7 +1265,7 @@ describe('App shell inventory views', () => {
       target: { value: '# my-skill\n\nUse this skill.\n' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Add skill$/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Add skill$/i }));
 
     await waitFor(() => {
       expect(addSkillMock).toHaveBeenCalledWith({
@@ -1287,11 +1290,12 @@ describe('App shell inventory views', () => {
     await openSkills();
     fireEvent.click(screen.getByRole('button', { name: /Add Skill/i }));
 
-    const sourceInput = await screen.findByRole('textbox', { name: /Repository or skill URL/i });
+    const dialog = await screen.findByRole('dialog', { name: /Add skill/i });
+    const sourceInput = within(dialog).getByRole('textbox', { name: /Repository or skill URL/i });
     fireEvent.change(sourceInput, {
       target: { value: 'https://github.com/example/agent-skills' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Add skill$/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Add skill$/i }));
 
     await waitFor(() => {
       expect(addSkillMock).toHaveBeenCalledWith({
@@ -1384,7 +1388,7 @@ describe('App shell inventory views', () => {
     render(<App />);
     await openMcps();
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Server/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add MCP/i }));
 
     expect(await screen.findByRole('dialog', { name: /Add Server/i })).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/One argument per line/i)).toBeInTheDocument();
@@ -1423,6 +1427,117 @@ describe('App shell inventory views', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /Add Server/i })).not.toBeInTheDocument();
     });
+  });
+
+  it('opens the Add Subagent modal from the global Add menu and submits it through the desktop API', async () => {
+    render(<App />);
+    await openAgents();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Open Add menu$/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Add Subagent$/i }));
+
+    expect(await screen.findByRole('dialog', { name: /Add Subagent/i })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: /Subagent name/i }), {
+      target: { value: 'reviewer' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /Markdown contents/i }), {
+      target: {
+        value: [
+          '---',
+          'name: reviewer',
+          'description: Reviews implementation changes.',
+          '---',
+          'Review the diff and call out correctness risks.',
+          '',
+        ].join('\n'),
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Add Subagent$/i }));
+
+    await waitFor(() => {
+      expect(addSubagentMock).toHaveBeenCalledWith({
+        sourceType: 'definition',
+        name: 'reviewer',
+        format: 'markdown-frontmatter',
+        definition: [
+          '---',
+          'name: reviewer',
+          'description: Reviews implementation changes.',
+          '---',
+          'Review the diff and call out correctness risks.',
+          '',
+        ].join('\n'),
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Add Subagent/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('uses markdown copy for the Add Subagent content path', async () => {
+    readCachedInventoryMock.mockResolvedValue(structuredClone(representativeInventorySnapshot));
+    scanInventoryMock.mockResolvedValue(structuredClone(representativeInventorySnapshot));
+    addSubagentMock.mockResolvedValueOnce(createInventorySnapshotWithAddedSubagent('markdown-reviewer'));
+    render(<App />);
+    fireEvent.click(within(await getPrimaryNavAsync()).getByRole('button', { name: /^Subagents/i }));
+    await screen.findByRole('heading', { name: /^Subagents$/i, level: 2 });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Add Subagent$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Add Subagent/i });
+
+    expect(within(dialog).queryByRole('tab', { name: /^Write$/i })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('tab', { name: /^Paste Definition$/i })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('combobox', { name: /Format/i })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: /Markdown contents/i })).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Subagent name/i }), {
+      target: { value: 'reviewer' },
+    });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Markdown contents/i }), {
+      target: {
+        value: [
+          '---',
+          'name: markdown-reviewer',
+          'description: Reviews Markdown changes.',
+          '---',
+          'Use Markdown review guidance.',
+          '',
+        ].join('\n'),
+      },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Add Subagent$/i }));
+
+    await waitFor(() => {
+      expect(addSubagentMock).toHaveBeenCalledWith({
+        sourceType: 'definition',
+        name: 'reviewer',
+        format: 'markdown-frontmatter',
+        definition: [
+          '---',
+          'name: markdown-reviewer',
+          'description: Reviews Markdown changes.',
+          '---',
+          'Use Markdown review guidance.',
+          '',
+        ].join('\n'),
+      });
+    });
+    expect(await screen.findByRole('status')).toHaveTextContent('markdown-reviewer was added.');
+  });
+
+  it('defaults the Add dropdown to the current inventory kind', async () => {
+    render(<App />);
+
+    await openSkills();
+    expect(screen.getByRole('button', { name: /^Add Skill$/i })).toBeInTheDocument();
+
+    await openMcps();
+    expect(screen.getByRole('button', { name: /^Add MCP$/i })).toBeInTheDocument();
+
+    fireEvent.click(within(await getPrimaryNavAsync()).getByRole('button', { name: /^Subagents/i }));
+    await screen.findByRole('heading', { name: /^Subagents$/i, level: 2 });
+    expect(screen.getByRole('button', { name: /^Add Subagent$/i })).toBeInTheDocument();
   });
 
   it('filters MCPs from the summary badges above the table', async () => {
@@ -3022,6 +3137,46 @@ function createInventorySnapshot(): SkillInventorySnapshot {
       dismissedDriftSkills: 1,
     },
   });
+}
+
+function createInventorySnapshotWithAddedSubagent(name: string): SkillInventorySnapshot {
+  const snapshot = structuredClone(representativeInventorySnapshot);
+  const addedSubagent: NonNullable<SkillInventorySnapshot['subagents']>[number] = {
+    name,
+    displayName: name,
+    description: 'Reviews Codex changes.',
+    status: 'healthy',
+    presentation: 'none',
+    issueReasons: [],
+    locations: [
+      {
+        agentId: 'sandbox-agents-subagents',
+        agentLabel: 'Sandbox .agents',
+        scope: 'sandbox',
+        path: `${DEFAULT_SANDBOX_ROOT}/.agents/agents/${name}.md`,
+        directoryPath: `${DEFAULT_SANDBOX_ROOT}/.agents/agents`,
+        fileType: 'real-file',
+        modifiedAt: '2026-04-09T00:00:10.000Z',
+        canonical: true,
+        format: 'markdown-frontmatter',
+        description: 'Reviews Codex changes.',
+      },
+    ],
+  };
+
+  const subagents = [...(snapshot.subagents ?? []), addedSubagent];
+  return {
+    ...snapshot,
+    subagents,
+    subagentCounts: {
+      totalSubagents: subagents.length,
+      attentionSubagents: subagents.filter((subagent) =>
+        subagent.status === 'needs-attention' && subagent.presentation === 'active').length,
+      healthySubagents: subagents.filter((subagent) => subagent.status === 'healthy').length,
+      dismissedAttentionSubagents: subagents.filter((subagent) =>
+        subagent.status === 'needs-attention' && subagent.presentation === 'dismissed').length,
+    },
+  };
 }
 
 function createInventorySnapshotWithAcceptedPluginAlternate(): SkillInventorySnapshot {
