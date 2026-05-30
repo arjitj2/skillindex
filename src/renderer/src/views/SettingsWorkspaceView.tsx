@@ -11,6 +11,7 @@ import {
 } from '../components/ui';
 
 export function SettingsWorkspaceView({
+  addActionControl,
   customScanPathInput,
   devToolsEnabled,
   handleAddCustomScanPath,
@@ -37,6 +38,7 @@ export function SettingsWorkspaceView({
   setPreferredCanonicalSourcePathInput,
   shellState,
 }: {
+  addActionControl?: ReactNode;
   customScanPathInput: string;
   devToolsEnabled: boolean;
   handleAddCustomScanPath: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -72,7 +74,10 @@ export function SettingsWorkspaceView({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+          <div className="header-action-cluster">
+            <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+            {addActionControl}
+          </div>
         )}
         title="Settings"
       />

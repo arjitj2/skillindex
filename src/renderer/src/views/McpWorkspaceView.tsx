@@ -7,7 +7,7 @@ import type {
   ResolveIssueRequest,
   SkillInventorySnapshot,
 } from '@shared/contracts';
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 
 import { getMcpDisplayName, getMcpSections, hasSearchQuery } from '../inventory-view-model';
 import {
@@ -28,20 +28,18 @@ import {
   PageTopBar,
   PLUGIN_MCP_TOOLTIP,
   RescanToolbarButton,
-  ToolbarButton,
   WorkspaceFilterBar,
 } from '../components/ui';
 
 export function McpWorkspaceView({
+  addActionControl,
   inventorySnapshot,
-  isAddingMcpServer,
   isDismissingDrift,
   isResolvingIssue,
   isRescanning,
   mcp,
   mcpInspectorModel,
   sandboxRoot,
-  onAddMcpServer,
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -57,15 +55,14 @@ export function McpWorkspaceView({
   searchQuery,
   statusFilter,
 }: {
+  addActionControl?: ReactNode;
   inventorySnapshot: SkillInventorySnapshot | null;
-  isAddingMcpServer: boolean;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
   isRescanning: boolean;
   mcp: McpRecord | null;
   mcpInspectorModel: InspectorModel | null;
   sandboxRoot: string | null;
-  onAddMcpServer: (request: AddMcpServerRequest) => Promise<void>;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -96,7 +93,6 @@ export function McpWorkspaceView({
         totalMcps: inventorySnapshot.mcpCounts.totalMcps,
       })
     : 'Scanning your MCP inventory…';
-  const [isAddServerModalOpen, setIsAddServerModalOpen] = useState(false);
 
   useEffect(() => {
     if (!mcp) {
@@ -113,13 +109,7 @@ export function McpWorkspaceView({
           actions={(
             <div className="header-action-cluster">
               <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
-              <ToolbarButton
-                label="Add Server"
-                variant="strong"
-                onClick={() => {
-                  setIsAddServerModalOpen(true);
-                }}
-              />
+              {addActionControl}
             </div>
           )}
           search={(
@@ -196,20 +186,6 @@ export function McpWorkspaceView({
         </div>
       </main>
 
-      {isAddServerModalOpen ? (
-        <AddServerModal
-          isSubmitting={isAddingMcpServer}
-          onClose={() => {
-            if (!isAddingMcpServer) {
-              setIsAddServerModalOpen(false);
-            }
-          }}
-          onSubmit={async (request) => {
-            await onAddMcpServer(request);
-            setIsAddServerModalOpen(false);
-          }}
-        />
-      ) : null}
     </>
   );
 }
@@ -247,7 +223,7 @@ function getMcpEmptyStateMessage({
 
 type AddServerMode = 'stdio' | 'remote';
 
-function AddServerModal({
+export function AddServerModal({
   isSubmitting,
   onClose,
   onSubmit,

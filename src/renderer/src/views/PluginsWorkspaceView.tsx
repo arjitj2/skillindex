@@ -6,7 +6,7 @@ import type {
   PluginUnsupportedAssetRef,
   SkillInventorySnapshot,
 } from '@shared/contracts';
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 
 import { hasSearchQuery } from '../inventory-view-model';
 import {
@@ -19,6 +19,7 @@ import {
 import { formatInspectorDisplayPath } from '../lib/inventory-presentation';
 
 export function PluginsWorkspaceView({
+  addActionControl,
   inventorySnapshot,
   isRescanning,
   onCancelMcpConnectivityTest,
@@ -36,6 +37,7 @@ export function PluginsWorkspaceView({
   selectedPlugin,
   selectedPluginKey,
 }: {
+  addActionControl?: ReactNode;
   inventorySnapshot: SkillInventorySnapshot | null;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
@@ -64,7 +66,10 @@ export function PluginsWorkspaceView({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+          <div className="header-action-cluster">
+            <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+            {addActionControl}
+          </div>
         )}
         search={(
           <HeaderSearch

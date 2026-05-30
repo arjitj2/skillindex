@@ -1,5 +1,5 @@
 import { ArrowRight, Check, ChevronRight, ChevronUp, Wrench } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import type { McpRecord, ResolveIssueRequest, SkillInventorySnapshot, SkillRecord, SkillScanSource, SubagentRecord } from '@shared/contracts';
 
@@ -471,6 +471,7 @@ function RepairSurface({
 }
 
 export function HomeDashboard({
+  addActionControl,
   autoResolvableRequests,
   homeSummary,
   inventorySnapshot,
@@ -484,6 +485,7 @@ export function HomeDashboard({
   onSelectSkill,
   onSelectSubagent,
 }: {
+  addActionControl?: ReactNode;
   autoResolvableRequests: ResolveIssueRequest[];
   homeSummary: ReturnType<typeof getHomeSummary>;
   inventorySnapshot: SkillInventorySnapshot | null;
@@ -602,7 +604,10 @@ export function HomeDashboard({
     <main className="workspace-view">
       <PageTopBar
         actions={(
-          <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+          <div className="header-action-cluster">
+            <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
+            {addActionControl}
+          </div>
         )}
         title="Home"
       />

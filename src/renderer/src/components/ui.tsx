@@ -1,5 +1,5 @@
 import type { AgentRecord } from '@shared/contracts';
-import { Plug, Search, X } from 'lucide-react';
+import { ChevronDown, Plug, Plus, Search, X } from 'lucide-react';
 import {
   useEffect,
   useId,
@@ -257,6 +257,104 @@ export function ToolbarButton({
       ) : null}
       <span>{variant === 'strong' ? `+ ${visibleLabel}` : visibleLabel}</span>
     </button>
+  );
+}
+
+export interface AddActionDropdownItem {
+  id: string;
+  label: string;
+  onSelect: () => void;
+}
+
+export function AddActionDropdown({
+  defaultItemId,
+  items,
+}: {
+  defaultItemId?: string;
+  items: AddActionDropdownItem[];
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const defaultItem = items.find((item) => item.id === defaultItemId) ?? null;
+  const primaryLabel = defaultItem ? `Add ${defaultItem.label}` : 'Add';
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const runAction = (item: AddActionDropdownItem) => {
+    setIsOpen(false);
+    item.onSelect();
+  };
+
+  return (
+    <div className="add-action-dropdown" ref={rootRef}>
+      <button
+        aria-label={primaryLabel}
+        className="toolbar-button toolbar-button--strong add-action-dropdown__primary"
+        type="button"
+        onClick={() => {
+          if (defaultItem) {
+            runAction(defaultItem);
+            return;
+          }
+
+          setIsOpen((current) => !current);
+        }}
+      >
+        <span className="toolbar-button-icon" aria-hidden="true">
+          <Plus />
+        </span>
+        <span>{primaryLabel}</span>
+      </button>
+      <button
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        aria-label="Open Add menu"
+        className="toolbar-button toolbar-button--strong add-action-dropdown__toggle"
+        type="button"
+        onClick={() => {
+          setIsOpen((current) => !current);
+        }}
+      >
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {isOpen ? (
+        <div className="add-action-dropdown__menu" role="menu">
+          {items.map((item) => (
+            <button
+              className="add-action-dropdown__item"
+              key={item.id}
+              role="menuitem"
+              type="button"
+              onClick={() => runAction(item)}
+            >
+              Add {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

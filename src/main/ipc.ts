@@ -6,6 +6,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import {
   type AddMcpServerRequest,
   type AddSkillRequest,
+  type AddSubagentRequest,
   type AuditOperation,
   type CapabilityActionRequest,
   type ChooseDirectoryRequest,
@@ -69,6 +70,7 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC_CHANNELS.cancelMcpConnectivityTest);
   ipcMain.removeHandler(IPC_CHANNELS.addSkill);
   ipcMain.removeHandler(IPC_CHANNELS.addMcpServer);
+  ipcMain.removeHandler(IPC_CHANNELS.addSubagent);
   ipcMain.removeHandler(IPC_CHANNELS.resolveIssue);
   ipcMain.removeHandler(IPC_CHANNELS.applyCapabilityAction);
   ipcMain.removeHandler(IPC_CHANNELS.dismissDrift);
@@ -152,6 +154,11 @@ export function registerIpcHandlers(): void {
     IPC_CHANNELS.addMcpServer,
     (_event, request: AddMcpServerRequest) =>
       inventoryRuntime.addMcpServer(request, resolveInventoryScanOptions()),
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.addSubagent,
+    (_event, request: AddSubagentRequest) =>
+      inventoryRuntime.addSubagent(request, resolveInventoryScanOptions()),
   );
   ipcMain.handle(IPC_CHANNELS.resolveIssue, (_event, request: ResolveIssueRequest) =>
     inventoryRuntime.resolveIssue(request),

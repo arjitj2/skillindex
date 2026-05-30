@@ -8,7 +8,7 @@ import type {
   SkillRecord,
   SkillScanSource,
 } from '@shared/contracts';
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 
 import { getSkillDisplayName, getSkillSections, hasSearchQuery } from '../inventory-view-model';
 import {
@@ -30,18 +30,15 @@ import {
   PageTopBar,
   PLUGIN_SKILL_TOOLTIP,
   RescanToolbarButton,
-  ToolbarButton,
   WorkspaceFilterBar,
 } from '../components/ui';
 
 export function SkillsWorkspaceView({
-  isAddingSkill,
   inventorySnapshot,
   isDismissingDrift,
   isApplyingCapabilityAction,
   isResolvingIssue,
   isRescanning,
-  onAddSkill,
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -64,14 +61,13 @@ export function SkillsWorkspaceView({
   setStatusFilter,
   sourceIndex,
   statusFilter,
+  addActionControl,
 }: {
-  isAddingSkill: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
   isRescanning: boolean;
-  onAddSkill: (request: AddSkillRequest) => Promise<void>;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -94,6 +90,7 @@ export function SkillsWorkspaceView({
   setStatusFilter: (filter: SkillStatusFilter) => void;
   sourceIndex: Map<string, SkillScanSource>;
   statusFilter: SkillStatusFilter;
+  addActionControl?: ReactNode;
 }) {
   const sections = filterVisibleSections(inventorySnapshot ? getSkillSections(inventorySnapshot) : [], rows);
   const filters = inventorySnapshot
@@ -111,7 +108,6 @@ export function SkillsWorkspaceView({
         totalSkills: inventorySnapshot.counts.totalSkills,
       })
     : 'Scanning your skill inventory…';
-  const [isAddSkillModalOpen, setIsAddSkillModalOpen] = useState(false);
 
   useEffect(() => {
     if (!selectedSkill) {
@@ -128,13 +124,7 @@ export function SkillsWorkspaceView({
           actions={(
             <div className="header-action-cluster">
               <RescanToolbarButton isRescanning={isRescanning} onCancel={onCancelMcpConnectivityTest} onRescan={onRescan} />
-              <ToolbarButton
-                label="Add Skill"
-                variant="strong"
-                onClick={() => {
-                  setIsAddSkillModalOpen(true);
-                }}
-              />
+              {addActionControl}
             </div>
           )}
           search={(
@@ -225,20 +215,6 @@ export function SkillsWorkspaceView({
         </div>
       </main>
 
-      {isAddSkillModalOpen ? (
-        <AddSkillModal
-          isSubmitting={isAddingSkill}
-          onClose={() => {
-            if (!isAddingSkill) {
-              setIsAddSkillModalOpen(false);
-            }
-          }}
-          onSubmit={async (request) => {
-            await onAddSkill(request);
-            setIsAddSkillModalOpen(false);
-          }}
-        />
-      ) : null}
     </>
   );
 }
@@ -394,7 +370,7 @@ function hasPluginSkillLocation(skill: SkillRecord, sourceIndex: Map<string, Ski
     location.provenance?.kind === 'plugin' || sourceIndex.get(location.sourceId)?.kind === 'plugin');
 }
 
-function AddSkillModal({
+export function AddSkillModal({
   isSubmitting,
   onClose,
   onSubmit,

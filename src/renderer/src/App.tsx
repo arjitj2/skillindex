@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronUp, Copy, Undo2 } from 'lucide-react';
 import {
   type AddSkillRequest,
   type AddMcpServerRequest,
+  type AddSubagentRequest,
   APP_NAME,
   type AppShellState,
   type AuditOperation,
@@ -35,6 +36,7 @@ import {
 import { getAutoResolvableMcpRequests, getAutoResolvableSkillRequests, getAutoResolvableSubagentRequests } from './lib/issue-resolution';
 import type { PendingInventoryOperation } from './lib/pending-inventory-operation';
 import { AppSidebar } from './components/AppSidebar';
+import { AddActionDropdown, type AddActionDropdownItem } from './components/ui';
 import {
   buildMcpInspectorModel,
   buildSkillInspectorModel,
@@ -66,12 +68,12 @@ import {
 import { AgentsWorkspaceView } from './views/AgentsWorkspaceView';
 import { AuditWorkspaceView } from './views/AuditWorkspaceView';
 import { HomeDashboard } from './views/HomeDashboard';
-import { McpWorkspaceView } from './views/McpWorkspaceView';
+import { AddServerModal, McpWorkspaceView } from './views/McpWorkspaceView';
 import { OnboardingFlow } from './views/OnboardingFlow';
 import { PluginsWorkspaceView } from './views/PluginsWorkspaceView';
 import { SettingsWorkspaceView } from './views/SettingsWorkspaceView';
-import { SkillsWorkspaceView } from './views/SkillsWorkspaceView';
-import { SubagentsWorkspaceView } from './views/SubagentsWorkspaceView';
+import { AddSkillModal, SkillsWorkspaceView } from './views/SkillsWorkspaceView';
+import { AddSubagentModal, SubagentsWorkspaceView } from './views/SubagentsWorkspaceView';
 
 function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot): ResolveIssueRequest[] {
   const sourceIndex = new Map(snapshot.sources.map((source) => [source.id, source]));
@@ -184,6 +186,8 @@ export default function App() {
   const [isTestingMcpConnectivity, setIsTestingMcpConnectivity] = useState(false);
   const [isAddingSkill, setIsAddingSkill] = useState(false);
   const [isAddingMcpServer, setIsAddingMcpServer] = useState(false);
+  const [isAddingSubagent, setIsAddingSubagent] = useState(false);
+  const [activeAddModal, setActiveAddModal] = useState<'skill' | 'mcp' | 'subagent' | null>(null);
   const [appToast, setAppToast] = useState<{
     description: string;
     id: number;
@@ -796,6 +800,24 @@ export default function App() {
       throw error instanceof Error ? error : new Error(message);
     } finally {
       setIsAddingMcpServer(false);
+    }
+  }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast]);
+
+  const handleAddSubagent = useCallback(async (request: AddSubagentRequest) => {
+    setIsAddingSubagent(true);
+
+    try {
+      const previousSnapshot = latestInventorySnapshotRef.current;
+      const nextInventorySnapshot = await desktopApi.addSubagent(request);
+      const addedSubagentName = getAddedSubagentName(request, previousSnapshot, nextInventorySnapshot);
+      applyInventorySnapshot(nextInventorySnapshot);
+      setSelectedSubagentName(addedSubagentName);
+      await showAppToastWithLatestUndo('Subagent added', `${addedSubagentName} was added.`);
+    } catch (error) {
+      const message = showErrorToast('Subagent add failed', error);
+      throw error instanceof Error ? error : new Error(message);
+    } finally {
+      setIsAddingSubagent(false);
     }
   }, [applyInventorySnapshot, desktopApi, showAppToastWithLatestUndo, showErrorToast]);
 
@@ -1516,6 +1538,27 @@ export default function App() {
   const isInventoryRefreshActive = isRescanning;
   const isRescanActionBusy = isRescanning || isTestingMcpConnectivity;
   const onCancelMcpConnectivityTest = isTestingMcpConnectivity ? cancelMcpConnectivityTest : undefined;
+  const addActionItems = useMemo<AddActionDropdownItem[]>(() => [
+    {
+      id: 'skill',
+      label: 'Skill',
+      onSelect: () => setActiveAddModal('skill'),
+    },
+    {
+      id: 'mcp',
+      label: 'MCP',
+      onSelect: () => setActiveAddModal('mcp'),
+    },
+    {
+      id: 'subagent',
+      label: 'Subagent',
+      onSelect: () => setActiveAddModal('subagent'),
+    },
+  ], []);
+  const renderAddActionControl = useCallback((defaultItemId?: 'skill' | 'mcp' | 'subagent') => (
+    <AddActionDropdown defaultItemId={defaultItemId} items={addActionItems} />
+  ), [addActionItems]);
+
   if (!hasLoadedStartupState) {
     return <StartupScreen appName={APP_NAME} />;
   }
@@ -1527,6 +1570,7 @@ export default function App() {
     case 'home':
       mainContent = (
         <HomeDashboard
+          addActionControl={renderAddActionControl()}
           autoResolvableRequests={autoResolvableRequests}
           homeSummary={homeSummary}
           inventorySnapshot={inventorySnapshot}
@@ -1545,13 +1589,12 @@ export default function App() {
     case 'skills':
       mainContent = (
         <SkillsWorkspaceView
-          isAddingSkill={isAddingSkill}
+          addActionControl={renderAddActionControl('skill')}
           inventorySnapshot={inventorySnapshot}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
           isApplyingCapabilityAction={isApplyingCapabilityAction}
           isRescanning={isRescanActionBusy}
-          onAddSkill={handleAddSkill}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
@@ -1580,15 +1623,14 @@ export default function App() {
     case 'mcps':
       mainContent = (
         <McpWorkspaceView
+          addActionControl={renderAddActionControl('mcp')}
           inventorySnapshot={inventorySnapshot}
-          isAddingMcpServer={isAddingMcpServer}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
           isRescanning={isRescanActionBusy}
           mcp={selectedMcp}
           mcpInspectorModel={selectedMcpInspectorModel}
           sandboxRoot={shellState?.devTools?.sandboxRoot ?? null}
-          onAddMcpServer={handleAddMcpServer}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
@@ -1609,6 +1651,7 @@ export default function App() {
     case 'subagents':
       mainContent = (
         <SubagentsWorkspaceView
+          addActionControl={renderAddActionControl('subagent')}
           inventorySnapshot={inventorySnapshot}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
@@ -1637,6 +1680,7 @@ export default function App() {
     case 'agents':
       mainContent = (
         <AgentsWorkspaceView
+          addActionControl={renderAddActionControl()}
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
@@ -1651,6 +1695,7 @@ export default function App() {
     case 'plugins':
       mainContent = (
         <PluginsWorkspaceView
+          addActionControl={renderAddActionControl()}
           inventorySnapshot={inventorySnapshot}
           isRescanning={isRescanActionBusy}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
@@ -1677,6 +1722,7 @@ export default function App() {
     case 'audit':
       mainContent = (
         <AuditWorkspaceView
+          addActionControl={renderAddActionControl()}
           auditOperations={auditOperations}
           isRescanning={isRescanActionBusy}
           isUndoingOperation={isUndoingToastOperation}
@@ -1694,6 +1740,7 @@ export default function App() {
     case 'settings':
       mainContent = (
         <SettingsWorkspaceView
+          addActionControl={renderAddActionControl()}
           customScanPathInput={customScanPathInput}
           handleAddCustomScanPath={handleAddCustomScanPath}
           handleClearPreferredCanonicalSourcePath={handleClearPreferredCanonicalSourcePath}
@@ -1811,6 +1858,46 @@ export default function App() {
       </section>
     </div>
   ) : null;
+  const addModalElement = activeAddModal === 'skill' ? (
+    <AddSkillModal
+      isSubmitting={isAddingSkill}
+      onClose={() => {
+        if (!isAddingSkill) {
+          setActiveAddModal(null);
+        }
+      }}
+      onSubmit={async (request) => {
+        await handleAddSkill(request);
+        setActiveAddModal(null);
+      }}
+    />
+  ) : activeAddModal === 'mcp' ? (
+    <AddServerModal
+      isSubmitting={isAddingMcpServer}
+      onClose={() => {
+        if (!isAddingMcpServer) {
+          setActiveAddModal(null);
+        }
+      }}
+      onSubmit={async (request) => {
+        await handleAddMcpServer(request);
+        setActiveAddModal(null);
+      }}
+    />
+  ) : activeAddModal === 'subagent' ? (
+    <AddSubagentModal
+      isSubmitting={isAddingSubagent}
+      onClose={() => {
+        if (!isAddingSubagent) {
+          setActiveAddModal(null);
+        }
+      }}
+      onSubmit={async (request) => {
+        await handleAddSubagent(request);
+        setActiveAddModal(null);
+      }}
+    />
+  ) : null;
 
   if (shouldShowOnboarding) {
     return (
@@ -1869,6 +1956,7 @@ export default function App() {
         <div className="app-main">{mainContent}</div>
       </div>
 
+      {addModalElement}
       {appToastRegion}
 
       <AutoUpdateDialog
@@ -1968,6 +2056,21 @@ function getUpdateDownloadSizeLabel(status: AutoUpdateStatus): string | null {
 
 function formatMegabytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+function getAddedSubagentName(
+  request: AddSubagentRequest,
+  previousSnapshot: SkillInventorySnapshot | null,
+  nextInventorySnapshot: SkillInventorySnapshot,
+): string {
+  const requestedName = request.name.trim();
+  if (nextInventorySnapshot.subagents?.some((subagent) => subagent.name === requestedName)) {
+    return requestedName;
+  }
+
+  const previousNames = new Set(previousSnapshot?.subagents?.map((subagent) => subagent.name) ?? []);
+  const addedSubagent = nextInventorySnapshot.subagents?.find((subagent) => !previousNames.has(subagent.name));
+  return addedSubagent?.name ?? requestedName;
 }
 
 function StartupScreen({ appName }: { appName: string }) {

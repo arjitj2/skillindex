@@ -966,6 +966,53 @@ describe('inventory runtime', () => {
     });
   });
 
+  it('audits pasted subagent definitions under the parsed subagent name', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-subagent-audit-'));
+    const env = {
+      SKILL_INDEX_DATA_DIR: root,
+    };
+    const paths = resolveSkillIndexPaths({ env });
+
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+
+    await mkdir(path.join(paths.sandboxRoot, '.codex'), { recursive: true });
+    await runtime.scanInventory({
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    await runtime.addSubagent({
+      sourceType: 'definition',
+      name: 'fallback-reviewer',
+      format: 'codex-toml',
+      definition: [
+        'name = "codex-reviewer"',
+        'description = "Reviews Codex changes."',
+        'developer_instructions = "Use Codex-specific review guidance."',
+        '',
+      ].join('\n'),
+    }, {
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation).toMatchObject({
+      entity: { type: 'subagent', name: 'codex-reviewer' },
+      kind: 'add-subagent',
+      sourceMode: 'sandbox',
+      title: 'Added subagent codex-reviewer',
+    });
+    expect(operation.actions.map((action) => action.path)).toContain(
+      path.join(paths.sandboxRoot, '.agents', 'agents', 'codex-reviewer.md'),
+    );
+    expect(operation.actions.map((action) => action.path)).not.toContain(
+      path.join(paths.sandboxRoot, '.agents', 'agents', 'fallback-reviewer.md'),
+    );
+  });
+
   it('audits failed issue resolutions with a shareable failure trace', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-failed-resolution-audit-'));
     const paths = resolveSkillIndexPaths({
