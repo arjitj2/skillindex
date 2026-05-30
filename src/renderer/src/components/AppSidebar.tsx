@@ -12,7 +12,7 @@ export interface AppNavItem {
   icon: Extract<NavIconName, 'home' | 'skills' | 'mcps' | 'subagents' | 'agents' | 'plugins'>;
   label: string;
   meta?: number;
-  tab: Exclude<PrimaryTab, 'audit' | 'settings'>;
+  tab: Exclude<PrimaryTab, 'agents' | 'audit' | 'settings'>;
   tone?: 'attention';
 }
 
@@ -127,6 +127,21 @@ export function AppSidebar({
 
         <nav aria-label="Secondary">
           <ul className="nav-list nav-list--secondary">
+            <li>
+              <button
+                aria-pressed={activeTab === 'agents'}
+                className={`settings-button${activeTab === 'agents' ? ' settings-button--active' : ''}`}
+                type="button"
+                onClick={() => onSelectTab('agents')}
+              >
+                <span className="nav-button-main">
+                  <span>Agent Directory</span>
+                </span>
+                <span className="nav-button-trailing">
+                  <span className="nav-secondary-count">{inventorySnapshot?.agentCounts?.installedAgents ?? 0}</span>
+                </span>
+              </button>
+            </li>
             <li>
               <button
                 aria-pressed={activeTab === 'audit'}

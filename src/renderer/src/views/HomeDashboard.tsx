@@ -291,26 +291,10 @@ function formatCleanGroupCopy(labels: string[]): { label: string; verb: 'is' | '
   };
 }
 
-function getHomeAttentionBadgeTone(label: string): AttentionBadge['tone'] {
-  if (label === 'Healthy') {
-    return 'healthy';
-  }
-
-  if (label === 'Dismissed') {
-    return 'muted';
-  }
-
-  if (label.includes('Diverged') || label.includes('Definition Mismatch')) {
-    return 'attention';
-  }
-
-  return 'warning';
-}
-
 function toHomeAttentionBadges(labels: string[]): AttentionBadge[] {
   return labels.map((label) => ({
     label,
-    tone: getHomeAttentionBadgeTone(label),
+    tone: 'attention',
   }));
 }
 
@@ -520,19 +504,19 @@ export function HomeDashboard({
       severity: 'alert',
     },
     {
-      key: 'subagents',
-      label: 'Subagents',
-      total: subagentSummary.total,
-      unit: 'on disk',
-      needsAttention: subagentSummary.needsAttention,
-      severity: 'warn',
-    },
-    {
       key: 'mcps',
       label: 'MCPs',
       total: homeSummary.mcps.total,
       unit: 'servers',
       needsAttention: homeSummary.mcps.needsAttention,
+      severity: 'warn',
+    },
+    {
+      key: 'subagents',
+      label: 'Subagents',
+      total: subagentSummary.total,
+      unit: 'on disk',
+      needsAttention: subagentSummary.needsAttention,
       severity: 'warn',
     },
   ];

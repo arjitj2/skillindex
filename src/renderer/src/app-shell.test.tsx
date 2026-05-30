@@ -51,6 +51,7 @@ describe('App shell inventory views', () => {
   let addSubagentMock: Mock<SkillIndexDesktopApi['addSubagent']>;
   let makeCanonicalMock: Mock<SkillIndexDesktopApi['resolveIssue']>;
   let dismissDriftMock: Mock<SkillIndexDesktopApi['dismissDrift']>;
+  let removeInventoryItemMock: Mock<SkillIndexDesktopApi['removeInventoryItem']>;
   let applyCapabilityActionMock: Mock<SkillIndexDesktopApi['applyCapabilityAction']>;
   let readAuditLogMock: Mock<SkillIndexDesktopApi['readAuditLog']>;
   let undoAuditOperationMock: Mock<SkillIndexDesktopApi['undoAuditOperation']>;
@@ -84,6 +85,7 @@ describe('App shell inventory views', () => {
     addSubagentMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     makeCanonicalMock = vi.fn().mockResolvedValue(createCanonicalizedDivergedInventorySnapshot());
     dismissDriftMock = vi.fn().mockResolvedValue(createDismissedIdenticalDriftInventorySnapshot());
+    removeInventoryItemMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     applyCapabilityActionMock = vi.fn().mockResolvedValue(createInventorySnapshot());
     readAuditLogMock = vi.fn().mockResolvedValue([]);
     undoAuditOperationMock = vi.fn().mockResolvedValue({
@@ -139,6 +141,7 @@ describe('App shell inventory views', () => {
       addSubagent: addSubagentMock,
       resolveIssue: makeCanonicalMock,
       dismissDrift: dismissDriftMock,
+      removeInventoryItem: removeInventoryItemMock,
       applyCapabilityAction: applyCapabilityActionMock,
       readAuditLog: readAuditLogMock,
       undoAuditOperation: undoAuditOperationMock,
@@ -257,8 +260,8 @@ describe('App shell inventory views', () => {
   }
 
   async function openAgents() {
-    fireEvent.click(within(await getPrimaryNavAsync()).getByRole('button', { name: /^Agents/i }));
-    await screen.findByRole('heading', { name: /^Agents$/i, level: 2 });
+    fireEvent.click(await screen.findByRole('button', { name: /^Agent Directory/i }));
+    await screen.findByRole('heading', { name: /^Agent Directory$/i, level: 2 });
     await waitFor(() => {
       expect(getAgentDataRows().length).toBeGreaterThan(0);
     });
@@ -279,7 +282,7 @@ describe('App shell inventory views', () => {
     return row as HTMLElement;
   }
 
-  it('launches into Home with six primary tabs and keeps Audit Log above Settings', async () => {
+  it('launches into Home with five primary tabs and keeps Agent Directory above Audit Log', async () => {
     readAuditLogMock.mockResolvedValue(createAuditOperations());
     render(<App />);
 
@@ -290,30 +293,30 @@ describe('App shell inventory views', () => {
 
     const installedAgentCount = createInventorySnapshot().agentCounts?.installedAgents ?? 0;
 
-    expect(within(primaryNav).getAllByRole('button')).toHaveLength(6);
+    expect(within(primaryNav).getAllByRole('button')).toHaveLength(5);
     expect(within(primaryNav).getAllByRole('button').map((button) => button.textContent?.replace(/\s+/g, ''))).toEqual([
       'Home',
       'Skills38',
       'MCPs16',
       'Subagents0',
       'Plugins0',
-      `Agents${installedAgentCount}`,
     ]);
     expect(within(primaryNav).getByRole('button', { name: /^Home$/i })).toHaveTextContent(/^Home$/);
     expect(within(primaryNav).getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills38$/);
     expect(within(primaryNav).getByRole('button', { name: /^MCPs/i })).toHaveTextContent(/^MCPs16$/);
     expect(within(primaryNav).getByRole('button', { name: /^Subagents/i })).toHaveTextContent(/^Subagents0$/);
-    expect(within(primaryNav).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${installedAgentCount}$`),
-    );
     expect(within(primaryNav).getByRole('button', { name: /^Plugins/i })).toHaveTextContent(/^Plugins0$/);
+    expect(within(primaryNav).queryByRole('button', { name: /^Agent Directory/i })).not.toBeInTheDocument();
     expect(within(primaryNav).queryByRole('button', { name: /^Audit Log$/i })).not.toBeInTheDocument();
     expect(within(primaryNav).queryByRole('button', { name: /^All Skills/i })).not.toBeInTheDocument();
     expect(within(primaryNav).queryByRole('button', { name: /^Drift/i })).not.toBeInTheDocument();
 
+    const agentDirectoryButton = screen.getByRole('button', { name: /^Agent Directory/i });
     const auditLogButton = screen.getByRole('button', { name: /^Audit Log$/i });
     const settingsButton = screen.getByRole('button', { name: /^Settings/i });
-    expect(primaryNav.compareDocumentPosition(auditLogButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(agentDirectoryButton).toHaveTextContent(new RegExp(`^Agent Directory${installedAgentCount}$`));
+    expect(primaryNav.compareDocumentPosition(agentDirectoryButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(agentDirectoryButton.compareDocumentPosition(auditLogButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(auditLogButton.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(primaryNav.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('heading', { name: /^Home$/i, level: 2 })).toBeInTheDocument();
@@ -1337,8 +1340,8 @@ describe('App shell inventory views', () => {
 
     expect(within(getPrimaryNav()).getByRole('button', { name: /^Skills/i })).toHaveTextContent(/^Skills38$/);
     expect(within(getPrimaryNav()).getByRole('button', { name: /^MCPs/i })).toHaveTextContent(/^MCPs16$/);
-    expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
+    expect(screen.getByRole('button', { name: /^Agent Directory/i })).toHaveTextContent(
+      new RegExp(`^Agent Directory${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
 
     await openSkills();
@@ -1570,8 +1573,8 @@ describe('App shell inventory views', () => {
     render(<App />);
     await openAgents();
 
-    expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
+    expect(screen.getByRole('button', { name: /^Agent Directory/i })).toHaveTextContent(
+      new RegExp(`^Agent Directory${createInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
 
     const list = getAgentsList();
@@ -1664,7 +1667,7 @@ describe('App shell inventory views', () => {
     expect(screen.getByRole('searchbox', { name: /Search MCPs/i })).toHaveFocus();
 
     await openAgents();
-    within(getPrimaryNav()).getByRole('button', { name: /^Agents/i }).focus();
+    screen.getByRole('button', { name: /^Agent Directory/i }).focus();
     fireEvent.keyDown(window, { key: 'f', metaKey: true });
     expect(screen.getByRole('searchbox', { name: /Search agents/i })).toHaveFocus();
   });
@@ -1772,6 +1775,84 @@ describe('App shell inventory views', () => {
     fireEvent.keyDown(window, { key: 'd' });
     await waitFor(() => {
       expect(dismissDriftMock).toHaveBeenCalledWith({ mcpName: 'broken-mcp' });
+    });
+  });
+
+  it('confirms removal in a styled dialog before removing detail items', async () => {
+    render(<App />);
+    await openSkills();
+
+    fireEvent.click(getSkillRow('identical-drift-skill'));
+    expect(await screen.findByRole('heading', { name: 'identical-drift-skill', level: 3 })).toBeInTheDocument();
+    const removeButton = screen.getByRole('button', { name: /^Remove$/i });
+    expect(within(removeButton).getByText('R')).toHaveClass('detail-inspector-panel__footer-shortcut');
+    expect(removeButton).toHaveAttribute('aria-keyshortcuts', 'R');
+
+    fireEvent.keyDown(window, { key: 'r' });
+    const dialog = await screen.findByRole('dialog', { name: /^Remove skill$/i });
+    expect(dialog).toHaveClass('remove-item-dialog');
+    expect(within(dialog).queryByText(/^Remove from inventory$/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/removed from every location Skill Index currently tracks/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/moved to Trash/i)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+
+    const confirmButton = within(dialog).getByRole('button', { name: /^Yes, remove$/i });
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(removeInventoryItemMock).toHaveBeenCalledWith({
+        entity: 'skill',
+        skillName: 'identical-drift-skill',
+      });
+    });
+
+    cleanup();
+    render(<App />);
+    await openMcps();
+    fireEvent.click(getMcpRow('broken-mcp'));
+    expect(await screen.findByRole('heading', { name: 'broken-mcp', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/i }));
+    const mcpDialog = await screen.findByRole('dialog', { name: /^Remove MCP$/i });
+    expect(within(mcpDialog).getByText(/There are no files to move to Trash/i)).toBeInTheDocument();
+    expect(within(mcpDialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(within(mcpDialog).getByRole('button', { name: /^Yes, remove$/i }));
+    await waitFor(() => {
+      expect(removeInventoryItemMock).toHaveBeenCalledWith({
+        entity: 'mcp',
+        mcpName: 'broken-mcp',
+      });
+    });
+
+    cleanup();
+    const subagentSnapshot = structuredClone(representativeInventorySnapshot);
+    readCachedInventoryMock.mockResolvedValue(subagentSnapshot);
+    scanInventoryMock.mockResolvedValue(subagentSnapshot);
+    removeInventoryItemMock.mockResolvedValue(subagentSnapshot);
+    api = {
+      ...api,
+      readCachedInventory: readCachedInventoryMock,
+      scanInventory: scanInventoryMock,
+      removeInventoryItem: removeInventoryItemMock,
+    };
+    Object.defineProperty(window, 'skillIndex', {
+      value: api,
+      configurable: true,
+      writable: true,
+    });
+    render(<App />);
+    await openSubagents();
+    fireEvent.click(getSubagentRow('reviewer'));
+    expect(await screen.findByRole('heading', { name: 'reviewer', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/i }));
+    const subagentDialog = await screen.findByRole('dialog', { name: /^Remove subagent$/i });
+    expect(within(subagentDialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(within(subagentDialog).getByRole('button', { name: /^Yes, remove$/i }));
+    await waitFor(() => {
+      expect(removeInventoryItemMock).toHaveBeenCalledWith({
+        entity: 'subagent',
+        subagentName: 'reviewer',
+      });
     });
   });
 
@@ -2067,8 +2148,8 @@ describe('App shell inventory views', () => {
     render(<App />);
 
     await screen.findByLabelText(/Home inventory metrics/i);
-    expect(within(getPrimaryNav()).getByRole('button', { name: /^Agents/i })).toHaveTextContent(
-      new RegExp(`^Agents${createOperationalBaselineInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
+    expect(screen.getByRole('button', { name: /^Agent Directory/i })).toHaveTextContent(
+      new RegExp(`^Agent Directory${createOperationalBaselineInventorySnapshot().agentCounts?.installedAgents ?? 0}$`),
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));

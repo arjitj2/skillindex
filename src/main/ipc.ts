@@ -13,6 +13,7 @@ import {
   type CompleteOnboardingRequest,
   type DismissDriftRequest,
   IPC_CHANNELS,
+  type RemoveInventoryItemRequest,
   type RescanInventoryRequest,
   type ResolveIssueRequest,
   type InventorySourceMode,
@@ -74,6 +75,7 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC_CHANNELS.resolveIssue);
   ipcMain.removeHandler(IPC_CHANNELS.applyCapabilityAction);
   ipcMain.removeHandler(IPC_CHANNELS.dismissDrift);
+  ipcMain.removeHandler(IPC_CHANNELS.removeInventoryItem);
   ipcMain.removeHandler(IPC_CHANNELS.readAuditLog);
   ipcMain.removeHandler(IPC_CHANNELS.undoAuditOperation);
   ipcMain.removeHandler(IPC_CHANNELS.releaseStartupObservation);
@@ -168,6 +170,9 @@ export function registerIpcHandlers(): void {
   );
   ipcMain.handle(IPC_CHANNELS.dismissDrift, (_event, request: DismissDriftRequest) =>
     inventoryRuntime.dismissDrift(request),
+  );
+  ipcMain.handle(IPC_CHANNELS.removeInventoryItem, (_event, request: RemoveInventoryItemRequest) =>
+    inventoryRuntime.removeInventoryItem(request, resolveInventoryScanOptions()),
   );
   ipcMain.handle(IPC_CHANNELS.readAuditLog, (_event, options?: { limit?: number }) =>
     inventoryRuntime.readAuditLog(options, resolveInventoryScanOptions()),

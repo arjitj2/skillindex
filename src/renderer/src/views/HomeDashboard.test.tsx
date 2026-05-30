@@ -29,13 +29,15 @@ describe('HomeDashboard', () => {
     expect(heading.parentElement).toHaveTextContent(/^Home$/);
   });
 
-  it('renders three inventory stat boxes without the future Commands box', () => {
+  it('renders Skills, MCPs, and Subagents inventory stat boxes in order', () => {
     renderDashboard();
 
     const metrics = screen.getByLabelText('Home inventory metrics');
-    expect(within(metrics).getByText('Skills')).toBeInTheDocument();
-    expect(within(metrics).getByText('Subagents')).toBeInTheDocument();
-    expect(within(metrics).getByText('MCPs')).toBeInTheDocument();
+    expect(within(metrics).getAllByText(/^(Skills|MCPs|Subagents)$/).map((label) => label.textContent)).toEqual([
+      'Skills',
+      'MCPs',
+      'Subagents',
+    ]);
     expect(within(metrics).queryByText('Commands')).not.toBeInTheDocument();
   });
 
@@ -61,6 +63,19 @@ describe('HomeDashboard', () => {
     expect(brokenMcpRow.querySelector('p')).toBeNull();
     expect(brokenMcpRow).toHaveTextContent('Definition Mismatch');
     expect(brokenMcpRow).toHaveTextContent('Invalid Definition');
+  });
+
+  it('uses the same attention tone for every issue badge in the attention table', () => {
+    renderDashboard();
+
+    const table = screen.getByRole('region', { name: /^Needs attention$/i });
+    const pills = table.querySelectorAll('.home-attention-status-pill');
+
+    expect(pills.length).toBeGreaterThan(0);
+    expect(table.querySelector('.home-attention-status-pill--warning')).toBeNull();
+    pills.forEach((pill) => {
+      expect(pill).toHaveClass('home-attention-status-pill--attention');
+    });
   });
 
   it('renders the healthy repair state without inline error banners', () => {

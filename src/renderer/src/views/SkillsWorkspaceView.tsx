@@ -3,6 +3,7 @@ import type {
   CapabilityActionRequest,
   DismissDriftRequest,
   ResolveIssueRequest,
+  RemoveInventoryItemRequest,
   SkillIssueReason,
   SkillInventorySnapshot,
   SkillRecord,
@@ -38,12 +39,14 @@ export function SkillsWorkspaceView({
   isDismissingDrift,
   isApplyingCapabilityAction,
   isResolvingIssue,
+  isRemovingInventoryItem = false,
   isRescanning,
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
   onApplyCapabilityAction,
   onOpenPluginSource,
+  onRequestRemove = () => undefined,
   onResolveIssue,
   onRescan,
   rows,
@@ -67,12 +70,14 @@ export function SkillsWorkspaceView({
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
+  isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
   onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
   onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
+  onRequestRemove?: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onRescan: () => Promise<void>;
   rows: SkillRecord[];
@@ -197,11 +202,13 @@ export function SkillsWorkspaceView({
                 isDismissingDrift={isDismissingDrift}
                 isApplyingCapabilityAction={isApplyingCapabilityAction}
                 isResolvingIssue={isResolvingIssue}
+                isRemovingInventoryItem={isRemovingInventoryItem}
                 onClearSelection={onClearSelection}
                 onDismissDrift={onDismissDrift}
                 onApplyCapabilityAction={onApplyCapabilityAction}
                 onResolveIssue={onResolveIssue}
                 onOpenPluginSource={onOpenPluginSource}
+                onRequestRemove={onRequestRemove}
                 sandboxRoot={sandboxRoot}
                 selectedSkill={selectedSkill}
                 selectedSkillInspectorModel={selectedSkillInspectorModel}
@@ -252,10 +259,12 @@ function SkillDetailPanel({
   isDismissingDrift,
   isApplyingCapabilityAction,
   isResolvingIssue,
+  isRemovingInventoryItem,
   onClearSelection,
   onDismissDrift,
   onApplyCapabilityAction,
   onOpenPluginSource,
+  onRequestRemove,
   onResolveIssue,
   sandboxRoot,
   selectedSkill,
@@ -268,10 +277,12 @@ function SkillDetailPanel({
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
+  isRemovingInventoryItem: boolean;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
   onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
   onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
+  onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   sandboxRoot: string | null;
   selectedSkill: SkillRecord;
@@ -329,6 +340,18 @@ function SkillDetailPanel({
             variant: 'subtle' as const,
           }]
           : []),
+        {
+          disabled: isRemovingInventoryItem,
+          label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
+          onClick: () => {
+            onRequestRemove({
+              entity: 'skill',
+              skillName: selectedSkill.name,
+            }, selectedSkill.displayName ?? selectedSkill.name);
+          },
+          shortcut: 'R',
+          variant: 'danger' as const,
+        },
       ]}
       model={inspectorModel}
       ariaLabel="Skill detail"

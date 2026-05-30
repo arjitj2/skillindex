@@ -920,6 +920,48 @@ describe('DetailInspectorPanel', () => {
     expect(screen.queryByRole('button', { name: helpText })).not.toBeInTheDocument();
   });
 
+  it('renders dismiss and remove footer actions as a two-third and one-third action row', () => {
+    const skill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'identical-drift-skill');
+    expect(skill).toBeDefined();
+
+    const model = buildSkillInspectorModel(skill!, sourceIndex, {
+      selectedProblemKey: 'identical-copies',
+      selectedVariantPath: null,
+    }, agentIndex);
+    const onDismiss = vi.fn();
+    const onRemove = vi.fn();
+
+    render(
+      <DetailInspectorPanel
+        footerActions={[
+          { label: 'Dismiss issues with this skill', onClick: onDismiss, shortcut: 'D', variant: 'subtle' },
+          { label: 'Remove', onClick: onRemove, shortcut: 'R', variant: 'danger' },
+        ]}
+        model={model}
+        onClose={() => undefined}
+        onProblemSelect={() => undefined}
+      />,
+    );
+
+    const footer = document.querySelector('.detail-inspector-panel__footer-block');
+    const dismissButton = screen.getByRole('button', { name: /^Dismiss issues with this skill$/i });
+    const removeButton = screen.getByRole('button', { name: /^Remove$/i });
+
+    expect(footer).toHaveClass('detail-inspector-panel__footer-block--with-remove');
+    expect(dismissButton.closest('.detail-inspector-panel__footer-action-group')).toHaveClass(
+      'detail-inspector-panel__footer-action-group--secondary',
+    );
+    expect(removeButton.closest('.detail-inspector-panel__footer-action-group')).toHaveClass(
+      'detail-inspector-panel__footer-action-group--danger',
+    );
+    expect(dismissButton).toHaveAttribute('aria-keyshortcuts', 'D');
+    expect(removeButton).toHaveAttribute('aria-keyshortcuts', 'R');
+
+    fireEvent.keyDown(window, { key: 'r' });
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it('renders MCP invalid-definition rows as a focused code surface', () => {
     const mcp = representativeInventorySnapshot.mcps?.find((entry) => entry.name === 'broken-mcp');
     expect(mcp).toBeDefined();
