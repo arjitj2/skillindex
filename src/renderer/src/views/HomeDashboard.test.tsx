@@ -65,6 +65,19 @@ describe('HomeDashboard', () => {
     expect(brokenMcpRow).toHaveTextContent('Invalid Definition');
   });
 
+  it('uses the same attention tone for every issue badge in the attention table', () => {
+    renderDashboard();
+
+    const table = screen.getByRole('region', { name: /^Needs attention$/i });
+    const pills = table.querySelectorAll('.home-attention-status-pill');
+
+    expect(pills.length).toBeGreaterThan(0);
+    expect(table.querySelector('.home-attention-status-pill--warning')).toBeNull();
+    pills.forEach((pill) => {
+      expect(pill).toHaveClass('home-attention-status-pill--attention');
+    });
+  });
+
   it('renders the healthy repair state without inline error banners', () => {
     renderDashboard({
       inventorySnapshot: createNoAttentionSnapshot(),
