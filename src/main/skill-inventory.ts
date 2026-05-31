@@ -3268,7 +3268,8 @@ function isSkillIssueReason(value: unknown): value is SkillIssueReason {
 }
 
 function isMcpIssueReason(value: unknown): value is McpIssueReason {
-  return value === 'definition-mismatch'
+  return value === 'missing-universal'
+    || value === 'definition-mismatch'
     || value === 'missing-from-agents'
     || value === 'invalid-definition'
     || value === 'connection-failed';

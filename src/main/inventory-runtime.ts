@@ -600,7 +600,7 @@ function buildResolveIssueAuditRequest(
   if (request.entity === 'mcp') {
     const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
     const affectedPaths = mcp
-      ? getMcpResolutionAffectedPaths(request, mcp)
+      ? getMcpResolutionAffectedPaths(request, mcp, snapshot, options)
       : [];
 
     return {
@@ -855,16 +855,55 @@ function buildCapabilityActionAuditTitle(request: CapabilityActionRequest): stri
 function getMcpResolutionAffectedPaths(
   request: Extract<ResolveIssueRequest, { entity: 'mcp' }>,
   mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
 ): string[] {
-  const locations = request.issue === 'definition-mismatch'
-    ? mcp.locations
-    : mcp.missingLocations ?? [];
+  const selectedLocation = request.selectedVariantPath
+    ? mcp.locations.find((location) => location.configPath === request.selectedVariantPath)
+    : mcp.locations[0];
+  const universalConfigPaths = getWritableUniversalMcpConfigPaths(snapshot, selectedLocation?.scope, options);
+
+  const locations = request.issue === 'missing-universal'
+    ? []
+    : request.issue === 'definition-mismatch'
+      ? mcp.locations
+      : mcp.missingLocations ?? [];
+  const shouldIncludeUniversal = request.issue === 'missing-universal'
+    || (request.issue === 'definition-mismatch'
+      && !mcp.locations.some((location) => location.provenance?.kind === 'universal'));
 
   return dedupePaths(
-    locations
-      .map((location) => location.configPath)
-      .filter((configPath): configPath is string => typeof configPath === 'string' && configPath.length > 0),
+    [
+      ...(shouldIncludeUniversal ? universalConfigPaths : []),
+      ...locations
+        .map((location) => location.configPath)
+        .filter((configPath): configPath is string => typeof configPath === 'string' && configPath.length > 0),
+    ],
   );
+}
+
+function getWritableUniversalMcpConfigPaths(
+  snapshot: SkillInventorySnapshot,
+  scope: SkillScanSource['scope'] | undefined,
+  options: ScanSkillInventoryOptions,
+): string[] {
+  const sourcePaths = snapshot.sources
+    .filter((source) => source.canonical && source.writable && (!scope || source.scope === scope))
+    .map((source) => path.join(path.dirname(source.skillsDir), 'mcp.json'));
+  if (sourcePaths.length > 0) {
+    return sourcePaths;
+  }
+
+  const paths = resolveSkillIndexPathsForScanOptions(options);
+  if (scope === 'sandbox') {
+    return [path.join(paths.sandboxAgentsDir, 'mcp.json')];
+  }
+
+  if (scope === 'live') {
+    return [path.join(path.dirname(paths.liveCanonicalUserSkillsDir), 'mcp.json')];
+  }
+
+  return [];
 }
 
 function getSubagentResolutionAffectedPaths(

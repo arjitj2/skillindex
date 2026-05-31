@@ -418,7 +418,8 @@ describe('DetailInspectorPanel', () => {
     expect(within(variantList).getByText('3 agents')).toBeInTheDocument();
     expect(within(variantList).getByText('Factory')).toBeInTheDocument();
     expect(within(variantList).getByText('1 agent')).toBeInTheDocument();
-    expect(screen.getByText('Normalized definition')).toBeInTheDocument();
+    expect(screen.getAllByText('Augment, Codex, Claude Code').length).toBeGreaterThan(1);
+    expect(screen.queryByText('Normalized definition')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', {
       name: /Open .*\.augment\/settings\.json in the default editor/i,
     })).not.toBeInTheDocument();
@@ -826,8 +827,9 @@ describe('DetailInspectorPanel', () => {
     expect(screen.queryByText('Diff: Selected Definition vs Reference')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: /Locations/i }));
-    expect(screen.getByText('MCP Configs')).toBeInTheDocument();
-    expect(screen.queryByText('Universal Config')).not.toBeInTheDocument();
+    expect(screen.getByText('Universal File')).toBeInTheDocument();
+    expect(screen.getByText('Installed Paths')).toBeInTheDocument();
+    expect(screen.queryByText('MCP Configs')).not.toBeInTheDocument();
     expect(screen.getAllByText('Definition Mismatch').length).toBeGreaterThan(0);
   });
 

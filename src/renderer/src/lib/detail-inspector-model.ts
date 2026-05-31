@@ -52,6 +52,11 @@ const SKILL_ACTION_LABELS = {
   createMissingSymlinks: 'Create Missing Symlinks',
   repairSymlinks: 'Repair Symlinks',
 } as const;
+const MCP_ACTION_LABELS = {
+  promoteToUniversal: 'Promote to Universal',
+  applySelectedDefinition: 'Apply Selected Definition Across Agents',
+  addToAgents: 'Add MCP to Agents',
+} as const;
 const SUBAGENT_ACTION_LABELS = {
   addToUniversal: 'Add to Universal',
   addToAgents: 'Add to Agents',
@@ -332,13 +337,16 @@ export function buildMcpInspectorModel(
     selectedVariantPath?: string | null;
   } = {},
   agentIndex: Map<string, AgentRecord> = new Map(),
+  sourceIndex: Map<string, SkillScanSource> = new Map(),
 ): InspectorModel {
   const problemKeys: McpIssueReason[] = mcp.issueReasons.length > 0 ? mcp.issueReasons : [];
   const activeProblem = problemKeys.length > 0
     ? buildMcpProblemModel(mcp, selectProblemKey(problemKeys, selection.selectedProblemKey), selection.selectedVariantPath, agentIndex)
     : buildHealthyMcpProblem();
   const selectedVariantPath = getPreferredSelectedVariantPath(selection.selectedVariantPath, activeProblem);
-  const referencePath = getActiveProblemBaselineVariantPath(activeProblem) ?? getMcpReferencePath(mcp);
+  const referencePath = activeProblem.key === 'missing-universal'
+    ? null
+    : getActiveProblemBaselineVariantPath(activeProblem) ?? getMcpReferencePath(mcp);
   const provenanceRows = buildMcpProvenanceRows(mcp, selectedVariantPath, referencePath, agentIndex);
   const provenanceSummary = buildMcpProvenanceSummary(mcp, selectedVariantPath, referencePath);
   const definition = buildMcpDefinitionModel(mcp, selectedVariantPath, agentIndex);
@@ -352,7 +360,7 @@ export function buildMcpInspectorModel(
       isLocked: hasPluginMcpLocation(mcp),
     },
     definition,
-    locations: buildMcpLocationSections(mcp, agentIndex),
+    locations: buildMcpLocationSections(mcp, agentIndex, sourceIndex),
     problemCountLabel: formatProblemCount(problemKeys.length),
     problems: problemKeys.map((key) => ({
       key,
@@ -687,32 +695,9 @@ function buildMcpProblemModel(
   agentIndex: Map<string, AgentRecord>,
 ): InspectorActiveProblemModel {
   switch (problemKey) {
-    case 'definition-mismatch': {
-      const groupedVariants = groupMcpVariants(mcp.locations);
-      const baselineVariant = getMcpBaselineVariant(groupedVariants, getMcpReferencePath(mcp));
-      const selectedVariant = selectMcpVariant(groupedVariants, selectedVariantPath, baselineVariant);
-      const orderedVariants = orderMcpVariantsForInspector(groupedVariants, baselineVariant);
-
-      return {
-        kind: 'variant-resolution',
-        key: problemKey,
-        title: formatMcpIssueReason(problemKey),
-        listTitle: 'Detected Definitions',
-        variants: orderedVariants.map((variant) => mapMcpVariant(variant, baselineVariant, selectedVariant, agentIndex)),
-        changedFiles: [],
-        selectedVariant: selectedVariant ? mapMcpVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null,
-        baselineVariant: baselineVariant ? mapMcpVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex) : null,
-        diffTitle: MCP_DETAIL_DIFF_TITLE,
-        diffLines: baselineVariant && selectedVariant
-          ? buildTextDiffLines(selectedVariant.definitionText, baselineVariant.definitionText)
-          : [],
-        diffPath: selectedVariant?.representative.configPath ?? null,
-        definitionBreakdown: baselineVariant && selectedVariant
-          ? buildMcpDefinitionBreakdown(mcp.name, selectedVariant, baselineVariant)
-          : undefined,
-        primaryActionLabel: 'Apply Selected Definition Across Agents',
-      };
-    }
+    case 'missing-universal':
+    case 'definition-mismatch':
+      return buildMcpVariantProblem(mcp, problemKey, selectedVariantPath, agentIndex);
     case 'missing-from-agents':
       return {
         kind: 'structural-repair',
@@ -733,7 +718,7 @@ function buildMcpProblemModel(
           };
         }),
         healthySummary: null,
-        primaryActionLabel: 'Add MCP to Agents',
+        primaryActionLabel: MCP_ACTION_LABELS.addToAgents,
       };
     case 'invalid-definition':
       return {
@@ -774,6 +759,47 @@ function buildMcpProblemModel(
         primaryActionLabel: null,
       };
   }
+}
+
+function buildMcpVariantProblem(
+  mcp: McpRecord,
+  problemKey: 'missing-universal' | 'definition-mismatch',
+  selectedVariantPath: string | null | undefined,
+  agentIndex: Map<string, AgentRecord>,
+): VariantResolutionProblemModel {
+  const groupedVariants = groupMcpVariants(mcp.locations);
+  const baselineVariant = problemKey === 'missing-universal'
+    ? null
+    : getMcpBaselineVariant(groupedVariants, getMcpReferencePath(mcp));
+  const orderedVariants = orderMcpVariantsForInspector(groupedVariants, baselineVariant);
+  const selectedVariant = selectMcpVariant(orderedVariants, selectedVariantPath, baselineVariant);
+  const selectedModel = selectedVariant ? mapMcpVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const baselineModel = baselineVariant ? mapMcpVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const diffLines = selectedVariant
+    ? baselineVariant
+      ? buildTextDiffLines(selectedVariant.definitionText, baselineVariant.definitionText)
+      : buildTextPreviewLines(selectedVariant.definitionText)
+    : [];
+
+  return {
+    kind: 'variant-resolution',
+    key: problemKey,
+    title: formatMcpIssueReason(problemKey),
+    listTitle: 'Detected Definitions',
+    variants: orderedVariants.map((variant) => mapMcpVariant(variant, baselineVariant, selectedVariant, agentIndex)),
+    changedFiles: [],
+    selectedVariant: selectedModel,
+    baselineVariant: baselineModel,
+    diffTitle: baselineVariant ? MCP_DETAIL_DIFF_TITLE : 'Selected Definition Preview',
+    diffLines,
+    diffPath: selectedVariant?.representative.configPath ?? null,
+    definitionBreakdown: selectedVariant
+      ? buildMcpDefinitionBreakdown(mcp.name, selectedVariant, baselineVariant ?? selectedVariant)
+      : undefined,
+    primaryActionLabel: problemKey === 'missing-universal'
+      ? MCP_ACTION_LABELS.promoteToUniversal
+      : MCP_ACTION_LABELS.applySelectedDefinition,
+  };
 }
 
 function buildSubagentProblemModel(
@@ -985,7 +1011,7 @@ function buildMcpDefinitionModel(
     variants: orderedVariants.map((variant) => mapMcpVariant(variant, baselineVariant, selectedVariant, agentIndex)),
     selectedVariant: selectedVariant ? mapMcpVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null,
     selectedVariantPath: selectedVariant?.representative.configPath ?? null,
-    files: buildMcpDefinitionFiles(mcp, selectedVariant),
+    files: buildMcpDefinitionFiles(mcp, selectedVariant, agentIndex),
     emptySummary: 'No readable definition was found for this MCP.',
   };
 }
@@ -1078,6 +1104,7 @@ function getSkillDefinitionFileRootPath(location: SkillDuplicateCandidate): stri
 function buildMcpDefinitionFiles(
   mcp: McpRecord,
   selectedVariant: McpVariantGroup | null,
+  agentIndex: Map<string, AgentRecord>,
 ): InspectorDefinitionFileModel[] {
   if (!selectedVariant) {
     return [];
@@ -1085,17 +1112,27 @@ function buildMcpDefinitionFiles(
 
   const location = selectedVariant.representative;
   const text = buildMcpNormalizedDefinitionText(mcp.name, location);
+  const definitionLabel = formatMcpDefinitionFileLabel(selectedVariant, agentIndex);
 
   return text.length > 0
     ? [{
-        relativePath: 'Normalized definition',
+        relativePath: definitionLabel,
         absolutePath: location.configPath,
-        displayPath: 'Normalized definition',
+        displayPath: definitionLabel,
         openPath: null,
         kind: 'text',
         text,
       }]
     : [];
+}
+
+function formatMcpDefinitionFileLabel(
+  variant: McpVariantGroup,
+  agentIndex: Map<string, AgentRecord>,
+): string {
+  const labels = variant.locations.map((location) =>
+    formatMcpAgentLabel(location.agentId, agentIndex, location.agentLabel, location.configPath));
+  return summarizeMcpVariantLocationLabels(labels);
 }
 
 function buildSubagentDefinitionFiles(
@@ -1198,6 +1235,8 @@ function getAffectedSymlinkRepairLocations(
 
 function getMcpProblemSummary(mcp: McpRecord, key: McpIssueReason): string {
   switch (key) {
+    case 'missing-universal':
+      return '1 issue';
     case 'definition-mismatch': {
       const count = groupMcpVariants(mcp.locations).length;
       return `${count} definition${count === 1 ? '' : 's'}`;
@@ -1219,6 +1258,8 @@ function getMcpProblemSummary(mcp: McpRecord, key: McpIssueReason): string {
 
 function getMcpProblemDetail(mcp: McpRecord, key: McpIssueReason, agentIndex: Map<string, AgentRecord>): string {
   switch (key) {
+    case 'missing-universal':
+      return 'Choose the definition to add to Universal';
     case 'definition-mismatch':
       return summarizeDefinitionMismatch(mcp, agentIndex);
     case 'missing-from-agents': {
@@ -1848,32 +1889,126 @@ function getPathBasename(value: string): string {
 function buildMcpLocationSections(
   mcp: McpRecord,
   agentIndex: Map<string, AgentRecord>,
+  sourceIndex: Map<string, SkillScanSource>,
 ): InspectorLocationSectionModel[] {
   const referencePath = getMcpReferencePath(mcp);
   const referenceLocation = referencePath
     ? mcp.locations.find((location) => location.configPath === referencePath) ?? null
     : null;
-  const rows = getMcpAgentEntries(mcp, agentIndex)
-    .map((entry) => {
-      const issue = getMcpLocationIssueState(mcp, referenceLocation, entry);
+  const agentEntries = getMcpAgentEntries(mcp, agentIndex);
+  const universalRows = getMcpUniversalFileRows(mcp, referenceLocation, sourceIndex);
+  const pluginRows = agentEntries
+    .filter((entry) => entry.location?.provenance?.kind === 'plugin')
+    .map((entry) => mapMcpLocationEntryRow(mcp, referenceLocation, entry))
+    .sort(compareInspectorLocationRowsByLabel);
+  const installedRows = agentEntries
+    .filter((entry) => !entry.path || !isAgentsPath(entry.path))
+    .filter((entry) => entry.location?.provenance?.kind !== 'plugin')
+    .map((entry) => mapMcpLocationEntryRow(mcp, referenceLocation, entry))
+    .sort(compareInspectorLocationRowsByLabel);
 
-      return {
-        id: `${entry.agentId}:${entry.path ?? 'missing'}`,
-        label: entry.label,
-        path: entry.location?.configPath ?? entry.path ?? null,
-        pathText: entry.location?.configPath ?? entry.path ?? 'Not configured',
-        statusLabel: issue.statusLabel,
-        tone: issue.tone,
-      };
-    });
+  return [
+    {
+      id: 'universal',
+      title: 'Universal File',
+      rows: universalRows,
+    },
+    {
+      id: 'plugin-paths',
+      title: 'Plugin Paths',
+      rows: pluginRows,
+    },
+    {
+      id: 'installed-paths',
+      title: 'Installed Paths',
+      rows: installedRows,
+    },
+  ].filter((section) => section.rows.length > 0 || section.id === 'universal');
+}
 
-  return rows.length > 0
-    ? [{
-        id: 'mcp-configs',
-        title: 'MCP Configs',
-        rows,
-      }]
-    : [];
+function getMcpUniversalFileRows(
+  mcp: McpRecord,
+  referenceLocation: McpLocationRecord | null,
+  sourceIndex: Map<string, SkillScanSource>,
+): InspectorLocationRow[] {
+  const universalLocations = mcp.locations.filter(isUniversalMcpLocation);
+  if (universalLocations.length > 0) {
+    return universalLocations.map((location) => mapMcpLocationEntryRow(mcp, referenceLocation, {
+      agentId: location.agentId,
+      label: universalLocations.length > 1 ? formatUniversalMcpLocationLabel(location) : null,
+      path: location.configPath,
+      location,
+    }));
+  }
+
+  const expectedPath = getExpectedUniversalMcpConfigPath(mcp, sourceIndex);
+
+  return [{
+    id: expectedPath ?? 'missing-universal-mcp',
+    label: null,
+    path: expectedPath,
+    pathText: expectedPath ?? 'Not found',
+    statusLabel: 'Missing Universal',
+    tone: 'muted',
+  }];
+}
+
+function getExpectedUniversalMcpConfigPath(
+  mcp: McpRecord,
+  sourceIndex: Map<string, SkillScanSource>,
+): string | null {
+  const scopes = new Set([
+    ...mcp.locations.map((location) => location.scope),
+    ...(mcp.expectedLocations ?? []).map((location) => location.scope),
+    ...(mcp.missingLocations ?? []).map((location) => location.scope),
+  ]);
+  const universalSource = [...sourceIndex.values()].find((source) =>
+    source.canonical && source.writable && scopes.has(source.scope) && isAgentsPath(source.skillsDir));
+
+  return universalSource ? joinInspectorPath(getPathDirname(universalSource.skillsDir), 'mcp.json') : null;
+}
+
+function getPathDirname(value: string): string {
+  const normalized = normalizeLocationPath(value);
+  const slashIndex = normalized.lastIndexOf('/');
+  if (slashIndex <= 0) {
+    return normalized;
+  }
+
+  return normalized.slice(0, slashIndex);
+}
+
+function mapMcpLocationEntryRow(
+  mcp: McpRecord,
+  referenceLocation: McpLocationRecord | null,
+  entry: {
+    agentId: string;
+    label: string | null;
+    path?: string;
+    supportStatus?: 'supported' | 'unsupported';
+    unsupportedReason?: 'remote-mcp-not-supported' | 'transport-not-supported';
+    unsupportedTransport?: McpTransportKind;
+    location: McpLocationRecord | null;
+  },
+): InspectorLocationRow {
+  const issue = getMcpLocationIssueState(mcp, referenceLocation, entry);
+
+  return {
+    id: `${entry.agentId}:${entry.path ?? 'missing'}`,
+    label: entry.label,
+    path: entry.location?.configPath ?? entry.path ?? null,
+    pathText: entry.location?.configPath ?? entry.path ?? 'Not configured',
+    statusLabel: issue.statusLabel,
+    tone: issue.tone,
+  };
+}
+
+function isUniversalMcpLocation(location: McpLocationRecord): boolean {
+  return location.provenance?.kind === 'universal' || isAgentsPath(location.configPath);
+}
+
+function formatUniversalMcpLocationLabel(location: McpLocationRecord): string {
+  return stripScopePrefix(location.agentLabel);
 }
 
 function getMcpAgentEntries(
@@ -1977,17 +2112,41 @@ function getMcpLocationIssueState(
   }
 
   if (mcp.issueReasons.includes('definition-mismatch') && canonicalLocation) {
-    const canonicalDefinition = canonicalLocation.definitionComparisonKey
-      ?? normalizeDefinitionText(canonicalLocation.definitionText ?? buildMcpDefinitionText(canonicalLocation));
-    const currentDefinition = location.definitionComparisonKey
-      ?? normalizeDefinitionText(location.definitionText ?? buildMcpDefinitionText(location));
-    if (canonicalDefinition !== currentDefinition) {
+    if (isMcpCoreDefinitionMismatch(location, canonicalLocation)
+      || isMcpAgentSpecificDefinitionMismatch(location, canonicalLocation)) {
       return { statusLabel: 'Definition Mismatch', tone: 'warning' };
     }
   }
 
   return { tone: 'healthy' };
 }
+
+function isMcpCoreDefinitionMismatch(
+  location: McpLocationRecord,
+  canonicalLocation: McpLocationRecord,
+): boolean {
+  return getMcpCoreDefinitionKey(location) !== getMcpCoreDefinitionKey(canonicalLocation);
+}
+
+function getMcpCoreDefinitionKey(location: McpLocationRecord): string {
+  return location.coreDefinitionComparisonKey
+    ?? location.definitionComparisonKey
+    ?? normalizeDefinitionText(location.definitionText ?? buildMcpDefinitionText(location))
+    ?? 'null';
+}
+
+function isMcpAgentSpecificDefinitionMismatch(
+  location: McpLocationRecord,
+  canonicalLocation: McpLocationRecord,
+): boolean {
+  if (isUniversalMcpLocation(location) || !location.agentLocalKey) {
+    return false;
+  }
+
+  return stableDefinitionString(location.nativeDefinition ?? {})
+    !== stableDefinitionString(canonicalLocation.agentLocal?.[location.agentLocalKey] ?? {});
+}
+
 
 function buildSubagentLocationSections(
   subagent: SubagentRecord,

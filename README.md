@@ -16,11 +16,11 @@ Download it at [skillindex.app](https://skillindex.app).
 
 Agents should share your knowledge.
 
-If you teach one agent a skill, install one MCP server, or standardize one capability, you should be able to move between agents without rebuilding the same setup over and over. Skill Index is built around a simple opinion: your agent knowledge should be portable, inspectable, and shared by default.
+If you teach one agent a skill, write one subagent, install one MCP server, or standardize one capability, you should be able to move between agents without rebuilding the same setup over and over. Skill Index is built around a simple opinion: your agent knowledge should be portable, inspectable, and shared by default.
 
-For skills, Skill Index treats `~/.agents/skills` as the canonical user-owned location and helps compatible agents point back to it. For MCPs, the goal is not to declare one folder universal; it is to compare the definitions each agent sees, surface mismatches, and help you make the same services available consistently.
+Skill Index treats `~/.agents/skills`, `~/.agents/agents`, and `~/.agents/mcp.json` as user-owned Universal sources. Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved.
 
-Agent-native folders such as `~/.codex/skills`, `~/.claude/skills`, `~/.cursor/skills`, and plugin caches are still important. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
+Agent-native folders, config files, and plugin caches are still important. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
 
 That is the opinionated stance: organize your knowledge once, make it visible everywhere you work with agents.
 
@@ -30,12 +30,12 @@ Skill Index gives you a local control plane for agent knowledge:
 
 | Step | What happens |
 | --- | --- |
-| **Map** | Scan user-level skill directories, MCP configs, and installed plugin capabilities. |
-| **Compare** | See which skills are canonical, copied, symlinked, missing, invalid, or drifting apart. See when MCP definitions differ across agents. |
-| **Standardize** | Review safe auto-fixes from the dashboard, apply them in a batch, or choose explicit repair actions for individual skills and MCPs. |
+| **Map** | Scan user-level skill directories, subagent directories, MCP configs, and installed plugin capabilities. |
+| **Compare** | See which skills, subagents, and MCP definitions are universal, missing, invalid, or drifting apart. |
+| **Standardize** | Review safe auto-fixes from the dashboard, apply them in a batch, or choose explicit repair actions for individual skills, subagents, and MCPs. |
 | **Audit** | Review a local audit log of file-changing operations so every mutation is accountable. |
 
-Plugin-provided skills and MCPs are shown as managed, read-only capabilities. They are part of the knowledge map, but Skill Index does not pretend it owns them.
+Plugin-provided skills, subagents, and MCPs are shown as managed, read-only capabilities. They are part of the knowledge map, but Skill Index does not pretend it owns them.
 
 ## Local By Default
 
@@ -66,9 +66,9 @@ Windows and Linux support are planned, but the current release path is macOS.
 ## Use It
 
 1. Open Skill Index.
-2. Review the dashboard for skills or MCPs that need attention.
+2. Review the dashboard for skills, subagents, or MCPs that need attention.
 3. Use **Auto-resolve easy issues** to review safe repairs and apply them together.
-4. Open a skill, MCP, plugin, or agent detail view when you want to inspect source paths, definitions, or a single repair.
+4. Open a skill, subagent, MCP, plugin, or agent detail view when you want to inspect source paths, definitions, or a single repair.
 5. Check the Audit view when you want to confirm what changed.
 
 ## Roadmap
@@ -77,7 +77,6 @@ Windows and Linux support are planned, but the current release path is macOS.
 - [ ] First-run onboarding for alternate canonical skill sources, including repo-backed skill folders.
 - [ ] Project-level agent configuration, not just user-home configuration.
 - [ ] Custom instruction files such as `AGENTS.md`, `CLAUDE.md`, and related agent docs.
-- [ ] Subagent support, such as `.claude/agents`, `.codex/agents`, `.gemini/agents`, and `.qwen/agents`.
 - [ ] Commands support, such as `.claude/commands`, `.gemini/commands`, and `.qwen/commands`.
 - [ ] Hooks support, such as `~/.claude/settings.json`, `~/.codex/hooks.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`, and `~/.qwen/settings.json`.
 - [ ] Broader packaged support for Windows and Linux.
@@ -134,7 +133,7 @@ Reference docs:
 
 - [Agent catalog file hierarchy](docs/reference/agent-catalog-file-hierarchy.md)
 - [Agent catalog maintenance guide](docs/reference/agent-catalog-maintenance-guide.md)
-- [Inventory issue taxonomy](docs/reference/inventory-issue-taxonomy.md)
+- [Inventory resolution model](docs/reference/inventory-resolution-model.md)
 
 Security issues should be reported through GitHub Security Advisories, not public issues. See [SECURITY.md](SECURITY.md).
 

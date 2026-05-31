@@ -1771,9 +1771,9 @@ describe('buildMcpInspectorModel', () => {
     expect(model.definition.variants[0]?.isBaseline).toBe(true);
     expect(model.definition.files).toEqual([
       expect.objectContaining({
-        relativePath: 'Normalized definition',
+        relativePath: model.definition.variants[0]?.label,
         absolutePath: '~/.skillindex/sandbox/.agents/mcp.json',
-        displayPath: 'Normalized definition',
+        displayPath: model.definition.variants[0]?.label,
         openPath: null,
         kind: 'text',
         text: stringContaining('healthy-server.js'),
@@ -1816,10 +1816,18 @@ describe('buildMcpInspectorModel', () => {
         },
       ],
       missingLocations: [],
-    }, {}, agentIndex);
+    }, {}, agentIndex, sourceIndex);
 
     expect(model.problems).toEqual([]);
-    expect(model.locations[0]?.rows).toEqual(arrayContaining([
+    expect(model.locations.find((section) => section.id === 'universal')?.rows).toEqual([
+      objectContaining({
+        path: '~/.skillindex/sandbox/.agents/mcp.json',
+        pathText: '~/.skillindex/sandbox/.agents/mcp.json',
+        statusLabel: 'Missing Universal',
+        tone: 'muted',
+      }),
+    ]);
+    expect(model.locations.find((section) => section.id === 'installed-paths')?.rows).toEqual(arrayContaining([
       objectContaining({
         label: 'Claude Desktop',
         path: '~/.skillindex/sandbox/Library/Application Support/Claude/claude_desktop_config.json',
@@ -1921,8 +1929,8 @@ describe('buildMcpInspectorModel', () => {
     ]);
     expect(model.definition.files).toEqual([
       objectContaining({
-        relativePath: 'Normalized definition',
-        displayPath: 'Normalized definition',
+        relativePath: model.definition.selectedVariant?.label,
+        displayPath: model.definition.selectedVariant?.label,
         openPath: null,
         text: [
           '{',
@@ -1995,13 +2003,19 @@ describe('buildMcpInspectorModel', () => {
     ]));
     expect(model.locations).toEqual([
       expect.objectContaining({
-        id: 'mcp-configs',
-        title: 'MCP Configs',
-        rows: arrayContaining([
-          objectContaining({
+        id: 'universal',
+        title: 'Universal File',
+        rows: [
+          expect.objectContaining({
             path: '~/.skillindex/sandbox/.agents/mcp.json',
             tone: 'healthy',
           }),
+        ],
+      }),
+      expect.objectContaining({
+        id: 'installed-paths',
+        title: 'Installed Paths',
+        rows: arrayContaining([
           objectContaining({
             label: 'Claude Code',
             path: '~/.skillindex/sandbox/.claude.json',
@@ -2091,7 +2105,7 @@ describe('buildMcpInspectorModel', () => {
     const model = buildMcpInspectorModel(mcp, {
       selectedProblemKey: 'definition-mismatch',
       selectedVariantPath: '~/.skillindex/sandbox/.factory/mcp.json',
-    }, agentIndex);
+    }, agentIndex, sourceIndex);
     expect(model.problems.find((problem) => problem.key === 'definition-mismatch')?.detail).toBe(
       'Definitions differ across Codex, Factory',
     );
@@ -2502,6 +2516,58 @@ describe('buildMcpInspectorModel', () => {
       pathExists: true,
     });
     expect(activeProblem.primaryActionLabel).toBe('Add MCP to Agents');
+  });
+
+  it('builds a variant repair problem for missing universal MCPs', () => {
+    const mcp: RepresentativeMcp = {
+      name: 'local-only-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [
+        {
+          agentId: 'sandbox-factory',
+          agentLabel: 'Factory',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.factory/mcp.json',
+          configName: 'local-only-mcp',
+          transport: 'stdio',
+          command: 'node',
+          args: ['local-only.js'],
+          definitionText: '{\n  "command": "node",\n  "args": ["local-only.js"],\n  "disabled": false\n}',
+          definitionComparisonKey: 'local-only-mcp',
+          nativeDefinition: {
+            disabled: false,
+          },
+          agentLocalKey: 'factory',
+        },
+      ],
+    };
+
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: null,
+    }, agentIndex, sourceIndex);
+
+    const activeProblem = expectVariantResolution(model.activeProblem);
+    expect(activeProblem.title).toBe('Missing Universal');
+    expect(activeProblem.listTitle).toBe('Detected Definitions');
+    expect(activeProblem.primaryActionLabel).toBe('Promote to Universal');
+    expect(activeProblem.selectedVariant?.path).toBe('~/.skillindex/sandbox/.factory/mcp.json');
+    expect(model.locations.find((section) => section.id === 'universal')?.title).toBe('Universal File');
+    expect(model.locations.find((section) => section.id === 'universal')?.rows).toEqual([
+      objectContaining({
+        path: '~/.skillindex/sandbox/.agents/mcp.json',
+        pathText: '~/.skillindex/sandbox/.agents/mcp.json',
+        statusLabel: 'Missing Universal',
+      }),
+    ]);
+    expect(activeProblem.definitionBreakdown?.ignoredSettings).toEqual([
+      objectContaining({
+        label: 'Disabled',
+        sources: ['Factory'],
+      }),
+    ]);
   });
 
   it('marks missing-from-agents config paths nonexistent when the agent config file is absent', () => {

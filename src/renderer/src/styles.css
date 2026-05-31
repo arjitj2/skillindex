@@ -9848,6 +9848,74 @@ body {
   color: var(--text-tertiary);
 }
 
+.settings-universal-list {
+  display: grid;
+  gap: 0;
+}
+
+.settings-universal-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.1fr);
+  gap: 24px;
+  align-items: center;
+  padding: 15px 18px;
+  border-bottom: 1px solid #ededea;
+}
+
+.settings-universal-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-universal-label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-universal-label strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.settings-universal-label span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.settings-universal-path {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+  justify-self: end;
+  padding: 7px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  background: var(--panel-muted-bg);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-universal-path svg {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+}
+
+.settings-universal-path span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-card .static-switch {
   width: 34px;
   height: 20px;
@@ -10152,6 +10220,22 @@ body {
 
 .settings-mode-toggle-option--active small {
   opacity: 0.75;
+}
+
+@media (max-width: 880px) {
+  .settings-universal-row,
+  .settings-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .settings-universal-path,
+  .settings-row-trailing {
+    justify-self: stretch;
+    justify-content: flex-start;
+    min-width: 0;
+  }
 }
 
 .workspace-view--audit {

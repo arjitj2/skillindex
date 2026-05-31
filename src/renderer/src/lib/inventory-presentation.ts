@@ -200,6 +200,8 @@ export function formatDiffLine(line: SkillDiffLine): string {
 
 export function formatMcpIssueReason(reason: McpRecord['issueReasons'][number]): string {
   switch (reason) {
+    case 'missing-universal':
+      return 'Missing Universal';
     case 'definition-mismatch':
       return 'Definition Mismatch';
     case 'missing-from-agents':

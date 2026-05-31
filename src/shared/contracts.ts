@@ -546,6 +546,12 @@ export interface McpLocationRecord {
   args: string[];
   definitionText?: string;
   definitionComparisonKey?: string;
+  coreDefinitionComparisonKey?: string;
+  nativeDefinitionComparisonKey?: string;
+  portableDefinition?: McpServerDefinition;
+  nativeDefinition?: McpDefinitionObject;
+  agentLocal?: Record<string, McpDefinitionObject>;
+  agentLocalKey?: string;
   invalidDetails?: string[];
   connectivity?: McpConnectivityRecord;
   provenance?: SkillProvenance;
@@ -563,7 +569,7 @@ export interface McpExpectedLocationRecord {
   unsupportedTransport?: McpConfiguredTransportKind;
 }
 
-export type McpIssueReason = 'definition-mismatch' | 'missing-from-agents' | 'invalid-definition' | 'connection-failed';
+export type McpIssueReason = 'missing-universal' | 'definition-mismatch' | 'missing-from-agents' | 'invalid-definition' | 'connection-failed';
 export type McpStatus = 'healthy' | 'needs-attention';
 export type McpPresentation = 'none' | 'active' | 'dismissed';
 
@@ -700,7 +706,7 @@ export type SkillResolvableIssue =
   | 'broken-symlink'
   | 'wrong-symlink-target';
 
-export type McpResolvableIssue = 'definition-mismatch' | 'missing-from-agents';
+export type McpResolvableIssue = 'missing-universal' | 'definition-mismatch' | 'missing-from-agents';
 export type SubagentResolvableIssue =
   | 'missing-universal'
   | 'missing-from-agents'

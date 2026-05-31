@@ -22,7 +22,7 @@ import type {
   RemoteMcpTransportKind,
   SkillScanSource,
 } from '@shared/contracts';
-import { isMcpDefinitionObject, isMcpServerDefinitions, normalizeMcpDefinitionForComparison } from '@shared/mcp-definition';
+import { isMcpDefinitionObject, isMcpServerDefinitions, splitMcpDefinitionForComparison } from '@shared/mcp-definition';
 import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
 
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
@@ -52,10 +52,12 @@ export interface CollectMcpRecordsOptions {
 
 interface McpOwnerRecord extends McpExpectedLocationRecord {
   configExists: boolean;
+  family?: string;
   parseable: boolean;
   parserKind: AgentMcpParserKind;
   mcpSupportedTransports?: AgentMcpSupportedTransport[];
   plugin?: PluginSourceRef;
+  universal?: boolean;
 }
 
 interface ParsedMcpEntry {
@@ -357,7 +359,7 @@ function classifyMcpLocations(
     return !owner || isMcpTransportSupportedByOwner(owner, location.transport);
   });
   const issueLocations = supportedLocations.length > 0 ? supportedLocations : sortedLocations;
-  const normalizedDefinitions = new Set(issueLocations.map((location) => getMcpDefinitionComparisonKey(location)));
+  const universalLocation = issueLocations.find(isUniversalMcpLocation) ?? null;
   const invalidDefinition = issueLocations.some((location) => (location.invalidDetails?.length ?? 0) > 0);
   const connectionFailed = issueLocations.some((location) => location.connectivity?.status === 'failed');
   const pluginConfigName = getPluginConfigNameForRecord(name, sortedLocations);
@@ -367,11 +369,13 @@ function classifyMcpLocations(
       || location.agentId.startsWith('plugin:')
       || location.configName === pluginConfigName)
     .map((location) => location.agentId));
-  const expectedOwnersForRecord = expectedOwners.filter((owner) => !owner.plugin);
+  const expectedOwnersForRecord = expectedOwners.filter((owner) => !owner.plugin && !owner.universal);
   const recordTransport = getMcpRecordTransport(issueLocations);
   const expectedLocations = expectedOwnersForRecord.map((owner) => buildMcpExpectedLocation(owner, recordTransport));
-  const missingLocations = expectedLocations.filter((location) =>
-    location.supportStatus !== 'unsupported' && !presentAgentIds.has(location.agentId));
+  const missingLocations = universalLocation
+    ? expectedLocations.filter((location) =>
+        location.supportStatus !== 'unsupported' && !presentAgentIds.has(location.agentId))
+    : [];
   const issueReasons: McpIssueReason[] = [];
 
   if (invalidDefinition) {
@@ -382,7 +386,11 @@ function classifyMcpLocations(
     issueReasons.push('connection-failed');
   }
 
-  if (normalizedDefinitions.size > 1) {
+  if (!universalLocation) {
+    issueReasons.push('missing-universal');
+  }
+
+  if (hasMcpDefinitionMismatch(issueLocations, universalLocation)) {
     issueReasons.push('definition-mismatch');
   }
 
@@ -409,6 +417,45 @@ function classifyMcpLocations(
       )
       : undefined,
   };
+}
+
+function hasMcpDefinitionMismatch(
+  locations: McpLocationRecord[],
+  universalLocation: McpLocationRecord | null,
+): boolean {
+  if (universalLocation) {
+    const universalCoreKey = getMcpCoreDefinitionComparisonKey(universalLocation);
+    return locations.some((location) => {
+      if (getMcpCoreDefinitionComparisonKey(location) !== universalCoreKey) {
+        return true;
+      }
+
+      if (isUniversalMcpLocation(location) || !location.agentLocalKey) {
+        return false;
+      }
+
+      return getMcpNativeDefinitionComparisonKey(location)
+        !== getUniversalAgentLocalComparisonKey(universalLocation, location.agentLocalKey);
+    });
+  }
+
+  return new Set(locations.map(getMcpCoreDefinitionComparisonKey)).size > 1;
+}
+
+function isUniversalMcpLocation(location: McpLocationRecord): boolean {
+  return location.provenance?.kind === 'universal';
+}
+
+function getMcpCoreDefinitionComparisonKey(location: McpLocationRecord): string {
+  return location.coreDefinitionComparisonKey ?? location.definitionComparisonKey ?? location.definitionText ?? 'null';
+}
+
+function getMcpNativeDefinitionComparisonKey(location: McpLocationRecord): string {
+  return location.nativeDefinitionComparisonKey ?? stableStringify(location.nativeDefinition ?? {});
+}
+
+function getUniversalAgentLocalComparisonKey(location: McpLocationRecord, agentLocalKey: string): string {
+  return stableStringify(location.agentLocal?.[agentLocalKey] ?? {});
 }
 
 function buildMcpExpectedLocation(
@@ -493,6 +540,7 @@ function collectMcpOwners(agents: AgentRecord[], sources: SkillScanSource[], plu
       configExists,
       parseable: true,
       parserKind: 'json-servers',
+      universal: true,
     });
   }
 
@@ -504,6 +552,7 @@ function collectMcpOwners(agents: AgentRecord[], sources: SkillScanSource[], plu
     owners.push({
       agentId: agent.id,
       agentLabel: agent.label,
+      family: agent.family,
       scope: agent.scope,
       configPath: agent.mcpConfigLocation.path,
       configExists: agent.mcpConfigLocation.exists,
@@ -718,6 +767,9 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
   invalidDetails.push(...connection.invalidDetails);
 
   const args = getMcpArgs(normalizedDefinition);
+  const splitDefinition = splitMcpDefinitionForComparison(normalizedDefinition, connection);
+  const coreComparisonKey = stableStringify(splitDefinition.core);
+  const nativeComparisonKey = stableStringify(splitDefinition.native);
 
   const invalidText = invalidDetails.length > 0 ? invalidDetails.join(' ') : undefined;
 
@@ -735,7 +787,16 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
       url: connection.url,
       args,
       definitionText,
-      definitionComparisonKey: stableStringify(normalizeMcpDefinitionForComparison(normalizedDefinition, connection)),
+      definitionComparisonKey: stableStringify({
+        core: splitDefinition.core,
+        native: splitDefinition.native,
+      }),
+      coreDefinitionComparisonKey: coreComparisonKey,
+      nativeDefinitionComparisonKey: nativeComparisonKey,
+      portableDefinition: splitDefinition.core,
+      nativeDefinition: splitDefinition.native,
+      agentLocal: splitDefinition.agentLocal,
+      agentLocalKey: owner.family,
       invalidDetails: invalidText ? [invalidText] : undefined,
       provenance: owner.plugin
         ? {
@@ -749,11 +810,11 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
             discoveredAt: new Date().toISOString(),
           }
         : {
-            kind: owner.scope === 'live' && owner.agentId.includes('agents') ? 'universal' : 'agent-local',
+            kind: owner.universal ? 'universal' : 'agent-local',
             sourcePath: owner.configPath,
             discoveredAt: new Date().toISOString(),
           },
-      canonicalRole: owner.plugin ? 'canonical' : owner.agentId.includes('agents') ? 'canonical' : 'materialized-copy',
+      canonicalRole: owner.plugin || owner.universal ? 'canonical' : 'materialized-copy',
       mutability: owner.plugin ? 'read-only-managed' : 'writable',
     },
   };

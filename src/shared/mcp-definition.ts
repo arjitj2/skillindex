@@ -15,6 +15,34 @@ export interface McpDefinitionConnectionHint {
   args?: string[];
 }
 
+export const MCP_AGENT_LOCAL_KEY = 'agentLocal';
+
+const MCP_CORE_AND_DIALECT_KEYS = new Set([
+  MCP_AGENT_LOCAL_KEY,
+  'args',
+  'bearer_token_env_var',
+  'command',
+  'cwd',
+  'env',
+  'environment',
+  'env_http_headers',
+  'headers',
+  'http_headers',
+  'httpUrl',
+  'mcp',
+  'mcpServers',
+  'servers',
+  'transport',
+  'type',
+  'url',
+]);
+
+export interface SplitMcpDefinition {
+  core: McpServerDefinition;
+  native: McpDefinitionObject;
+  agentLocal: Record<string, McpDefinitionObject>;
+}
+
 export function normalizeMcpDefinitionForComparison(
   definition: McpDefinitionObject,
   connection?: McpDefinitionConnectionHint,
@@ -25,6 +53,17 @@ export function normalizeMcpDefinitionForComparison(
   }
 
   return comparable;
+}
+
+export function splitMcpDefinitionForComparison(
+  definition: McpDefinitionObject,
+  connection?: McpDefinitionConnectionHint,
+): SplitMcpDefinition {
+  return {
+    core: normalizeMcpDefinitionForComparison(definition, connection),
+    native: extractNativeMcpFields(definition),
+    agentLocal: extractAgentLocalMcpFields(definition),
+  };
 }
 
 export function buildPortableMcpDefinition(
@@ -131,6 +170,37 @@ function buildComparableMcpDefinition(
   }
 
   return comparable;
+}
+
+function extractNativeMcpFields(definition: McpDefinitionObject): McpDefinitionObject {
+  const native: McpDefinitionObject = {};
+  for (const [key, value] of Object.entries(definition)) {
+    if (value === undefined || MCP_CORE_AND_DIALECT_KEYS.has(key)) {
+      continue;
+    }
+    native[key] = value;
+  }
+  return native;
+}
+
+function extractAgentLocalMcpFields(definition: McpDefinitionObject): Record<string, McpDefinitionObject> {
+  if (!isMcpDefinitionObject(definition[MCP_AGENT_LOCAL_KEY])) {
+    return {};
+  }
+
+  const agentLocal: Record<string, McpDefinitionObject> = {};
+  const rawAgentLocal = definition[MCP_AGENT_LOCAL_KEY];
+  for (const [agentKey, rawFields] of Object.entries(rawAgentLocal)) {
+    if (!isMcpDefinitionObject(rawFields)) {
+      continue;
+    }
+
+    const nativeFields = extractNativeMcpFields(rawFields);
+    if (Object.keys(nativeFields).length > 0) {
+      agentLocal[agentKey] = nativeFields;
+    }
+  }
+  return agentLocal;
 }
 
 function getPortableMcpTransport(
