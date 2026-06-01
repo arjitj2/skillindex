@@ -17,8 +17,10 @@ import {
   getMcpStatusLabels,
   type McpStatusFilter,
 } from '../lib/inventory-presentation';
+import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import { getMcpResolveActionState } from '../lib/issue-resolution';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
+import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
 import {
   EmptyStatePanel,
@@ -34,7 +36,9 @@ import {
 
 export function McpWorkspaceView({
   addActionControl,
+  autoResolvableRequests = [],
   inventorySnapshot,
+  isAutoResolving = false,
   isDismissingDrift,
   isResolvingIssue,
   isRemovingInventoryItem = false,
@@ -42,6 +46,7 @@ export function McpWorkspaceView({
   mcp,
   mcpInspectorModel,
   sandboxRoot,
+  onAutoResolve = () => undefined,
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -60,7 +65,9 @@ export function McpWorkspaceView({
   statusFilter,
 }: {
   addActionControl?: ReactNode;
+  autoResolvableRequests?: ResolveIssueRequest[];
   inventorySnapshot: SkillInventorySnapshot | null;
+  isAutoResolving?: boolean;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem?: boolean;
@@ -68,6 +75,7 @@ export function McpWorkspaceView({
   mcp: McpRecord | null;
   mcpInspectorModel: InspectorModel | null;
   sandboxRoot: string | null;
+  onAutoResolve?: () => void;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -137,7 +145,18 @@ export function McpWorkspaceView({
             ariaLabel="MCP filters"
             filters={filters}
             onFilterChange={onStatusFilterChange}
-            trailing={<InventoryKeyboardHint />}
+            trailing={(
+              <>
+                <ScopedAutoRepairControl
+                  activeIssueCount={getActiveIssueCountForAutoRepairScope(inventorySnapshot, 'mcp')}
+                  autoResolvableRequests={autoResolvableRequests}
+                  inventorySnapshot={inventorySnapshot}
+                  isAutoResolving={isAutoResolving}
+                  onAutoResolve={onAutoResolve}
+                />
+                <InventoryKeyboardHint />
+              </>
+            )}
           />
 
           <div className={`split-workspace split-workspace--detail${mcp ? '' : ' split-workspace--detail-collapsed'}`}>

@@ -88,5 +88,6 @@ copied into another family.
   writes any writable supported targets and leaves unwritable targets unresolved.
 - Config writers preserve unrelated file fields and unrelated MCP server entries.
 - Auto-resolve stays conservative: skills auto-resolve only issues with an
-  inferable Universal choice; MCPs auto-resolve only safe `missing-from-agents`;
-  subagents auto-resolve simple missing, identical-copy, and broken-symlink cases.
+  inferable Universal choice; MCPs auto-resolve safe `missing-universal` and
+  `missing-from-agents`; subagents auto-resolve simple missing, identical-copy,
+  and broken-symlink cases.

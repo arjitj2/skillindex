@@ -20,8 +20,10 @@ import {
   getSubagentStatusLabels,
   type SubagentStatusFilter,
 } from '../lib/inventory-presentation';
+import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { getSubagentResolveActionState } from '../lib/issue-resolution';
+import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
 import {
   EmptyStatePanel,
@@ -37,11 +39,14 @@ import {
 
 export function SubagentsWorkspaceView({
   addActionControl,
+  autoResolvableRequests = [],
   inventorySnapshot,
+  isAutoResolving = false,
   isDismissingDrift,
   isResolvingIssue,
   isRemovingInventoryItem = false,
   isRescanning,
+  onAutoResolve = () => undefined,
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -64,11 +69,14 @@ export function SubagentsWorkspaceView({
   statusFilter,
 }: {
   addActionControl?: ReactNode;
+  autoResolvableRequests?: ResolveIssueRequest[];
   inventorySnapshot: SkillInventorySnapshot | null;
+  isAutoResolving?: boolean;
   isDismissingDrift: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
+  onAutoResolve?: () => void;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -142,7 +150,18 @@ export function SubagentsWorkspaceView({
           ariaLabel="Subagent filters"
           filters={filters}
           onFilterChange={onStatusFilterChange}
-          trailing={<InventoryKeyboardHint />}
+          trailing={(
+            <>
+              <ScopedAutoRepairControl
+                activeIssueCount={getActiveIssueCountForAutoRepairScope(inventorySnapshot, 'subagent')}
+                autoResolvableRequests={autoResolvableRequests}
+                inventorySnapshot={inventorySnapshot}
+                isAutoResolving={isAutoResolving}
+                onAutoResolve={onAutoResolve}
+              />
+              <InventoryKeyboardHint />
+            </>
+          )}
         />
 
         <div className={`split-workspace split-workspace--detail${selectedSubagent ? '' : ' split-workspace--detail-collapsed'}`}>

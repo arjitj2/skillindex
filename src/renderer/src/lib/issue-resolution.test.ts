@@ -233,6 +233,130 @@ describe('issue resolution request builder', () => {
     expect(getAutoResolvableMcpRequests(snapshot)).toEqual([]);
   });
 
+  it('includes non-plugin missing-universal MCP repairs when one definition can be inferred', () => {
+    const mcp: McpRecord = {
+      name: 'local-only-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [
+        {
+          agentId: 'sandbox-factory',
+          agentLabel: 'Factory',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.factory/mcp.json',
+          configName: 'local-only-mcp',
+          transport: 'stdio',
+          command: 'node',
+          args: ['local-only.js'],
+          definitionText: '{\n  "command": "node",\n  "args": ["local-only.js"],\n  "disabled": false\n}',
+          definitionComparisonKey: '{"args":["local-only.js"],"command":"node","transport":"stdio"}',
+          nativeDefinition: {
+            disabled: false,
+          },
+          agentLocalKey: 'factory',
+          mutability: 'writable',
+        },
+      ],
+    };
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      mcps: [mcp],
+    };
+
+    expect(getAutoResolvableMcpRequests(snapshot)).toEqual([
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'local-only-mcp',
+        selectedVariantPath: '~/.skillindex/sandbox/.factory/mcp.json',
+      },
+    ]);
+  });
+
+  it('keeps ambiguous missing-universal MCP repairs out of Home auto-resolve batches', () => {
+    const mcp: McpRecord = {
+      name: 'ambiguous-local-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal', 'definition-mismatch'],
+      locations: [
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.claude.json',
+          configName: 'ambiguous-local-mcp',
+          transport: 'stdio',
+          command: 'node',
+          args: ['claude.js'],
+          definitionText: '{"command":"node","args":["claude.js"]}',
+          definitionComparisonKey: '{"args":["claude.js"],"command":"node","transport":"stdio"}',
+          mutability: 'writable',
+        },
+        {
+          agentId: 'sandbox-factory',
+          agentLabel: 'Factory',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.factory/mcp.json',
+          configName: 'ambiguous-local-mcp',
+          transport: 'stdio',
+          command: 'node',
+          args: ['factory.js'],
+          definitionText: '{"command":"node","args":["factory.js"]}',
+          definitionComparisonKey: '{"args":["factory.js"],"command":"node","transport":"stdio"}',
+          mutability: 'writable',
+        },
+      ],
+    };
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      mcps: [mcp],
+    };
+
+    expect(getAutoResolvableMcpRequests(snapshot)).toEqual([]);
+  });
+
+  it('keeps plugin-owned missing-universal MCP repairs out of Home auto-resolve batches', () => {
+    const mcp: McpRecord = {
+      name: 'tools:plugin-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [
+        {
+          agentId: 'plugin:sandbox:codex:tools@market:1.0.0',
+          agentLabel: 'Codex Plugin tools',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.codex/plugins/cache/tools/1.0.0/.mcp.json',
+          configName: 'plugin-mcp',
+          transport: 'stdio',
+          command: 'node',
+          args: ['plugin.js'],
+          definitionText: '{"command":"node","args":["plugin.js"]}',
+          definitionComparisonKey: '{"args":["plugin.js"],"command":"node","transport":"stdio"}',
+          provenance: {
+            kind: 'plugin',
+            plugin: {
+              host: 'codex',
+              pluginId: 'tools@market',
+              version: '1.0.0',
+            },
+            sourcePath: '~/.skillindex/sandbox/.codex/plugins/cache/tools/1.0.0/.mcp.json',
+            discoveredAt: '2026-05-01T00:00:00.000Z',
+          },
+          mutability: 'read-only-managed',
+        },
+      ],
+    };
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      mcps: [mcp],
+    };
+
+    expect(getAutoResolvableMcpRequests(snapshot)).toEqual([]);
+  });
+
   it('builds a missing-symlink skill request without forcing diverged selection when canonical exists', () => {
     const baseSkill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'diagnostic-rich-skill')!;
     const skill: SkillRecord = {

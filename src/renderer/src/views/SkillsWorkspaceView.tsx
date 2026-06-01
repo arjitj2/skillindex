@@ -19,8 +19,10 @@ import {
   getSkillRowDescription,
   type SkillStatusFilter,
 } from '../lib/inventory-presentation';
+import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import { getSkillResolveActionState } from '../lib/issue-resolution';
 import type { InspectorLocationAction, InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
+import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
 import {
   EmptyStatePanel,
@@ -35,13 +37,16 @@ import {
 } from '../components/ui';
 
 export function SkillsWorkspaceView({
+  autoResolvableRequests = [],
   inventorySnapshot,
+  isAutoResolving = false,
   isDismissingDrift,
   isApplyingCapabilityAction,
   isResolvingIssue,
   isRemovingInventoryItem = false,
   isRescanning,
   onCancelMcpConnectivityTest,
+  onAutoResolve = () => undefined,
   onClearSelection,
   onDismissDrift,
   onApplyCapabilityAction,
@@ -66,13 +71,16 @@ export function SkillsWorkspaceView({
   statusFilter,
   addActionControl,
 }: {
+  autoResolvableRequests?: ResolveIssueRequest[];
   inventorySnapshot: SkillInventorySnapshot | null;
+  isAutoResolving?: boolean;
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
   onCancelMcpConnectivityTest?: () => void;
+  onAutoResolve?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
   onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
@@ -156,7 +164,18 @@ export function SkillsWorkspaceView({
               setSelectionOverrideSkillName(null);
               setStatusFilter(value);
             }}
-            trailing={<InventoryKeyboardHint />}
+            trailing={(
+              <>
+                <ScopedAutoRepairControl
+                  activeIssueCount={getActiveIssueCountForAutoRepairScope(inventorySnapshot, 'skill')}
+                  autoResolvableRequests={autoResolvableRequests}
+                  inventorySnapshot={inventorySnapshot}
+                  isAutoResolving={isAutoResolving}
+                  onAutoResolve={onAutoResolve}
+                />
+                <InventoryKeyboardHint />
+              </>
+            )}
           />
 
           <div className={`split-workspace split-workspace--detail${selectedSkill ? '' : ' split-workspace--detail-collapsed'}`}>

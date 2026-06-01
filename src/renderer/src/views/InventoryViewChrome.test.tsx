@@ -3,7 +3,7 @@ import { createRef, type ComponentProps } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { McpRecord } from '@shared/contracts';
+import type { McpRecord, ResolveIssueRequest } from '@shared/contracts';
 
 import { representativeInventorySnapshot } from '../representative-preview-data';
 import { buildMcpInspectorModel, buildSkillInspectorModel, buildSubagentInspectorModel } from '../lib/detail-inspector-model';
@@ -13,14 +13,20 @@ import { SkillsWorkspaceView } from './SkillsWorkspaceView';
 import { SubagentsWorkspaceView } from './SubagentsWorkspaceView';
 
 function renderSkillsWorkspaceView({
+  autoResolvableRequests = [],
   inventorySnapshot = representativeInventorySnapshot,
+  isAutoResolving = false,
   isRescanning = false,
+  onAutoResolve = vi.fn(),
   rows = representativeInventorySnapshot.skills,
   searchQuery = '',
   statusFilter = 'all',
 }: {
+  autoResolvableRequests?: ResolveIssueRequest[];
   inventorySnapshot?: typeof representativeInventorySnapshot;
+  isAutoResolving?: boolean;
   isRescanning?: boolean;
+  onAutoResolve?: () => void;
   rows?: typeof representativeInventorySnapshot.skills;
   searchQuery?: string;
   statusFilter?: 'all' | 'active' | 'dismissed' | 'none';
@@ -28,10 +34,13 @@ function renderSkillsWorkspaceView({
   return render(
     <SkillsWorkspaceView
       inventorySnapshot={inventorySnapshot}
+      autoResolvableRequests={autoResolvableRequests}
+      isAutoResolving={isAutoResolving}
       isDismissingDrift={false}
       isApplyingCapabilityAction={false}
       isResolvingIssue={false}
       isRescanning={isRescanning}
+      onAutoResolve={onAutoResolve}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
       onApplyCapabilityAction={vi.fn(() => Promise.resolve())}
@@ -58,20 +67,26 @@ function renderSkillsWorkspaceView({
 }
 
 function renderMcpWorkspaceView({
+  autoResolvableRequests = [],
   inventorySnapshot = representativeInventorySnapshot,
+  isAutoResolving = false,
   isRescanning = false,
   mcp = null,
   mcpInspectorModel = null,
+  onAutoResolve = vi.fn(),
   onOpenPluginSource = vi.fn(),
   onSelectMcp = vi.fn(),
   rows = representativeInventorySnapshot.mcps ?? [],
   searchQuery = '',
   statusFilter = 'all',
 }: {
+  autoResolvableRequests?: ResolveIssueRequest[];
   inventorySnapshot?: typeof representativeInventorySnapshot;
+  isAutoResolving?: boolean;
   isRescanning?: boolean;
   mcp?: McpRecord | null;
   mcpInspectorModel?: ReturnType<typeof buildMcpInspectorModel> | null;
+  onAutoResolve?: () => void;
   onOpenPluginSource?: (action: Parameters<NonNullable<ComponentProps<typeof McpWorkspaceView>['onOpenPluginSource']>>[0]) => void;
   onSelectMcp?: (name: string | null) => void;
   rows?: NonNullable<typeof representativeInventorySnapshot.mcps>;
@@ -80,13 +95,16 @@ function renderMcpWorkspaceView({
 } = {}) {
   render(
     <McpWorkspaceView
+      autoResolvableRequests={autoResolvableRequests}
       inventorySnapshot={inventorySnapshot}
+      isAutoResolving={isAutoResolving}
       isDismissingDrift={false}
       isResolvingIssue={false}
       isRescanning={isRescanning}
       mcp={mcp}
       mcpInspectorModel={mcpInspectorModel}
       sandboxRoot={null}
+      onAutoResolve={onAutoResolve}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
       onOpenPluginSource={onOpenPluginSource}
@@ -106,8 +124,11 @@ function renderMcpWorkspaceView({
 }
 
 function renderSubagentsWorkspaceView({
+  autoResolvableRequests = [],
   inventorySnapshot = representativeInventorySnapshot,
+  isAutoResolving = false,
   isRescanning = false,
+  onAutoResolve = vi.fn(),
   onOpenPluginSource = vi.fn(),
   rows = representativeInventorySnapshot.subagents ?? [],
   searchQuery = '',
@@ -116,8 +137,11 @@ function renderSubagentsWorkspaceView({
   selectedSubagentProblemKey = null,
   statusFilter = 'all',
 }: {
+  autoResolvableRequests?: ResolveIssueRequest[];
   inventorySnapshot?: typeof representativeInventorySnapshot;
+  isAutoResolving?: boolean;
   isRescanning?: boolean;
+  onAutoResolve?: () => void;
   onOpenPluginSource?: (action: Parameters<NonNullable<ComponentProps<typeof SubagentsWorkspaceView>['onOpenPluginSource']>>[0]) => void;
   rows?: NonNullable<typeof representativeInventorySnapshot.subagents>;
   searchQuery?: string;
@@ -128,10 +152,13 @@ function renderSubagentsWorkspaceView({
 } = {}) {
   render(
     <SubagentsWorkspaceView
+      autoResolvableRequests={autoResolvableRequests}
       inventorySnapshot={inventorySnapshot}
+      isAutoResolving={isAutoResolving}
       isDismissingDrift={false}
       isResolvingIssue={false}
       isRescanning={isRescanning}
+      onAutoResolve={onAutoResolve}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
       onOpenPluginSource={onOpenPluginSource}
@@ -218,6 +245,72 @@ describe('inventory view chrome', () => {
     expect(screen.queryByRole('button', { name: 'Filter' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /broken-mcp/i }).querySelector('p')).toBeNull();
     expect(screen.getByRole('button', { name: /healthy-mcp/i }).querySelector('p')).toBeNull();
+  });
+
+  it('shows a scoped empty state when MCP issues remain but no safe auto-resolutions are available', () => {
+    renderMcpWorkspaceView();
+
+    expect(screen.getByRole('toolbar', { name: 'MCP filters' })).toBeInTheDocument();
+    expect(screen.getByText('No safe auto-resolutions')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Review \d+ safe auto-resolution/i })).not.toBeInTheDocument();
+  });
+
+  it('hides the scoped auto-resolution affordance when the MCP tab is clean', () => {
+    const inventorySnapshot = structuredClone(representativeInventorySnapshot);
+    inventorySnapshot.mcps = inventorySnapshot.mcps?.map((mcp) => ({
+      ...mcp,
+      issueReasons: [],
+      presentation: 'none',
+      status: 'healthy',
+    }));
+    inventorySnapshot.mcpCounts = inventorySnapshot.mcpCounts
+      ? {
+          ...inventorySnapshot.mcpCounts,
+          attentionMcps: 0,
+          dismissedAttentionMcps: 0,
+          healthyMcps: inventorySnapshot.mcpCounts.totalMcps,
+        }
+      : undefined;
+
+    renderMcpWorkspaceView({
+      inventorySnapshot,
+      rows: inventorySnapshot.mcps ?? [],
+    });
+
+    expect(screen.getByRole('toolbar', { name: 'MCP filters' })).toBeInTheDocument();
+    expect(screen.queryByText('No safe auto-resolutions')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Review \d+ safe auto-resolution/i })).not.toBeInTheDocument();
+  });
+
+  it('shows scoped safe repairs in the MCP filter bar without replacing the Home review panel', () => {
+    const onAutoResolve = vi.fn();
+    renderMcpWorkspaceView({
+      autoResolvableRequests: [
+        {
+          entity: 'mcp',
+          issue: 'missing-universal',
+          mcpName: 'local-only-mcp',
+          selectedVariantPath: '~/.skillindex/sandbox/.factory/mcp.json',
+        },
+      ],
+      onAutoResolve,
+    });
+
+    expect(screen.getByRole('toolbar', { name: 'MCP filters' })).toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: /Review 1 safe auto-resolution/i });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Review planned fixes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Auto-resolve issues with safe resolutions')).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Review planned fixes')).toBeInTheDocument();
+    expect(screen.getByText('MCPs • Missing Universal')).toBeInTheDocument();
+    expect(screen.getByText('Add to Universal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 repair/i }));
+    expect(onAutoResolve).toHaveBeenCalledTimes(1);
   });
 
   it('renders Subagent details with the shared inspector chrome used by Skills', () => {
