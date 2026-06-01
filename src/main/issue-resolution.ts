@@ -917,8 +917,19 @@ function readPortableDefinitionForSubagentLocation(
     family: findSubagentLocationFamily(snapshot, location.agentId),
     filePath: location.path,
     format: location.format,
-    fallbackName,
+    fallbackName: getSubagentDefinitionFallbackName(fallbackName, location),
   });
+}
+
+function getSubagentDefinitionFallbackName(
+  fallbackName: string,
+  location: Pick<SubagentLocationRecord, 'agentId'>,
+): string {
+  if (location.agentId.startsWith('plugin:') && fallbackName.includes(':')) {
+    return fallbackName.slice(fallbackName.indexOf(':') + 1);
+  }
+
+  return fallbackName;
 }
 
 function findSubagentLocationFamily(snapshot: SkillInventorySnapshot, agentId: string): string | undefined {
