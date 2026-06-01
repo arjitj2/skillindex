@@ -6568,7 +6568,7 @@ body {
   gap: 14px;
   width: 100%;
   min-width: 0;
-  padding: 10px 16px;
+  padding: 11px 16px;
   border: 0;
   border-bottom: 1px solid #ededea;
   background: var(--panel-bg);
@@ -6587,6 +6587,8 @@ body {
 
 .home-attention-row-main {
   min-width: 0;
+  display: grid;
+  gap: 2px;
 }
 
 .home-attention-row-title {
@@ -6595,11 +6597,11 @@ body {
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  margin-bottom: 2px;
+  margin-bottom: 0;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
-  line-height: 17px;
+  line-height: 18px;
 }
 
 .home-attention-row-title > span:first-child {
@@ -6614,7 +6616,7 @@ body {
   overflow: hidden;
   color: var(--text-muted);
   font-size: 12px;
-  line-height: 17px;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6635,25 +6637,27 @@ body {
 }
 
 .home-attention-row-statuses {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  max-width: min(42vw, 380px);
-  flex-wrap: wrap;
+  max-width: min(42vw, 320px);
+  flex-wrap: nowrap;
 }
 
 .home-attention-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
+  min-height: 22px;
   padding: 3px 9px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 12px;
   font-size: 11px;
   font-weight: 500;
   line-height: 14px;
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
@@ -10797,6 +10801,7 @@ body {
   .home-attention-row-statuses {
     justify-content: flex-start;
     max-width: 100%;
+    flex-wrap: wrap;
   }
 
   .home-attention-group-header {
