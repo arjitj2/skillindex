@@ -435,6 +435,69 @@ describe('subagent inventory', () => {
     expect(await readFile(localPath, 'utf8')).toContain('Local review helper.');
   });
 
+  it('promotes plugin interface YAML subagents into Universal', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const pluginPath = path.join(
+      homeDir,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'build-ios-apps',
+      'fef63ecf',
+      'agents',
+      'openai.yaml',
+    );
+    const manifestPath = path.join(
+      homeDir,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'build-ios-apps',
+      'fef63ecf',
+      '.codex-plugin',
+      'plugin.json',
+    );
+
+    await writeRawFile(pluginPath, [
+      'interface:',
+      '  display_name: "Build iOS Apps"',
+      '  short_description: "Build, profile, debug, and refine iOS apps with SwiftUI and Xcode workflows"',
+      '  icon_small: "./assets/build-ios-apps-small.svg"',
+      '  icon_large: "./assets/app-icon.png"',
+      '  default_prompt: "Build or debug an iOS app with SwiftUI, App Intents, and Simulator."',
+      '',
+    ].join('\n'));
+    await writeRawFile(manifestPath, `${JSON.stringify({ name: 'build-ios-apps', version: 'fef63ecf' }, null, 2)}\n`);
+
+    const inventory = await scanInventory(scanOptions);
+    const pluginSubagent = inventory.subagents?.find((subagent) => subagent.name === 'build-ios-apps:openai');
+
+    expect(pluginSubagent?.issueReasons).toEqual(['missing-universal']);
+    expect(pluginSubagent?.locations[0]).toMatchObject({
+      path: pluginPath,
+      invalidDetails: undefined,
+      description: 'Build, profile, debug, and refine iOS apps with SwiftUI and Xcode workflows',
+    });
+    expect(pluginSubagent?.locations[0]?.definitionComparisonKey).toBeDefined();
+
+    const repaired = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'build-ios-apps:openai',
+    }, scanOptions);
+    const repairedPlugin = repaired.subagents?.find((subagent) => subagent.name === 'build-ios-apps:openai');
+    const universalDefinition = await readFile(path.join(homeDir, '.agents', 'agents', 'build-ios-apps-openai.md'), 'utf8');
+
+    expect(repairedPlugin?.issueReasons).not.toContain('missing-universal');
+    expect(repairedPlugin?.issueReasons).not.toContain('invalid-definition');
+    expect(universalDefinition).toContain('name: "openai"');
+    expect(universalDefinition).toContain('Build or debug an iOS app with SwiftUI, App Intents, and Simulator.');
+    expect(universalDefinition).not.toContain('build-ios-apps:openai');
+  });
+
   it('repairs legacy plugin subagent Universal files without keeping the scoped name in frontmatter', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const universalPath = path.join(homeDir, '.agents', 'agents', 'github-tools-reviewer.md');

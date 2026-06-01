@@ -758,10 +758,14 @@ function readJsonSubagent(raw: string, fallbackName: string, jsonc: boolean): Pa
 function readYamlSubagent(raw: string, fallbackName: string): ParsedSubagentDefinition {
   const values = parseFlatYaml(raw);
   const name = getStringField(values, 'name') ?? getStringField(values, 'agentType') ?? fallbackName;
-  const description = getStringField(values, 'description') ?? getStringField(values, 'whenToUse') ?? null;
+  const description = getStringField(values, 'description')
+    ?? getStringField(values, 'whenToUse')
+    ?? getStringField(values, 'short_description')
+    ?? null;
   const prompt = getStringField(values, 'prompt')
     ?? getStringField(values, 'systemPrompt')
-    ?? getStringField(values, 'instructions');
+    ?? getStringField(values, 'instructions')
+    ?? getStringField(values, 'default_prompt');
   const invalidDetails: string[] = [];
   if (!description) {
     invalidDetails.push('Missing required field: description');
@@ -772,7 +776,7 @@ function readYamlSubagent(raw: string, fallbackName: string): ParsedSubagentDefi
 
   return {
     name,
-    displayName: name,
+    displayName: getStringField(values, 'display_name') ?? name,
     description,
     prompt: prompt ?? undefined,
     invalidDetails,
@@ -1058,11 +1062,13 @@ function normalizeSubagentDefinition(definition: Record<string, unknown>): Recor
     ?? '';
   const description = getStringField(definition, 'description')
     ?? getStringField(definition, 'whenToUse')
+    ?? getStringField(definition, 'short_description')
     ?? null;
   const prompt = getStringField(definition, 'prompt')
     ?? getStringField(definition, 'systemPrompt')
     ?? getStringField(definition, 'developer_instructions')
     ?? getStringField(definition, 'instructions')
+    ?? getStringField(definition, 'default_prompt')
     ?? '';
   return {
     name,
@@ -1087,11 +1093,13 @@ function omitSubagentAliasFields(definition: Record<string, unknown>): Record<st
     'agentType',
     'description',
     'developer_instructions',
+    'default_prompt',
     'displayName',
     'display_name',
     'instructions',
     'name',
     'prompt',
+    'short_description',
     'systemPrompt',
     'whenToUse',
   ]);
