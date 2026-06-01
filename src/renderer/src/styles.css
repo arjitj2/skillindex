@@ -7003,6 +7003,11 @@ body {
   min-height: 0;
 }
 
+.page-scroll--split .inspector-panel {
+  border-left: 1px solid var(--panel-border);
+  border-top: 0;
+}
+
 .page-scroll--split .master-list-panel {
   overflow-y: auto;
   overflow-x: hidden;
