@@ -1688,6 +1688,7 @@ export default function App() {
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
+          onOpenPluginSource={openPluginFromProvenance}
           onRequestRemove={handleRequestRemoveInventoryItem}
           onResolveIssue={handleResolveIssue}
           onRescan={triggerManualRescan}
@@ -1715,6 +1716,7 @@ export default function App() {
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetSubagentSelection}
           onDismissDrift={handleDismissDrift}
+          onOpenPluginSource={openPluginFromProvenance}
           onRequestRemove={handleRequestRemoveInventoryItem}
           onResolveIssue={handleResolveIssue}
           onRescan={triggerManualRescan}

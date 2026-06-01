@@ -1,4 +1,4 @@
-import { createRef } from 'react';
+import { createRef, type ComponentProps } from 'react';
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -60,6 +60,9 @@ function renderSkillsWorkspaceView({
 function renderMcpWorkspaceView({
   inventorySnapshot = representativeInventorySnapshot,
   isRescanning = false,
+  mcp = null,
+  mcpInspectorModel = null,
+  onOpenPluginSource = vi.fn(),
   onSelectMcp = vi.fn(),
   rows = representativeInventorySnapshot.mcps ?? [],
   searchQuery = '',
@@ -67,6 +70,9 @@ function renderMcpWorkspaceView({
 }: {
   inventorySnapshot?: typeof representativeInventorySnapshot;
   isRescanning?: boolean;
+  mcp?: McpRecord | null;
+  mcpInspectorModel?: ReturnType<typeof buildMcpInspectorModel> | null;
+  onOpenPluginSource?: (action: Parameters<NonNullable<ComponentProps<typeof McpWorkspaceView>['onOpenPluginSource']>>[0]) => void;
   onSelectMcp?: (name: string | null) => void;
   rows?: NonNullable<typeof representativeInventorySnapshot.mcps>;
   searchQuery?: string;
@@ -78,11 +84,12 @@ function renderMcpWorkspaceView({
       isDismissingDrift={false}
       isResolvingIssue={false}
       isRescanning={isRescanning}
-      mcp={null}
-      mcpInspectorModel={null}
+      mcp={mcp}
+      mcpInspectorModel={mcpInspectorModel}
       sandboxRoot={null}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
+      onOpenPluginSource={onOpenPluginSource}
       onResolveIssue={vi.fn(() => Promise.resolve())}
       onRescan={vi.fn(() => Promise.resolve())}
       onSearchQueryChange={vi.fn()}
@@ -101,6 +108,7 @@ function renderMcpWorkspaceView({
 function renderSubagentsWorkspaceView({
   inventorySnapshot = representativeInventorySnapshot,
   isRescanning = false,
+  onOpenPluginSource = vi.fn(),
   rows = representativeInventorySnapshot.subagents ?? [],
   searchQuery = '',
   selectedSubagent = null,
@@ -110,6 +118,7 @@ function renderSubagentsWorkspaceView({
 }: {
   inventorySnapshot?: typeof representativeInventorySnapshot;
   isRescanning?: boolean;
+  onOpenPluginSource?: (action: Parameters<NonNullable<ComponentProps<typeof SubagentsWorkspaceView>['onOpenPluginSource']>>[0]) => void;
   rows?: NonNullable<typeof representativeInventorySnapshot.subagents>;
   searchQuery?: string;
   selectedSubagent?: NonNullable<typeof representativeInventorySnapshot.subagents>[number] | null;
@@ -125,6 +134,7 @@ function renderSubagentsWorkspaceView({
       isRescanning={isRescanning}
       onClearSelection={vi.fn()}
       onDismissDrift={vi.fn(() => Promise.resolve())}
+      onOpenPluginSource={onOpenPluginSource}
       onResolveIssue={vi.fn(() => Promise.resolve())}
       onRescan={vi.fn(() => Promise.resolve())}
       onSearchQueryChange={vi.fn()}
@@ -428,6 +438,87 @@ describe('inventory view chrome', () => {
     expect(sourceLink).toHaveClass('plugin-detail-panel__metadata-link');
   });
 
+  it('lets plugin MCP detail Source jump to the plugin inventory source', () => {
+    const plugin = representativeInventorySnapshot.plugins?.[0];
+    if (!plugin) {
+      throw new Error('Expected representative plugin fixture to include a plugin.');
+    }
+    const pluginMcp: McpRecord = {
+      name: 'plugin-signal-map',
+      status: 'healthy',
+      presentation: 'none',
+      issueReasons: [],
+      locations: [
+        {
+          agentId: 'plugin:sandbox:claude:sandbox-plugin-pack:0.1.0:mcp',
+          agentLabel: 'Claude Plugin sandbox-plugin-pack',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/plugins/.mcp.json',
+          command: 'node',
+          args: ['signal-map.js'],
+          provenance: {
+            kind: 'plugin',
+            plugin: {
+              host: plugin.host,
+              pluginId: plugin.pluginId,
+              version: plugin.version,
+            },
+            sourcePath: '~/.skillindex/sandbox/plugins/.mcp.json',
+            discoveredAt: '2026-01-09T00:15:00.000Z',
+          },
+          mutability: 'read-only-managed',
+        },
+      ],
+    };
+    const inventorySnapshot = structuredClone(representativeInventorySnapshot);
+    inventorySnapshot.mcps = [pluginMcp];
+    const agentIndex = new Map((inventorySnapshot.agents ?? []).map((agent) => [agent.id, agent]));
+    const onOpenPluginSource = vi.fn();
+
+    renderMcpWorkspaceView({
+      inventorySnapshot,
+      mcp: pluginMcp,
+      mcpInspectorModel: buildMcpInspectorModel(pluginMcp, {}, agentIndex),
+      onOpenPluginSource,
+      rows: inventorySnapshot.mcps,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'sandbox-plugin-pack' }));
+
+    expect(onOpenPluginSource).toHaveBeenCalledWith({
+      kind: 'plugin',
+      host: 'claude',
+      pluginId: 'sandbox-plugin-pack',
+      version: '0.1.0',
+    });
+  });
+
+  it('lets plugin subagent detail Source jump to the plugin inventory source', () => {
+    const subagent = representativeInventorySnapshot.subagents?.find((entry) =>
+      entry.name === 'sandbox-plugin-pack:deployment-expert');
+    if (!subagent) {
+      throw new Error('Missing representative subagent fixture: sandbox-plugin-pack:deployment-expert');
+    }
+    const agentIndex = new Map((representativeInventorySnapshot.agents ?? []).map((agent) => [agent.id, agent]));
+    const onOpenPluginSource = vi.fn();
+
+    renderSubagentsWorkspaceView({
+      onOpenPluginSource,
+      rows: [subagent],
+      selectedSubagent: subagent,
+      selectedSubagentInspectorModel: buildSubagentInspectorModel(subagent, {}, agentIndex),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'sandbox-plugin-pack' }));
+
+    expect(onOpenPluginSource).toHaveBeenCalledWith({
+      kind: 'plugin',
+      host: 'claude',
+      pluginId: 'sandbox-plugin-pack',
+      version: '0.1.0',
+    });
+  });
+
   it('renders one status pill per issue and orders active rows by issue count', () => {
     render(
       <McpWorkspaceView
@@ -440,6 +531,7 @@ describe('inventory view chrome', () => {
         sandboxRoot={null}
         onClearSelection={vi.fn()}
         onDismissDrift={vi.fn(() => Promise.resolve())}
+        onOpenPluginSource={vi.fn()}
         onResolveIssue={vi.fn(() => Promise.resolve())}
         onRescan={vi.fn(() => Promise.resolve())}
         onSearchQueryChange={vi.fn()}
@@ -619,6 +711,7 @@ describe('inventory view chrome', () => {
         sandboxRoot={null}
         onClearSelection={vi.fn()}
         onDismissDrift={vi.fn(() => Promise.resolve())}
+        onOpenPluginSource={vi.fn()}
         onResolveIssue={vi.fn(() => Promise.resolve())}
         onRescan={vi.fn(() => Promise.resolve())}
         onSearchQueryChange={vi.fn()}
@@ -650,6 +743,7 @@ describe('inventory view chrome', () => {
         sandboxRoot={null}
         onClearSelection={vi.fn()}
         onDismissDrift={vi.fn(() => Promise.resolve())}
+        onOpenPluginSource={vi.fn()}
         onResolveIssue={vi.fn(() => Promise.resolve())}
         onRescan={vi.fn(() => Promise.resolve())}
         onSearchQueryChange={vi.fn()}

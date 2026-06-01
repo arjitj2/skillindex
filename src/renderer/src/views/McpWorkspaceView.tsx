@@ -18,7 +18,7 @@ import {
   type McpStatusFilter,
 } from '../lib/inventory-presentation';
 import { getMcpResolveActionState } from '../lib/issue-resolution';
-import type { InspectorModel } from '../lib/detail-inspector-model';
+import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
 import {
   EmptyStatePanel,
@@ -45,6 +45,7 @@ export function McpWorkspaceView({
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
+  onOpenPluginSource,
   onRequestRemove = () => undefined,
   onResolveIssue,
   onRescan,
@@ -70,6 +71,7 @@ export function McpWorkspaceView({
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove?: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onRescan: () => Promise<void>;
@@ -183,6 +185,7 @@ export function McpWorkspaceView({
                 sandboxRoot={sandboxRoot}
                 onClearSelection={onClearSelection}
                 onDismissDrift={onDismissDrift}
+                onOpenPluginSource={onOpenPluginSource}
                 onRequestRemove={onRequestRemove}
                 onResolveIssue={onResolveIssue}
                 onSelectProblem={onSelectProblem}
@@ -501,6 +504,7 @@ function McpDetailPanel({
   sandboxRoot,
   onClearSelection,
   onDismissDrift,
+  onOpenPluginSource,
   onRequestRemove,
   onResolveIssue,
   onSelectProblem,
@@ -515,6 +519,7 @@ function McpDetailPanel({
   sandboxRoot: string | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onSelectProblem: (problemKey: McpIssueReason | null) => void;
@@ -583,6 +588,7 @@ function McpDetailPanel({
       paneClassName="mcp-inspector-panel"
       sandboxRoot={sandboxRoot}
       onClose={onClearSelection}
+      onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => onSelectProblem(problemKey as McpIssueReason)}
       onVariantSelect={(path: string) => onSelectVariant(path)}
     />
