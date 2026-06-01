@@ -296,9 +296,15 @@ export function buildSkillInspectorModel(
   agentIndex: Map<string, AgentRecord> = new Map(),
 ): InspectorModel {
   const problemKeys = getSkillProblemKeys(skill);
-  const activeProblem = problemKeys.length > 0
+  let activeProblem = problemKeys.length > 0
     ? buildSkillProblemModel(skill, selectProblemKey(problemKeys, selection.selectedProblemKey), selection.selectedVariantPath, sourceIndex, agentIndex)
     : buildHealthySkillProblem(skill);
+  if (!selection.selectedProblemKey && shouldPreferInspectionProblem(activeProblem)) {
+    const inspectionProblemKey = getInspectionRequiredProblemKey(problemKeys);
+    if (inspectionProblemKey) {
+      activeProblem = buildSkillProblemModel(skill, inspectionProblemKey, selection.selectedVariantPath, sourceIndex, agentIndex);
+    }
+  }
   const selectedVariantPath = getPreferredSelectedVariantPath(selection.selectedVariantPath, activeProblem);
   const provenanceRows = buildSkillProvenanceRows(skill, selectedVariantPath);
   const provenanceSummary = buildSkillProvenanceSummary(skill, selectedVariantPath, sourceIndex);
@@ -340,9 +346,15 @@ export function buildMcpInspectorModel(
   sourceIndex: Map<string, SkillScanSource> = new Map(),
 ): InspectorModel {
   const problemKeys: McpIssueReason[] = mcp.issueReasons.length > 0 ? mcp.issueReasons : [];
-  const activeProblem = problemKeys.length > 0
+  let activeProblem = problemKeys.length > 0
     ? buildMcpProblemModel(mcp, selectProblemKey(problemKeys, selection.selectedProblemKey), selection.selectedVariantPath, agentIndex)
     : buildHealthyMcpProblem();
+  if (!selection.selectedProblemKey && shouldPreferInspectionProblem(activeProblem)) {
+    const inspectionProblemKey = getInspectionRequiredProblemKey(problemKeys);
+    if (inspectionProblemKey) {
+      activeProblem = buildMcpProblemModel(mcp, inspectionProblemKey, selection.selectedVariantPath, agentIndex);
+    }
+  }
   const selectedVariantPath = getPreferredSelectedVariantPath(selection.selectedVariantPath, activeProblem);
   const referencePath = activeProblem.key === 'missing-universal'
     ? null
@@ -386,9 +398,15 @@ export function buildSubagentInspectorModel(
   agentIndex: Map<string, AgentRecord> = new Map(),
 ): InspectorModel {
   const problemKeys: SubagentIssueReason[] = subagent.issueReasons.length > 0 ? subagent.issueReasons : [];
-  const activeProblem = problemKeys.length > 0
+  let activeProblem = problemKeys.length > 0
     ? buildSubagentProblemModel(subagent, selectProblemKey(problemKeys, selection.selectedProblemKey), selection.selectedVariantPath, agentIndex)
     : buildHealthySubagentProblem(subagent);
+  if (!selection.selectedProblemKey && shouldPreferInspectionProblem(activeProblem)) {
+    const inspectionProblemKey = getInspectionRequiredProblemKey(problemKeys);
+    if (inspectionProblemKey) {
+      activeProblem = buildSubagentProblemModel(subagent, inspectionProblemKey, selection.selectedVariantPath, agentIndex);
+    }
+  }
   const selectedVariantPath = getPreferredSelectedVariantPath(selection.selectedVariantPath, activeProblem);
   const referencePath = getActiveProblemBaselineVariantPath(activeProblem) ?? getCanonicalSubagentPath(subagent);
   const provenanceRows = buildSubagentProvenanceRows(subagent, selectedVariantPath, referencePath, agentIndex);
@@ -683,7 +701,7 @@ function buildSkillVariantProblem(
     diffPath: primaryDiffFile
       ? resolveSkillPackageDiffPath(primaryDiffFile.relativePath, primaryDiffFile, selectedVariant, baselineVariant)
       : null,
-    primaryActionLabel: SKILL_ACTION_LABELS.useAsUniversal,
+    primaryActionLabel: selectedVariant ? SKILL_ACTION_LABELS.useAsUniversal : null,
     actionSummary: buildSkillUseAsUniversalSummary(skill, problemKey, selectedVariant, sourceIndex),
   };
 }
@@ -796,9 +814,11 @@ function buildMcpVariantProblem(
     definitionBreakdown: selectedVariant
       ? buildMcpDefinitionBreakdown(mcp.name, selectedVariant, baselineVariant ?? selectedVariant)
       : undefined,
-    primaryActionLabel: problemKey === 'missing-universal'
-      ? MCP_ACTION_LABELS.promoteToUniversal
-      : MCP_ACTION_LABELS.applySelectedDefinition,
+    primaryActionLabel: selectedVariant
+      ? problemKey === 'missing-universal'
+        ? MCP_ACTION_LABELS.promoteToUniversal
+        : MCP_ACTION_LABELS.applySelectedDefinition
+      : null,
   };
 }
 
@@ -874,7 +894,9 @@ function buildSubagentVariantProblem(
   agentIndex: Map<string, AgentRecord>,
 ): VariantResolutionProblemModel {
   const groupedVariants = groupSubagentVariants(subagent.locations);
-  const baselineVariant = getSubagentBaselineVariant(groupedVariants, getCanonicalSubagentPath(subagent));
+  const baselineVariant = problemKey === 'missing-universal'
+    ? null
+    : getSubagentBaselineVariant(groupedVariants, getCanonicalSubagentPath(subagent));
   const orderedVariants = orderSubagentVariantsForInspector(groupedVariants, baselineVariant);
   const selectedVariant = selectSubagentVariant(orderedVariants, selectedVariantPath, baselineVariant);
   const selectedModel = selectedVariant ? mapSubagentVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null;
@@ -897,9 +919,11 @@ function buildSubagentVariantProblem(
     diffTitle: baselineVariant ? 'Diff: Selected Definition vs Universal' : 'Selected Definition Preview',
     diffLines,
     diffPath: selectedVariant?.representative.path ?? null,
-    primaryActionLabel: problemKey === 'missing-universal'
-      ? SUBAGENT_ACTION_LABELS.addToUniversal
-      : SUBAGENT_ACTION_LABELS.applySelectedDefinition,
+    primaryActionLabel: selectedVariant
+      ? problemKey === 'missing-universal'
+        ? SUBAGENT_ACTION_LABELS.addToUniversal
+        : SUBAGENT_ACTION_LABELS.applySelectedDefinition
+      : null,
   };
 }
 
@@ -2977,8 +3001,15 @@ function groupSubagentVariants(locations: SubagentLocationRecord[]): SubagentVar
 }
 
 function isReadableSubagentVariantLocation(location: SubagentLocationRecord): boolean {
-  return (location.invalidDetails?.length ?? 0) === 0
-    && (location.fileType === 'real-file' || Boolean(normalizeDefinitionText(location.definitionText)));
+  if (location.fileType !== 'real-file') {
+    return false;
+  }
+
+  if ((location.invalidDetails?.length ?? 0) === 0) {
+    return true;
+  }
+
+  return Boolean(normalizeDefinitionText(location.definitionText));
 }
 
 const MCP_BREAKDOWN_FIELD_ORDER = [
@@ -3507,7 +3538,7 @@ function getPreferredSelectedVariantPath(
   selectedVariantPath: string | null | undefined,
   problem: InspectorActiveProblemModel,
 ): string | null {
-  return selectedVariantPath ?? getActiveProblemSelectedVariantPath(problem);
+  return getActiveProblemSelectedVariantPath(problem) ?? selectedVariantPath ?? null;
 }
 
 function buildMetadataRows(
@@ -4078,6 +4109,18 @@ function selectProblemKey<T extends InspectorProblemKey>(problemKeys: T[], selec
   }
 
   return defaultProblemKey;
+}
+
+function shouldPreferInspectionProblem(problem: InspectorActiveProblemModel): boolean {
+  return !problem.primaryActionLabel;
+}
+
+function getInspectionRequiredProblemKey<T extends InspectorProblemKey>(problemKeys: T[]): T | null {
+  return problemKeys.find(isInspectionRequiredProblemKey) ?? null;
+}
+
+function isInspectionRequiredProblemKey(problemKey: InspectorProblemKey): boolean {
+  return problemKey === 'invalid-definition' || problemKey === 'connection-failed';
 }
 
 function formatProblemCount(count: number): string {

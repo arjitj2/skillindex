@@ -269,7 +269,7 @@ describe('issue resolution request builder', () => {
     });
   });
 
-  it('requires a selected variant before repairing links when canonical is missing and multiple variants exist', () => {
+  it('uses the inspector-selected fallback when canonical is missing and multiple variants exist', () => {
     const skill: SkillRecord = {
       ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'diagnostic-rich-skill')!,
       name: 'double-missing-canonical-skill',
@@ -378,6 +378,61 @@ describe('issue resolution request builder', () => {
         issue: 'missing-canonical',
         skillName: 'double-missing-canonical-skill',
         selectedVariantPath: '~/.skillindex/sandbox/.factory/skills/double-missing-canonical-skill.md',
+      },
+    });
+  });
+
+  it('ignores stale selected skill variants and resolves with the current inspector fallback', () => {
+    const skill: SkillRecord = {
+      ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'diagnostic-rich-skill')!,
+      name: 'stale-selection-missing-canonical-skill',
+      structuralState: 'diverged-drift',
+      issueReasons: ['missing-canonical'],
+      locations: [
+        {
+          path: '~/.skillindex/sandbox/.claude/skills/stale-selection-missing-canonical-skill.md',
+          sourceId: 'sandbox-claude',
+          sourceLabel: 'Sandbox Claude',
+          sourceScope: 'sandbox',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-04T12:15:00.000Z',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.claude/skills/stale-selection-missing-canonical-skill.md',
+          contentHash: 'claude',
+          definitionText: 'claude body',
+        },
+        {
+          path: '~/.skillindex/sandbox/.factory/skills/stale-selection-missing-canonical-skill.md',
+          sourceId: 'sandbox-factory',
+          sourceLabel: 'Sandbox Factory',
+          sourceScope: 'sandbox',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-04T12:15:01.000Z',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.factory/skills/stale-selection-missing-canonical-skill.md',
+          contentHash: 'factory',
+          definitionText: 'factory body',
+        },
+      ],
+      detailDiagnostics: {
+        duplicateCandidates: [],
+        installSources: [],
+        missingInstallSources: [],
+        definitionIssues: [],
+      },
+    };
+    const model = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: 'missing-canonical',
+      selectedVariantPath: '~/.skillindex/sandbox/.deleted/skills/stale-selection-missing-canonical-skill.md',
+    }, agentIndex);
+
+    expect(getSkillResolveActionState(skill, model, sourceIndex)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'skill',
+        issue: 'missing-canonical',
+        skillName: 'stale-selection-missing-canonical-skill',
+        selectedVariantPath: '~/.skillindex/sandbox/.factory/skills/stale-selection-missing-canonical-skill.md',
       },
     });
   });
@@ -1135,6 +1190,207 @@ describe('issue resolution request builder', () => {
         issue: 'missing-from-agents',
         subagentName: 'reviewer',
         selectedVariantPath: '~/.skillindex/sandbox/.agents/agents/reviewer.md',
+      },
+    });
+  });
+
+  it('uses invalid-but-readable subagent definitions as Missing Universal candidates', () => {
+    const subagent: SubagentRecord = {
+      name: 'invalid-definition-subagent',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal', 'invalid-definition'],
+      locations: [
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          path: '~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md',
+          directoryPath: '~/.skillindex/sandbox/.claude/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-28T12:00:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          definitionText: '---\nname: invalid-definition-subagent\n---\nThis intentionally omits description.\n',
+          invalidDetails: ['Missing required field: description'],
+          mutability: 'writable',
+        },
+      ],
+    };
+
+    const defaultModel = buildSubagentInspectorModel(subagent, {}, agentIndex);
+    expect(defaultModel.activeProblem.key).toBe('missing-universal');
+    if (defaultModel.activeProblem.kind !== 'variant-resolution') {
+      throw new Error('Expected Missing Universal to render as a variant-resolution problem.');
+    }
+
+    expect(defaultModel.activeProblem.variants).toEqual([
+      expect.objectContaining({
+        path: '~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md',
+        definitionText: '---\nname: invalid-definition-subagent\n---\nThis intentionally omits description.\n',
+      }),
+    ]);
+    expect(defaultModel.activeProblem.selectedVariant?.path)
+      .toBe('~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md');
+    expect(defaultModel.definition.selectedVariantPath)
+      .toBe('~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md');
+    expect(defaultModel.definition.files).toEqual([
+      expect.objectContaining({
+        absolutePath: '~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md',
+        text: '---\nname: invalid-definition-subagent\n---\nThis intentionally omits description.\n',
+      }),
+    ]);
+    expect(defaultModel.activeProblem.baselineVariant).toBeNull();
+    expect(defaultModel.activeProblem.diffTitle).toBe('Selected Definition Preview');
+    expect(defaultModel.activeProblem.primaryActionLabel).toBe('Add to Universal');
+    expect(getSubagentResolveActionState(subagent, defaultModel, representativeInventorySnapshot)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'subagent',
+        issue: 'missing-universal',
+        subagentName: 'invalid-definition-subagent',
+        selectedVariantPath: '~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md',
+      },
+    });
+
+    const missingUniversalModel = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: null,
+    }, agentIndex);
+    expect(missingUniversalModel.activeProblem.primaryActionLabel).toBe('Add to Universal');
+    expect(getSubagentResolveActionState(subagent, missingUniversalModel, representativeInventorySnapshot)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'subagent',
+        issue: 'missing-universal',
+        subagentName: 'invalid-definition-subagent',
+        selectedVariantPath: '~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md',
+      },
+    });
+  });
+
+  it('keeps identical-copy repairs available after an invalid definition becomes Universal', () => {
+    const canonicalPath = '~/.skillindex/sandbox/.agents/agents/invalid-definition-subagent.md';
+    const claudePath = '~/.skillindex/sandbox/.claude/agents/invalid-definition-subagent.md';
+    const invalidDefinitionText = '---\nname: invalid-definition-subagent\n---\nThis intentionally omits description.\n';
+    const invalidComparisonKey = `invalid:${invalidDefinitionText}`;
+    const subagent: SubagentRecord = {
+      name: 'invalid-definition-subagent',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['identical-copies', 'missing-from-agents', 'invalid-definition'],
+      locations: [
+        {
+          agentId: 'universal-subagents',
+          agentLabel: 'Universal',
+          scope: 'sandbox',
+          path: canonicalPath,
+          directoryPath: '~/.skillindex/sandbox/.agents/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-31T12:00:00.000Z',
+          canonical: true,
+          format: 'markdown-frontmatter',
+          definitionText: invalidDefinitionText,
+          definitionComparisonKey: invalidComparisonKey,
+          invalidDetails: ['Missing required field: description'],
+          mutability: 'writable',
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          path: claudePath,
+          directoryPath: '~/.skillindex/sandbox/.claude/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-31T12:00:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          definitionText: invalidDefinitionText,
+          definitionComparisonKey: invalidComparisonKey,
+          invalidDetails: ['Missing required field: description'],
+          mutability: 'writable',
+        },
+      ],
+      missingLocations: [{
+        agentId: 'sandbox-codex',
+        agentLabel: 'Codex',
+        scope: 'sandbox',
+        directoryPath: '~/.skillindex/sandbox/.codex/agents',
+        path: '~/.skillindex/sandbox/.codex/agents/invalid-definition-subagent.toml',
+        format: 'codex-toml',
+        supportStatus: 'supported',
+      }],
+    };
+    const model = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'identical-copies',
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    expect(model.activeProblem.primaryActionLabel).toBe('Convert Copies to Symlinks');
+    expect(getSubagentResolveActionState(subagent, model, representativeInventorySnapshot)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'subagent',
+        issue: 'identical-copies',
+        subagentName: 'invalid-definition-subagent',
+        selectedVariantPath: canonicalPath,
+      },
+    });
+  });
+
+  it('keeps missing-agent repairs available when Universal is invalid but readable', () => {
+    const canonicalPath = '~/.skillindex/sandbox/.agents/agents/invalid-definition-subagent.md';
+    const invalidDefinitionText = '---\nname: invalid-definition-subagent\n---\nThis intentionally omits description.\n';
+    const subagent: SubagentRecord = {
+      name: 'invalid-definition-subagent',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-from-agents', 'invalid-definition'],
+      locations: [
+        {
+          agentId: 'universal-subagents',
+          agentLabel: 'Universal',
+          scope: 'sandbox',
+          path: canonicalPath,
+          directoryPath: '~/.skillindex/sandbox/.agents/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-31T12:00:00.000Z',
+          canonical: true,
+          format: 'markdown-frontmatter',
+          definitionText: invalidDefinitionText,
+          definitionComparisonKey: 'same-invalid-definition',
+          invalidDetails: ['Missing required field: description'],
+          mutability: 'writable',
+        },
+      ],
+      missingLocations: [{
+        agentId: 'sandbox-codex',
+        agentLabel: 'Codex',
+        scope: 'sandbox',
+        directoryPath: '~/.skillindex/sandbox/.codex/agents',
+        path: '~/.skillindex/sandbox/.codex/agents/invalid-definition-subagent.toml',
+        format: 'codex-toml',
+        supportStatus: 'supported',
+      }],
+    };
+
+    const defaultModel = buildSubagentInspectorModel(subagent, {}, agentIndex);
+    expect(defaultModel.activeProblem.key).toBe('missing-from-agents');
+    expect(defaultModel.activeProblem.primaryActionLabel).toBe('Add to Agents');
+
+    const missingAgentsModel = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-from-agents',
+      selectedVariantPath: null,
+    }, agentIndex);
+    expect(missingAgentsModel.activeProblem.key).toBe('missing-from-agents');
+    expect(missingAgentsModel.activeProblem.primaryActionLabel).toBe('Add to Agents');
+    expect(getSubagentResolveActionState(subagent, missingAgentsModel, representativeInventorySnapshot)).toEqual({
+      disabledReason: null,
+      request: {
+        entity: 'subagent',
+        issue: 'missing-from-agents',
+        subagentName: 'invalid-definition-subagent',
+        selectedVariantPath: canonicalPath,
       },
     });
   });

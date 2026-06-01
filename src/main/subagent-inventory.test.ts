@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -264,7 +264,7 @@ describe('subagent inventory', () => {
       issue: 'definition-mismatch',
       selectedVariantPath: claudePath,
       subagentName: 'reviewer',
-    }, scanOptions)).rejects.toThrow('Choose one of the available subagent definitions before resolving this issue.');
+    }, scanOptions)).rejects.toThrow('The selected subagent definition is no longer available for resolution.');
   });
 
   it('renders markdown subagents with incompatible required fields as materialized copies', async () => {
@@ -484,7 +484,7 @@ describe('subagent inventory', () => {
     expect(universalDefinition).not.toContain('github-tools:reviewer');
   });
 
-  it('requires an explicit definition choice for ambiguous subagent mismatch repair', async () => {
+  it('auto-selects the Universal definition for ambiguous subagent mismatch repair', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const canonicalPath = path.join(homeDir, '.agents', 'agents', 'ambiguous.md');
     const claudePath = path.join(homeDir, '.claude', 'agents', 'ambiguous.md');
@@ -492,16 +492,9 @@ describe('subagent inventory', () => {
     await writeMarkdownSubagent(canonicalPath, 'ambiguous', 'Canonical description.', 'Use canonical behavior.');
     await writeMarkdownSubagent(claudePath, 'ambiguous', 'Claude description.', 'Use Claude behavior.');
 
-    await expect(resolveInventoryIssue({
-      entity: 'subagent',
-      issue: 'definition-mismatch',
-      subagentName: 'ambiguous',
-    }, scanOptions)).rejects.toThrow('Choose a subagent definition before resolving this issue.');
-
     const repaired = await resolveInventoryIssue({
       entity: 'subagent',
       issue: 'definition-mismatch',
-      selectedVariantPath: canonicalPath,
       subagentName: 'ambiguous',
     }, scanOptions);
     const ambiguous = repaired.subagents?.find((subagent) => subagent.name === 'ambiguous');
@@ -643,6 +636,83 @@ describe('subagent inventory', () => {
     expect(resolvedSubagent?.issueReasons).not.toContain('definition-mismatch');
     expect(resolvedSubagent?.issueReasons).toContain('missing-from-agents');
     expect(resolvedSubagent?.missingLocations ?? []).not.toHaveLength(0);
+  });
+
+  it('promotes an invalid but readable subagent definition into Universal', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-invalid-subagent-resolution-'));
+    const homeDir = path.join(root, 'home');
+    const rootPaths = resolveSkillIndexPaths({
+      env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') },
+      homeDir,
+    });
+    const sandboxPaths = resolveSandboxSkillIndexPaths({ paths: rootPaths });
+    const scanOptions = {
+      paths: sandboxPaths,
+      homeDir,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    };
+    const subagentName = 'invalid-definition-subagent';
+    const claudePath = path.join(rootPaths.sandboxRoot, '.claude', 'agents', `${subagentName}.md`);
+    const canonicalPath = path.join(rootPaths.sandboxRoot, '.agents', 'agents', `${subagentName}.md`);
+
+    await seedRepresentativeFixtures({ paths: rootPaths, homeDir });
+
+    const before = await scanInventory(scanOptions);
+    const beforeSubagent = before.subagents?.find((subagent) => subagent.name === subagentName);
+    expect(beforeSubagent?.issueReasons).toEqual(expect.arrayContaining(['missing-universal', 'invalid-definition']));
+    await expect(readFile(canonicalPath, 'utf8')).rejects.toThrow();
+
+    const resolved = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: claudePath,
+      subagentName,
+    }, scanOptions);
+    const resolvedSubagent = resolved.subagents?.find((subagent) => subagent.name === subagentName);
+
+    expect(await readFile(canonicalPath, 'utf8')).toBe(await readFile(claudePath, 'utf8'));
+    expect((await lstat(claudePath)).isSymbolicLink()).toBe(true);
+    expect(await realpath(claudePath)).toBe(await realpath(canonicalPath));
+    expect(resolvedSubagent?.issueReasons).not.toContain('missing-universal');
+    expect(resolvedSubagent?.issueReasons).not.toContain('identical-copies');
+    expect(resolvedSubagent?.issueReasons).toContain('invalid-definition');
+
+    await rm(claudePath, { force: true });
+    await writeRawFile(claudePath, await readFile(canonicalPath, 'utf8'));
+    const duplicated = await scanInventory(scanOptions);
+    expect(duplicated.subagents?.find((subagent) => subagent.name === subagentName)?.issueReasons)
+      .toContain('identical-copies');
+
+    const symlinked = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'identical-copies',
+      selectedVariantPath: canonicalPath,
+      subagentName,
+    }, scanOptions);
+    const symlinkedSubagent = symlinked.subagents?.find((subagent) => subagent.name === subagentName);
+
+    expect((await lstat(claudePath)).isSymbolicLink()).toBe(true);
+    expect(await realpath(claudePath)).toBe(await realpath(canonicalPath));
+    expect(symlinkedSubagent?.issueReasons).not.toContain('identical-copies');
+    expect(symlinkedSubagent?.issueReasons).toContain('invalid-definition');
+
+    const codexPath = path.join(rootPaths.sandboxRoot, '.codex', 'agents', `${subagentName}.toml`);
+    const factoryPath = path.join(rootPaths.sandboxRoot, '.factory', 'droids', `${subagentName}.md`);
+    const installed = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-from-agents',
+      selectedVariantPath: canonicalPath,
+      subagentName,
+    }, scanOptions);
+    const installedSubagent = installed.subagents?.find((subagent) => subagent.name === subagentName);
+
+    expect(await readFile(codexPath, 'utf8')).toContain('name = "invalid-definition-subagent"');
+    expect(await readFile(codexPath, 'utf8')).toContain('developer_instructions = "This intentionally omits Claude Code\'s required description field."');
+    expect((await lstat(factoryPath)).isSymbolicLink()).toBe(true);
+    expect(await realpath(factoryPath)).toBe(await realpath(canonicalPath));
+    expect(installedSubagent?.issueReasons).not.toContain('missing-from-agents');
+    expect(installedSubagent?.issueReasons).toContain('invalid-definition');
   });
 
   it('preserves local-only Markdown fields when resolving subagent mismatches', async () => {

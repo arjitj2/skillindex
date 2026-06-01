@@ -2244,11 +2244,8 @@ describe('App shell inventory views', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'diverged-drift-skill', level: 3 })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /\/Users\/arjitjaiswal\/\.skillindex\/sandbox\/\.claude/i })).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^Use as Universal$/i })).toBeDisabled();
-      expect(screen.getByRole('button', { name: /^Use as Universal$/i })).toHaveAttribute(
-        'title',
-        'Choose a skill version before resolving this issue.',
-      );
+      expect(screen.getByRole('button', { name: /^Use as Universal$/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /^Use as Universal$/i })).not.toHaveAttribute('title');
     });
   });
 
@@ -2316,7 +2313,7 @@ describe('App shell inventory views', () => {
       { title: 'Variant resolution', problemKeys: ['definition-mismatch'] },
       { title: 'Structural repair', problemKeys: ['invalid-definition'] },
     ]);
-    expect(mcpModel.selectedVariantPath).toBe('/Users/arjitjaiswal/.skillindex/sandbox/.claude.json');
+    expect(mcpModel.selectedVariantPath).toBe('~/.skillindex/sandbox/.agents/mcp.json');
     expect(mcpModel.activeProblem.kind).toBe('variant-resolution');
     if (mcpModel.activeProblem.kind === 'variant-resolution') {
       expect(mcpModel.activeProblem.diffTitle).toBe(MCP_DETAIL_DIFF_TITLE);

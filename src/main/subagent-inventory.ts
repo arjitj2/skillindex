@@ -304,8 +304,8 @@ function buildSubagentLocation(
   const fileType: SkillLocationType = stats.isSymbolicLink() ? 'symlink' : 'real-file';
   const resolvedPath = safeRealpathSync(filePath);
   const modifiedAt = new Date(stats.mtimeMs).toISOString();
-  const definitionComparisonKey = parsed.invalidDetails.length === 0 && fileType === 'real-file'
-    ? stableStringify(normalizeSubagentDefinition(parsed.definition))
+  const definitionComparisonKey = fileType === 'real-file'
+    ? getSubagentDefinitionComparisonKey(parsed)
     : undefined;
   const localExtrasKeys = parsed.invalidDetails.length === 0 && fileType === 'real-file'
     ? Object.keys(omitSubagentAliasFields(parsed.definition)).sort()
@@ -332,6 +332,17 @@ function buildSubagentLocation(
     canonicalRole: owner.canonical ? 'canonical' : 'materialized-copy',
     mutability: owner.writable ? 'writable' : owner.plugin ? 'read-only-managed' : 'unknown',
   };
+}
+
+function getSubagentDefinitionComparisonKey(parsed: ParsedSubagentDefinition): string {
+  if (parsed.invalidDetails.length === 0) {
+    return stableStringify(normalizeSubagentDefinition(parsed.definition));
+  }
+
+  return stableStringify({
+    invalidDefinitionText: parsed.definitionText ?? null,
+    normalizedDefinition: parsed.definitionText ? undefined : normalizeSubagentDefinition(parsed.definition),
+  });
 }
 
 function classifySubagentLocations(
@@ -462,11 +473,13 @@ function getSubagentFileNameForOwner(
 }
 
 export function readPortableSubagentDefinitionFromFile({
+  allowInvalid = false,
   family,
   filePath,
   format,
   fallbackName,
 }: {
+  allowInvalid?: boolean;
   family?: string;
   filePath: string;
   format: AgentSubagentParserKind;
@@ -482,7 +495,7 @@ export function readPortableSubagentDefinitionFromFile({
     writable: false,
     canonical: false,
   }, fallbackName);
-  if (parsed.invalidDetails.length > 0) {
+  if (parsed.invalidDetails.length > 0 && !allowInvalid) {
     throw new Error(parsed.invalidDetails.join(' '));
   }
 
@@ -520,11 +533,13 @@ export function readPortableSubagentDefinitionFromText({
 export function renderPortableSubagentDefinition(
   definition: PortableSubagentDefinition,
   format: AgentSubagentParserKind,
-  options: { family?: string } = {},
+  options: { allowInvalid?: boolean; family?: string } = {},
 ): string {
   switch (format) {
     case 'codex-toml':
-      assertPortableSubagentCanRender(definition, format);
+      if (!options.allowInvalid) {
+        assertPortableSubagentCanRender(definition, format);
+      }
       return renderTomlFields({
         name: definition.name,
         description: definition.description,
@@ -533,7 +548,9 @@ export function renderPortableSubagentDefinition(
       });
     case 'json':
     case 'jsonc':
-      assertPortableSubagentCanRender(definition, format);
+      if (!options.allowInvalid) {
+        assertPortableSubagentCanRender(definition, format);
+      }
       return `${JSON.stringify({
         name: definition.name,
         description: definition.description,
@@ -541,7 +558,9 @@ export function renderPortableSubagentDefinition(
         ...definition.extras,
       }, null, 2)}\n`;
     case 'toml':
-      assertPortableSubagentCanRender(definition, format);
+      if (!options.allowInvalid) {
+        assertPortableSubagentCanRender(definition, format);
+      }
       return renderTomlFields({
         agent_type: 'subagent',
         name: definition.name,
@@ -550,10 +569,14 @@ export function renderPortableSubagentDefinition(
         ...definition.extras,
       });
     case 'markdown-frontmatter':
-      assertPortableSubagentCanRender(definition, format);
+      if (!options.allowInvalid) {
+        assertPortableSubagentCanRender(definition, format);
+      }
       return renderMarkdownSubagentDefinition(definition, options.family);
     case 'yaml':
-      assertPortableSubagentCanRender(definition, format);
+      if (!options.allowInvalid) {
+        assertPortableSubagentCanRender(definition, format);
+      }
       return renderYamlFields({
         name: definition.name,
         description: definition.description,
