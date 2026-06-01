@@ -81,7 +81,7 @@ export function getSkillResolveActionState(
 
   if (requiresVariantSelection && !selectedVariantPath) {
     return {
-      disabledReason: 'Choose a skill version before resolving this issue.',
+      disabledReason: null,
       request: null,
     };
   }
@@ -142,7 +142,7 @@ export function getMcpResolveActionState(
 
   if (requiresVariantSelection && !selectedVariantPath) {
     return {
-      disabledReason: 'Choose an MCP definition before resolving this issue.',
+      disabledReason: null,
       request: null,
     };
   }
@@ -181,10 +181,11 @@ export function getSubagentResolveActionState(
   const selectedVariantPath = getSubagentSelectedVariantPath(
     subagent,
     inspectorModel?.selectedVariantPath ?? null,
+    activeProblem.key,
   );
   if (!selectedVariantPath) {
     return {
-      disabledReason: 'Choose a subagent definition before resolving this issue.',
+      disabledReason: null,
       request: null,
     };
   }
@@ -275,7 +276,7 @@ function getSubagentResolutionTargets(
   const canonicalLocation = subagent.locations.find((location) =>
     location.canonical
     && location.fileType === 'real-file'
-    && (location.invalidDetails?.length ?? 0) === 0);
+    && (canUseInvalidSubagentResolutionSource(issue) || (location.invalidDetails?.length ?? 0) === 0));
   const selectedLocation = subagent.locations.find((location) => location.path === selectedVariantPath);
 
   switch (issue) {
@@ -454,17 +455,23 @@ function isAgentsMcpConfigPath(value: string): boolean {
   return parts.at(-1) === 'mcp.json' && parts.at(-2) === '.agents';
 }
 
-function getSubagentSelectedVariantPath(subagent: SubagentRecord, selectedVariantPath: string | null): string | null {
+function getSubagentSelectedVariantPath(
+  subagent: SubagentRecord,
+  selectedVariantPath: string | null,
+  issue: SubagentResolvableIssue,
+): string | null {
+  const allowInvalidSource = canUseInvalidSubagentResolutionSource(issue);
+
   if (selectedVariantPath && subagent.locations.some((location) =>
     location.path === selectedVariantPath
     && location.fileType === 'real-file'
-    && (location.invalidDetails?.length ?? 0) === 0)) {
+    && (allowInvalidSource || (location.invalidDetails?.length ?? 0) === 0))) {
     return selectedVariantPath;
   }
 
   const selectableLocations = subagent.locations.filter((location) =>
     location.fileType === 'real-file'
-    && (location.invalidDetails?.length ?? 0) === 0);
+    && (allowInvalidSource || (location.invalidDetails?.length ?? 0) === 0));
   const canonicalLocation = selectableLocations.find((location) => location.canonical && location.fileType === 'real-file');
   if (canonicalLocation) {
     return canonicalLocation.path;
@@ -479,6 +486,14 @@ function getSubagentSelectedVariantPath(subagent: SubagentRecord, selectedVarian
   }
 
   return groups.size === 1 ? selectableLocations[0]?.path ?? null : null;
+}
+
+function canUseInvalidSubagentResolutionSource(issue: SubagentResolvableIssue): boolean {
+  return issue === 'missing-universal'
+    || issue === 'missing-from-agents'
+    || issue === 'identical-copies'
+    || issue === 'broken-symlink'
+    || issue === 'wrong-symlink-target';
 }
 
 function getDistinctMcpVariantCount(mcp: McpRecord): number {
@@ -667,7 +682,7 @@ export function getAutoResolvableSubagentRequests(
         continue;
       }
 
-      const selectedVariantPath = getSubagentSelectedVariantPath(subagent, null);
+      const selectedVariantPath = getSubagentSelectedVariantPath(subagent, null, reason as SubagentResolvableIssue);
       if (!selectedVariantPath) {
         continue;
       }

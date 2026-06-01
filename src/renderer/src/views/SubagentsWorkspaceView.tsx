@@ -283,6 +283,12 @@ function SubagentDetailPanel({
             variant: 'strong' as const,
           }]
           : []),
+        ...(selectedSubagentInspectorModel.activeProblem.key === 'invalid-definition'
+          ? [{
+            label: 'Click a file name above to open it, then fix the definition.',
+            variant: 'note' as const,
+          }]
+          : []),
         ...(subagent.status === 'needs-attention'
           ? [{
             disabled: isDismissingDrift,
@@ -292,12 +298,6 @@ function SubagentDetailPanel({
             },
             shortcut: 'D',
             variant: 'subtle' as const,
-          }]
-          : []),
-        ...(selectedSubagentInspectorModel.activeProblem.key === 'invalid-definition'
-          ? [{
-            label: 'Click a file name above to open it, then fix the definition.',
-            variant: 'note' as const,
           }]
           : []),
         {
