@@ -20,7 +20,7 @@ If you teach one agent a skill, write one subagent, install one MCP server, or s
 
 Skill Index treats `~/.agents/skills`, `~/.agents/agents`, and `~/.agents/mcp.json` as user-owned Universal sources. Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved.
 
-Agent-native folders, config files, and plugin caches are still important. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
+Skill Index still respects agent-native folders, config files, and plugin caches. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
 
 That is the opinionated stance: organize your knowledge once, make it visible everywhere you work with agents.
 
