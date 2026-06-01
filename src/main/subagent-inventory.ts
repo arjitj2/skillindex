@@ -339,6 +339,8 @@ function getSubagentDefinitionComparisonKey(parsed: ParsedSubagentDefinition): s
     return stableStringify(normalizeSubagentDefinition(parsed.definition));
   }
 
+  // Invalid definitions are compared by source text so matching broken copies can be repaired
+  // without treating a failed parse as equivalent to a valid portable definition.
   return stableStringify({
     invalidDefinitionText: parsed.definitionText ?? null,
     normalizedDefinition: parsed.definitionText ? undefined : normalizeSubagentDefinition(parsed.definition),

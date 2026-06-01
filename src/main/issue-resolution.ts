@@ -312,9 +312,7 @@ async function resolveSkillIssueIfCurrent(
   switch (request.issue) {
     case 'missing-canonical':
     case 'diverged-copies': {
-      const selectedSourcePath = pickSkillRealFileSelectionPath(skill, request.selectedVariantPath, {
-        requireSelectionOnAmbiguous: true,
-      });
+      const selectedSourcePath = pickSkillRealFileSelectionPath(skill, request.selectedVariantPath);
       await makeSkillCanonical(
         {
           skillName: request.skillName,
@@ -473,7 +471,6 @@ async function resolveMcpIssueIfCurrent(
   assertMcpResolutionScopeAllowed(mcp);
 
   const selectedVariant = pickMcpSelection(mcp.locations, request.selectedVariantPath, {
-    requireSelectionOnAmbiguous: request.issue === 'definition-mismatch' || request.issue === 'missing-universal',
     preferUniversal: request.issue === 'missing-from-agents',
   });
   const selectedDefinition = parseSelectedMcpDefinition(selectedVariant);
@@ -725,13 +722,11 @@ async function resolveSubagentIssueIfCurrent(
     case 'missing-universal': {
       const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
         allowInvalid: true,
-        requireSelectionOnAmbiguous: true,
       });
       const canonicalPath = isInvalidSubagentLocation(selectedLocation)
         ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths)
         : (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
             preferExisting: false,
-            requireSelectionOnAmbiguous: true,
           })).path;
       const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
       await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
@@ -742,7 +737,6 @@ async function resolveSubagentIssueIfCurrent(
       const canonicalPackage = await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
         allowInvalid: true,
         preferExisting: true,
-        requireSelectionOnAmbiguous: true,
       });
       const targets = collectWritableMissingSubagentTargets(snapshot, subagent.missingLocations ?? []);
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
@@ -754,7 +748,6 @@ async function resolveSubagentIssueIfCurrent(
       const canonicalPath = canonicalLocation?.path
         ?? (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
           preferExisting: true,
-          requireSelectionOnAmbiguous: false,
         })).path;
       const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(
         subagent,
@@ -770,7 +763,6 @@ async function resolveSubagentIssueIfCurrent(
       const canonicalPackage = await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
         allowInvalid: true,
         preferExisting: true,
-        requireSelectionOnAmbiguous: false,
       });
       const targets = subagent.locations
         .filter((location) =>
@@ -786,9 +778,7 @@ async function resolveSubagentIssueIfCurrent(
       return;
     }
     case 'definition-mismatch': {
-      const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
-        requireSelectionOnAmbiguous: true,
-      });
+      const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath);
       const selectedDefinition = readPortableDefinitionForSubagentLocation(snapshot, subagent.name, selectedLocation);
       const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, options.paths);
       const canonicalPackage: CanonicalSubagentPackage = {
@@ -837,7 +827,6 @@ async function ensureCanonicalSubagentPackage(
   behavior: {
     allowInvalid?: boolean;
     preferExisting: boolean;
-    requireSelectionOnAmbiguous: boolean;
   },
 ): Promise<CanonicalSubagentPackage> {
   const canonicalLocation = behavior.preferExisting
@@ -858,7 +847,6 @@ async function ensureCanonicalSubagentPackage(
 
   const selectedLocation = pickSubagentSelection(subagent, selectedVariantPath, {
     allowInvalid: behavior.allowInvalid,
-    requireSelectionOnAmbiguous: behavior.requireSelectionOnAmbiguous,
   });
   const definition = stripSubagentLocalExtras(
     readPortableDefinitionForSubagentLocation(snapshot, subagent.name, selectedLocation, {
@@ -909,7 +897,7 @@ function isInvalidSubagentLocation(location: SubagentLocationRecord): boolean {
 function pickSubagentSelection(
   subagent: SubagentRecord,
   selectedVariantPath: string | undefined,
-  options: { allowInvalid?: boolean; requireSelectionOnAmbiguous: boolean },
+  options: { allowInvalid?: boolean } = {},
 ): SubagentLocationRecord {
   const selectableLocations = subagent.locations.filter((location) =>
     location.fileType === 'real-file'
@@ -937,10 +925,6 @@ function pickSubagentSelection(
 
   if (groups.size === 1) {
     return [...groups.values()][0][0];
-  }
-
-  if (options.requireSelectionOnAmbiguous) {
-    return pickPreferredSubagentSelection(selectableLocations);
   }
 
   return pickPreferredSubagentSelection(selectableLocations);
@@ -1206,9 +1190,7 @@ async function ensureCanonicalSkillPackage(
     };
   }
 
-  const selectedSourcePath = pickSkillRealFileSelectionPath(skill, selectedVariantPath, {
-    requireSelectionOnAmbiguous: true,
-  });
+  const selectedSourcePath = pickSkillRealFileSelectionPath(skill, selectedVariantPath);
   const selectedLocation = skill.locations.find((location) => location.path === selectedSourcePath && location.fileType === 'real-file');
   if (!selectedLocation) {
     throw new Error('The selected skill version must be a real file before repairing links.');
@@ -1233,7 +1215,6 @@ async function ensureCanonicalSkillPackage(
 function pickSkillRealFileSelectionPath(
   skill: SkillRecord,
   selectedVariantPath: string | undefined,
-  options: { requireSelectionOnAmbiguous: boolean },
 ): string {
   const realFileLocations = skill.locations.filter((location) => location.fileType === 'real-file');
   if (realFileLocations.length === 0) {
@@ -1252,10 +1233,6 @@ function pickSkillRealFileSelectionPath(
   const groups = groupSkillRealFiles(realFileLocations);
   if (groups.length === 1) {
     return groups[0][0].path;
-  }
-
-  if (options.requireSelectionOnAmbiguous) {
-    return pickPreferredSkillRealFileSelection(realFileLocations).path;
   }
 
   return pickPreferredSkillRealFileSelection(realFileLocations).path;
@@ -1331,7 +1308,7 @@ function resolveMissingSkillInstallPath(
 function pickMcpSelection(
   locations: McpLocationRecord[],
   selectedVariantPath: string | undefined,
-  options: { preferUniversal?: boolean; requireSelectionOnAmbiguous: boolean },
+  options: { preferUniversal?: boolean } = {},
 ): McpLocationRecord {
   if (locations.length === 0) {
     throw new Error('No MCP definition is available for resolution.');
@@ -1363,10 +1340,6 @@ function pickMcpSelection(
 
   if (groups.size === 1) {
     return [...groups.values()][0][0];
-  }
-
-  if (options.requireSelectionOnAmbiguous) {
-    return pickPreferredMcpSelection(locations);
   }
 
   return pickPreferredMcpSelection(locations);
