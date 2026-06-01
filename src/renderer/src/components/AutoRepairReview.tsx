@@ -176,7 +176,6 @@ export function ScopedAutoRepairControl({
         <div
           aria-label={`${activeIssueCount} ${activeIssueCount === 1 ? 'issue needs' : 'issues need'} manual review. No safe auto-resolutions available.`}
           className="scoped-repair-empty"
-          role="status"
           title={`${activeIssueCount} ${activeIssueCount === 1 ? 'issue needs' : 'issues need'} manual review.`}
         >
           <Info aria-hidden="true" />
