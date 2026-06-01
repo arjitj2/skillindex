@@ -76,14 +76,19 @@ import { SettingsWorkspaceView } from './views/SettingsWorkspaceView';
 import { AddSkillModal, SkillsWorkspaceView } from './views/SkillsWorkspaceView';
 import { AddSubagentModal, SubagentsWorkspaceView } from './views/SubagentsWorkspaceView';
 
-function getAutoResolvableRequestsForSnapshot(snapshot: SkillInventorySnapshot): ResolveIssueRequest[] {
+function getAutoResolvableRequestsForSnapshot(
+  snapshot: SkillInventorySnapshot,
+  entity?: ResolveIssueRequest['entity'],
+): ResolveIssueRequest[] {
   const sourceIndex = new Map(snapshot.sources.map((source) => [source.id, source]));
 
-  return [
+  const requests = [
     ...getAutoResolvableSkillRequests(snapshot, sourceIndex),
     ...getAutoResolvableMcpRequests(snapshot),
     ...getAutoResolvableSubagentRequests(snapshot),
   ];
+
+  return entity ? requests.filter((request) => request.entity === entity) : requests;
 }
 
 interface OnboardingPreferredSourceSelection {
@@ -838,6 +843,18 @@ export default function App() {
     () => (inventorySnapshot ? getAutoResolvableRequestsForSnapshot(inventorySnapshot) : []),
     [inventorySnapshot],
   );
+  const autoResolvableSkillRequests = useMemo(
+    () => autoResolvableRequests.filter((request) => request.entity === 'skill'),
+    [autoResolvableRequests],
+  );
+  const autoResolvableMcpRequests = useMemo(
+    () => autoResolvableRequests.filter((request) => request.entity === 'mcp'),
+    [autoResolvableRequests],
+  );
+  const autoResolvableSubagentRequests = useMemo(
+    () => autoResolvableRequests.filter((request) => request.entity === 'subagent'),
+    [autoResolvableRequests],
+  );
 
   const homeSummary = useMemo(() => getHomeSummary(inventorySnapshot), [inventorySnapshot]);
   const allSkillRows = useMemo(
@@ -1117,13 +1134,13 @@ export default function App() {
     showErrorToast,
   ]);
 
-  const handleAutoResolve = useCallback(async () => {
+  const handleAutoResolve = useCallback(async (entity?: ResolveIssueRequest['entity']) => {
     const startingSnapshot = latestInventorySnapshotRef.current;
     if (!startingSnapshot) {
       return;
     }
 
-    let remainingRequests = getAutoResolvableRequestsForSnapshot(startingSnapshot);
+    let remainingRequests = getAutoResolvableRequestsForSnapshot(startingSnapshot, entity);
     if (remainingRequests.length === 0) {
       return;
     }
@@ -1142,7 +1159,7 @@ export default function App() {
         attemptedRequestKeys.add(getResolveIssueRequestKey(request));
         const nextInventorySnapshot = await desktopApi.resolveIssue(request);
         applyInventorySnapshot(nextInventorySnapshot);
-        remainingRequests = getAutoResolvableRequestsForSnapshot(nextInventorySnapshot);
+        remainingRequests = getAutoResolvableRequestsForSnapshot(nextInventorySnapshot, entity);
       }
       await showAppToastWithLatestUndo(
         'Repairs applied',
@@ -1641,12 +1658,15 @@ export default function App() {
       mainContent = (
         <SkillsWorkspaceView
           addActionControl={renderAddActionControl('skill')}
+          autoResolvableRequests={autoResolvableSkillRequests}
           inventorySnapshot={inventorySnapshot}
+          isAutoResolving={isAutoResolving}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
           isRemovingInventoryItem={isRemovingInventoryItem}
           isApplyingCapabilityAction={isApplyingCapabilityAction}
           isRescanning={isRescanActionBusy}
+          onAutoResolve={() => { void handleAutoResolve('skill'); }}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onDismissDrift={handleDismissDrift}
           onResolveIssue={handleResolveIssue}
@@ -1677,7 +1697,9 @@ export default function App() {
       mainContent = (
         <McpWorkspaceView
           addActionControl={renderAddActionControl('mcp')}
+          autoResolvableRequests={autoResolvableMcpRequests}
           inventorySnapshot={inventorySnapshot}
+          isAutoResolving={isAutoResolving}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
           isRemovingInventoryItem={isRemovingInventoryItem}
@@ -1685,6 +1707,7 @@ export default function App() {
           mcp={selectedMcp}
           mcpInspectorModel={selectedMcpInspectorModel}
           sandboxRoot={shellState?.devTools?.sandboxRoot ?? null}
+          onAutoResolve={() => { void handleAutoResolve('mcp'); }}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
@@ -1708,11 +1731,14 @@ export default function App() {
       mainContent = (
         <SubagentsWorkspaceView
           addActionControl={renderAddActionControl('subagent')}
+          autoResolvableRequests={autoResolvableSubagentRequests}
           inventorySnapshot={inventorySnapshot}
+          isAutoResolving={isAutoResolving}
           isDismissingDrift={isDismissingDrift}
           isResolvingIssue={isResolvingIssue}
           isRemovingInventoryItem={isRemovingInventoryItem}
           isRescanning={isRescanActionBusy}
+          onAutoResolve={() => { void handleAutoResolve('subagent'); }}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetSubagentSelection}
           onDismissDrift={handleDismissDrift}

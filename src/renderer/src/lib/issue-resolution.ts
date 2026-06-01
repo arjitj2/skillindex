@@ -577,7 +577,7 @@ export function getAutoResolvableMcpRequests(
   const sourceIndex = new Map(snapshot.sources.map((source) => [source.id, source]));
 
   for (const mcp of snapshot.mcps ?? []) {
-    if (mcp.presentation !== 'active' || !mcp.issueReasons.includes('missing-from-agents')) {
+    if (mcp.presentation !== 'active') {
       continue;
     }
 
@@ -586,6 +586,27 @@ export function getAutoResolvableMcpRequests(
     }
 
     if (hasMcpMultipleResolutionScopes(mcp)) {
+      continue;
+    }
+
+    if (mcp.issueReasons.includes('missing-universal')
+      && !mcp.issueReasons.includes('definition-mismatch')
+      && !mcp.issueReasons.includes('invalid-definition')) {
+      const selectedVariantPath = getMcpSelectedVariantPath(mcp, null, 'missing-universal', snapshot);
+      const selectedLocation = selectedVariantPath
+        ? mcp.locations.find((location) => location.configPath === selectedVariantPath)
+        : null;
+      if (selectedVariantPath && selectedLocation && canWriteUniversalMcpTargetForScope(snapshot, selectedLocation.scope)) {
+        requests.push({
+          entity: 'mcp',
+          issue: 'missing-universal',
+          mcpName: mcp.name,
+          selectedVariantPath,
+        });
+      }
+    }
+
+    if (!mcp.issueReasons.includes('missing-from-agents')) {
       continue;
     }
 
@@ -613,6 +634,15 @@ export function getAutoResolvableMcpRequests(
   }
 
   return requests;
+}
+
+function canWriteUniversalMcpTargetForScope(
+  snapshot: SkillInventorySnapshot,
+  scope: McpRecord['locations'][number]['scope'],
+): boolean {
+  return scope === 'live'
+    || scope === 'sandbox'
+    || snapshot.sources.some((source) => source.canonical && source.writable && source.scope === scope);
 }
 
 const AUTO_RESOLVABLE_SUBAGENT_ISSUES: Set<SubagentResolvableIssue> = new Set([

@@ -1245,6 +1245,92 @@ body {
   height: 11px;
 }
 
+.scoped-repair-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.scoped-repair-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--action) 28%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--action) 8%, #fff);
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.scoped-repair-trigger:hover:not(:disabled),
+.scoped-repair-trigger[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--action) 42%, transparent);
+  background: color-mix(in srgb, var(--action) 13%, #fff);
+}
+
+.scoped-repair-trigger:disabled {
+  opacity: 0.64;
+  cursor: default;
+}
+
+.scoped-repair-trigger svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.scoped-repair-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: rgba(245, 246, 248, 0.78);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.scoped-repair-empty svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.scoped-repair-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(560px, calc(100vw - 68px));
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 44px rgba(36, 38, 43, 0.16);
+  overflow: hidden;
+}
+
+.scoped-repair-popover .review-panel {
+  border-top: none;
+}
+
+.scoped-repair-popover .review-panel--open {
+  max-height: min(520px, 70vh);
+}
+
 /* Canonical source */
 .canonical-source-card {
   display: grid;
@@ -1561,6 +1647,7 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 
 .inventory-keyboard-hint {

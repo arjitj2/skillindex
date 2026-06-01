@@ -20,6 +20,7 @@ import {
   getDisplaySkillIssueReasons,
   formatLastScanLabel,
 } from '../lib/inventory-presentation';
+import { AutoRepairReviewPanel } from '../components/AutoRepairReview';
 import {
   EmptyStatePanel,
   PageTopBar,
@@ -29,43 +30,7 @@ import {
   PluginTooltipIndicator,
   RescanToolbarButton,
 } from '../components/ui';
-
-const FIX_ACTION_LABELS: Record<string, string> = {
-  'missing-symlinks': 'Create missing symlinks',
-  'identical-copies': 'Convert copies to symlinks',
-  'missing-canonical': 'Promote to universal',
-  'missing-universal': 'Promote to universal',
-  'broken-symlink': 'Relink to canonical',
-  'wrong-symlink-target': 'Relink to canonical',
-  'missing-from-agents': 'Add to missing agents',
-};
-
-const FIX_TYPE_LABELS: Record<string, string> = {
-  'missing-symlinks': 'Missing Symlinks',
-  'identical-copies': 'Identical Copies',
-  'missing-canonical': 'Missing Universal',
-  'missing-universal': 'Missing Universal',
-  'broken-symlink': 'Broken Symlink',
-  'wrong-symlink-target': 'Wrong Symlink Target',
-  'missing-from-agents': 'Missing From Agents',
-};
-
-const FIX_ENTITY_LABELS: Record<ResolveIssueRequest['entity'], string> = {
-  skill: 'Skills',
-  mcp: 'MCPs',
-  subagent: 'Subagents',
-};
-
-interface PlannedFixRow {
-  key: string;
-  name: string;
-}
-
-interface PlannedFixGroup {
-  entity: ResolveIssueRequest['entity'];
-  issue: ResolveIssueRequest['issue'];
-  rows: PlannedFixRow[];
-}
+import { getAutoRepairSummary } from '../lib/auto-repair';
 
 interface HomeMetric {
   key: string;
@@ -102,32 +67,6 @@ interface HomeAttentionGroup {
 
 const EMPTY_HOME_METRIC = { total: 0, healthy: 0, needsAttention: 0 };
 
-function getResolveRequestDisplayName(
-  request: ResolveIssueRequest,
-  inventorySnapshot: SkillInventorySnapshot | null,
-): string {
-  if (request.entity === 'skill') {
-    const skill = inventorySnapshot?.skills.find((entry) => entry.name === request.skillName);
-    return skill ? getSkillDisplayName(skill) : request.skillName;
-  }
-
-  if (request.entity === 'subagent') {
-    return request.subagentName;
-  }
-
-  const mcp = inventorySnapshot?.mcps?.find((entry) => entry.name === request.mcpName);
-  return mcp ? getMcpDisplayName(mcp) : request.mcpName;
-}
-
-function getResolveRequestKey(request: ResolveIssueRequest): string {
-  return [
-    request.entity,
-    request.skillName ?? request.mcpName ?? request.subagentName,
-    request.issue,
-    request.selectedVariantPath ?? '',
-  ].join(':');
-}
-
 function getActiveIssueCount(inventorySnapshot: SkillInventorySnapshot | null): number {
   if (!inventorySnapshot) {
     return 0;
@@ -143,14 +82,6 @@ function getActiveIssueCount(inventorySnapshot: SkillInventorySnapshot | null): 
     .filter((subagent) => subagent.presentation === 'active' && subagent.status === 'needs-attention')
     .reduce((count, subagent) => count + subagent.issueReasons.length, 0);
   return skillIssueCount + mcpIssueCount + subagentIssueCount;
-}
-
-function getFixGroupKey(request: ResolveIssueRequest): string {
-  return `${request.entity}:${request.issue}`;
-}
-
-function formatFixGroupLabel(group: Pick<PlannedFixGroup, 'entity' | 'issue'>): string {
-  return `${FIX_ENTITY_LABELS[group.entity]} • ${FIX_TYPE_LABELS[group.issue] ?? group.issue}`;
 }
 
 function HomeInventoryMetrics({ metrics }: { metrics: HomeMetric[] }) {
@@ -317,24 +248,7 @@ function RepairSurface({
 }) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const reviewPanelId = 'home-auto-repair-review-panel';
-
-  const fixesByType = autoResolvableRequests.reduce<Map<string, PlannedFixGroup>>((acc, req) => {
-    const groupKey = getFixGroupKey(req);
-    const group = acc.get(groupKey) ?? {
-      entity: req.entity,
-      issue: req.issue,
-      rows: [],
-    };
-    group.rows.push({
-      key: getResolveRequestKey(req),
-      name: getResolveRequestDisplayName(req, inventorySnapshot),
-    });
-    acc.set(groupKey, group);
-    return acc;
-  }, new Map());
-
-  const totalIssues = autoResolvableRequests.length;
-  const totalItems = new Set(autoResolvableRequests.map((r) => r.skillName ?? r.mcpName ?? r.subagentName)).size;
+  const { totalIssues, totalItems } = getAutoRepairSummary(autoResolvableRequests);
   const manualIssueCount = Math.max(0, getActiveIssueCount(inventorySnapshot) - totalIssues);
 
   if (autoResolvableRequests.length === 0 && !hasAttentionIssues) {
@@ -405,50 +319,14 @@ function RepairSurface({
       </div>
 
       {reviewOpen ? (
-        <div className="review-panel review-panel--open" id={reviewPanelId}>
-          <div className="review-header">
-            <span className="review-header-title">Review planned fixes</span>
-          </div>
-          <div className="review-body">
-            {[...fixesByType.values()].map((fixGroup) => (
-              <div className="issue-bucket" key={`${fixGroup.entity}:${fixGroup.issue}`}>
-                <div className="issue-bucket-header">
-                  <span className="issue-bucket-label">{formatFixGroupLabel(fixGroup)}</span>
-                  <span className="issue-bucket-count">{fixGroup.rows.length} {fixGroup.rows.length === 1 ? 'item' : 'items'}</span>
-                </div>
-                <div className="issue-bucket-rows">
-                  {fixGroup.rows.map((row) => (
-                    <div className="skill-fix-row" key={row.key}>
-                      <span className="skill-fix-name">{row.name}</span>
-                      <span className="skill-fix-action">{FIX_ACTION_LABELS[fixGroup.issue] ?? fixGroup.issue}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="review-footer">
-            <span className="review-footer-summary">{totalIssues} {totalIssues === 1 ? 'repair' : 'repairs'} · {totalItems} {totalItems === 1 ? 'item' : 'items'} affected</span>
-            <button className="review-footer-cancel" type="button" onClick={() => setReviewOpen(false)}>
-              Cancel
-            </button>
-            <button
-              className={`review-footer-confirm${isAutoResolving ? ' review-footer-confirm--busy' : ''}`}
-              disabled={isAutoResolving}
-              type="button"
-              onClick={onAutoResolve}
-            >
-              {isAutoResolving ? (
-                'Applying…'
-              ) : (
-                <>
-                  <Check />
-                  Apply {totalIssues} {totalIssues === 1 ? 'repair' : 'repairs'}
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+        <AutoRepairReviewPanel
+          autoResolvableRequests={autoResolvableRequests}
+          id={reviewPanelId}
+          inventorySnapshot={inventorySnapshot}
+          isAutoResolving={isAutoResolving}
+          onAutoResolve={onAutoResolve}
+          onCancel={() => setReviewOpen(false)}
+        />
       ) : null}
     </div>
   );
