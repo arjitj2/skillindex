@@ -20,7 +20,7 @@ import {
   getSubagentStatusLabels,
   type SubagentStatusFilter,
 } from '../lib/inventory-presentation';
-import type { InspectorModel } from '../lib/detail-inspector-model';
+import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { getSubagentResolveActionState } from '../lib/issue-resolution';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
 import {
@@ -45,6 +45,7 @@ export function SubagentsWorkspaceView({
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
+  onOpenPluginSource,
   onRequestRemove = () => undefined,
   onResolveIssue,
   onRescan,
@@ -71,6 +72,7 @@ export function SubagentsWorkspaceView({
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove?: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
   onRescan: () => Promise<void>;
@@ -186,6 +188,7 @@ export function SubagentsWorkspaceView({
               inventorySnapshot={inventorySnapshot}
               onClearSelection={onClearSelection}
               onDismissDrift={onDismissDrift}
+              onOpenPluginSource={onOpenPluginSource}
               onRequestRemove={onRequestRemove}
               onSelectProblem={onSelectProblem}
               onSelectVariant={onSelectVariant}
@@ -209,6 +212,7 @@ function SubagentDetailPanel({
   inventorySnapshot,
   onClearSelection,
   onDismissDrift,
+  onOpenPluginSource,
   onRequestRemove,
   onSelectProblem,
   onSelectVariant,
@@ -224,6 +228,7 @@ function SubagentDetailPanel({
   inventorySnapshot: SkillInventorySnapshot | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onSelectProblem: (problemKey: SubagentIssueReason | null) => void;
   onSelectVariant: (path: string | null) => void;
@@ -294,6 +299,7 @@ function SubagentDetailPanel({
       paneClassName={`subagent-inspector-panel${selectedSubagentProblemKey ? ' subagent-inspector-panel--problem-selected' : ''}`}
       sandboxRoot={sandboxRoot}
       onClose={onClearSelection}
+      onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => {
         onSelectProblem(problemKey as SubagentIssueReason);
       }}
