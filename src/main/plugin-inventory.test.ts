@@ -390,7 +390,8 @@ describe('plugin inventory', () => {
     const pluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'github-tools:github');
     expect(pluginMcp).toMatchObject({
       status: 'needs-attention',
-      issueReasons: ['missing-from-agents'],
+      issueReasons: ['missing-universal'],
+      missingLocations: [],
     });
     expect(pluginMcp?.locations[0]).toMatchObject({
       agentId: 'plugin:codex:github-tools@openai-curated:abc123',
@@ -440,7 +441,8 @@ describe('plugin inventory', () => {
     const pluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'context7:context7');
     expect(pluginMcp).toMatchObject({
       status: 'needs-attention',
-      issueReasons: ['missing-from-agents'],
+      issueReasons: ['missing-universal'],
+      missingLocations: [],
       locations: [
         expect.objectContaining({
           agentId: 'plugin:claude:context7@claude-plugins-official:unknown',
@@ -494,8 +496,8 @@ describe('plugin inventory', () => {
 
     const pluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'computer-use:healthyMcp');
     expect(pluginMcp).toMatchObject({
-      status: 'healthy',
-      issueReasons: [],
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       missingLocations: [],
     });
     expect(pluginMcp?.locations).toEqual(expect.arrayContaining([
