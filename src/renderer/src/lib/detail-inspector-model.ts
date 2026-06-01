@@ -1423,7 +1423,7 @@ function formatMcpAgentLabel(
   configPath?: string,
 ): string {
   const agent = agentIndex.get(agentId);
-  if (configPath && isAgentsPath(configPath)) {
+  if (configPath && isAgentsMcpConfigPath(configPath)) {
     return 'Universal';
   }
 
@@ -1902,7 +1902,7 @@ function buildMcpLocationSections(
     .map((entry) => mapMcpLocationEntryRow(mcp, referenceLocation, entry))
     .sort(compareInspectorLocationRowsByLabel);
   const installedRows = agentEntries
-    .filter((entry) => !entry.path || !isAgentsPath(entry.path))
+    .filter((entry) => !entry.path || !isAgentsMcpConfigPath(entry.path))
     .filter((entry) => entry.location?.provenance?.kind !== 'plugin')
     .map((entry) => mapMcpLocationEntryRow(mcp, referenceLocation, entry))
     .sort(compareInspectorLocationRowsByLabel);
@@ -1963,7 +1963,7 @@ function getExpectedUniversalMcpConfigPath(
     ...(mcp.missingLocations ?? []).map((location) => location.scope),
   ]);
   const universalSource = [...sourceIndex.values()].find((source) =>
-    source.canonical && source.writable && scopes.has(source.scope) && isAgentsPath(source.skillsDir));
+    source.canonical && source.writable && scopes.has(source.scope) && isAgentsSkillsPath(source.skillsDir));
 
   return universalSource ? joinInspectorPath(getPathDirname(universalSource.skillsDir), 'mcp.json') : null;
 }
@@ -2004,7 +2004,7 @@ function mapMcpLocationEntryRow(
 }
 
 function isUniversalMcpLocation(location: McpLocationRecord): boolean {
-  return location.provenance?.kind === 'universal' || isAgentsPath(location.configPath);
+  return location.provenance?.kind === 'universal' || isAgentsMcpConfigPath(location.configPath);
 }
 
 function formatUniversalMcpLocationLabel(location: McpLocationRecord): string {
@@ -3287,7 +3287,7 @@ function selectMcpVariant(
     }
   }
 
-  const agentsVariant = variants.find((variant) => isAgentsPath(variant.representative.configPath));
+  const agentsVariant = variants.find((variant) => isAgentsMcpConfigPath(variant.representative.configPath));
   return agentsVariant ?? baselineVariant ?? variants[0] ?? null;
 }
 
@@ -3447,6 +3447,24 @@ function isAgentsPath(value: string | undefined | null): boolean {
   }
 
   return value.replace(/\\/g, '/').includes('/.agents/');
+}
+
+function isAgentsMcpConfigPath(value: string | undefined | null): boolean {
+  const parts = getNormalizedPathParts(value);
+  return parts.at(-1) === 'mcp.json' && parts.at(-2) === '.agents';
+}
+
+function isAgentsSkillsPath(value: string | undefined | null): boolean {
+  const parts = getNormalizedPathParts(value);
+  return parts.at(-1) === 'skills' && parts.at(-2) === '.agents';
+}
+
+function getNormalizedPathParts(value: string | undefined | null): string[] {
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  return value.replace(/\\/g, '/').split('/').filter(Boolean);
 }
 
 function buildProblemSections(problemKeys: InspectorProblemKey[]): InspectorProblemSectionModel[] {
@@ -3898,7 +3916,7 @@ function getMcpReferencePath(mcp: McpRecord): string | null {
     return null;
   }
 
-  return mcp.locations.find((location) => isAgentsPath(location.configPath))?.configPath ?? mcp.locations[0]?.configPath ?? null;
+  return mcp.locations.find((location) => isAgentsMcpConfigPath(location.configPath))?.configPath ?? mcp.locations[0]?.configPath ?? null;
 }
 
 function buildMcpDefinitionText(location?: McpLocationRecord): string | undefined {

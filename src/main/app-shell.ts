@@ -16,6 +16,7 @@ export async function getAppShellState(): Promise<AppShellState> {
     dataDir: paths.dataDir,
     cacheFile: paths.cacheFile,
     configFile: paths.configFile,
+    liveAgentsDir: paths.liveAgentsDir,
     liveCanonicalUserSkillsDir: paths.liveCanonicalUserSkillsDir,
     ...(isDevToolsEnabled()
       ? {

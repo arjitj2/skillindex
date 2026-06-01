@@ -900,7 +900,7 @@ function getWritableUniversalMcpConfigPaths(
   }
 
   if (scope === 'live') {
-    return [path.join(path.dirname(paths.liveCanonicalUserSkillsDir), 'mcp.json')];
+    return [path.join(paths.liveAgentsDir, 'mcp.json')];
   }
 
   return [];

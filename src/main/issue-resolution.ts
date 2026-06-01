@@ -588,14 +588,18 @@ function collectAgentLocalDefinitionsForMcp(
   selectedDefinition: SelectedMcpDefinition,
 ): Record<string, McpDefinitionObject> {
   const agentLocal: Record<string, McpDefinitionObject> = {};
+  const activeAgentLocalKeys = getActiveMcpAgentLocalKeys(mcp, selectedDefinition);
 
-  mergeAgentLocalDefinitions(agentLocal, selectedDefinition.agentLocal);
+  mergeAgentLocalDefinitions(agentLocal, selectedDefinition.agentLocal, activeAgentLocalKeys);
+
+  for (const location of mcp.locations) {
+    mergeAgentLocalDefinitions(agentLocal, location.agentLocal ?? {}, activeAgentLocalKeys);
+  }
 
   for (const location of mcp.locations) {
     if (location.agentLocalKey && isNonEmptyMcpDefinitionObject(location.nativeDefinition)) {
       agentLocal[location.agentLocalKey] = location.nativeDefinition;
     }
-    mergeAgentLocalDefinitions(agentLocal, location.agentLocal ?? {});
   }
 
   if (selectedDefinition.agentLocalKey && isNonEmptyMcpDefinitionObject(selectedDefinition.native)) {
@@ -605,12 +609,31 @@ function collectAgentLocalDefinitionsForMcp(
   return agentLocal;
 }
 
+function getActiveMcpAgentLocalKeys(
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  selectedDefinition: SelectedMcpDefinition,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const location of mcp.locations) {
+    if (location.agentLocalKey) {
+      keys.add(location.agentLocalKey);
+    }
+  }
+
+  if (selectedDefinition.agentLocalKey) {
+    keys.add(selectedDefinition.agentLocalKey);
+  }
+
+  return keys;
+}
+
 function mergeAgentLocalDefinitions(
   target: Record<string, McpDefinitionObject>,
   source: Record<string, McpDefinitionObject>,
+  allowedKeys: Set<string>,
 ): void {
   for (const [key, value] of Object.entries(source)) {
-    if (isNonEmptyMcpDefinitionObject(value)) {
+    if (allowedKeys.has(key) && isNonEmptyMcpDefinitionObject(value)) {
       target[key] = value;
     }
   }
@@ -671,7 +694,7 @@ function getFallbackUniversalMcpConfigPath(
   }
 
   if (scope === 'live') {
-    return path.join(path.dirname(paths.liveCanonicalUserSkillsDir), 'mcp.json');
+    return path.join(paths.liveAgentsDir, 'mcp.json');
   }
 
   return null;
@@ -1261,7 +1284,12 @@ function pickMcpSelection(
 
 function isUniversalMcpSelectionLocation(location: McpLocationRecord): boolean {
   return location.provenance?.kind === 'universal'
-    || location.configPath.replace(/\\/g, '/').includes('/.agents/');
+    || isAgentsMcpConfigPath(location.configPath);
+}
+
+function isAgentsMcpConfigPath(value: string): boolean {
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.at(-1) === 'mcp.json' && parts.at(-2) === '.agents';
 }
 
 function parseSelectedMcpDefinition(location: McpLocationRecord): SelectedMcpDefinition {

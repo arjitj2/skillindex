@@ -2724,6 +2724,7 @@ function createShellState(overrides: Partial<AppShellState> = {}): AppShellState
     dataDir: DEFAULT_DATA_DIR,
     cacheFile: `${DEFAULT_DATA_DIR}/cache.json`,
     configFile: `${DEFAULT_DATA_DIR}/config.json`,
+    liveAgentsDir: '/Users/arjitjaiswal/.agents',
     liveCanonicalUserSkillsDir: '/Users/arjitjaiswal/.agents/skills',
     devTools: {
       sandboxEnabled: true,

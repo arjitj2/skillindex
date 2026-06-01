@@ -45,6 +45,7 @@ export interface AppShellState {
   dataDir: string;
   cacheFile: string;
   configFile: string;
+  liveAgentsDir: string;
   liveCanonicalUserSkillsDir: string;
   devTools?: {
     sandboxEnabled: boolean;

@@ -351,7 +351,9 @@ function getUniversalRootPath(
       ?? '~/.skillindex/sandbox/.agents';
   }
 
-  return getDisplayParentPath(shellState?.liveCanonicalUserSkillsDir) ?? '~/.agents';
+  return shellState?.liveAgentsDir
+    ?? getDisplayParentPath(shellState?.liveCanonicalUserSkillsDir)
+    ?? '~/.agents';
 }
 
 function getDisplayParentPath(displayPath: string | undefined): string | null {

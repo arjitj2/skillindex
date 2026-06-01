@@ -51,6 +51,7 @@ const browserPreviewApi: SkillIndexDesktopApi = {
       dataDir: '~/.skillindex',
       cacheFile: '~/.skillindex/cache.json',
       configFile: '~/.skillindex/config.json',
+      liveAgentsDir: '~/.agents',
       liveCanonicalUserSkillsDir: '~/.agents/skills',
       devTools: {
         sandboxEnabled: true,

@@ -6,30 +6,20 @@ resolution tests.
 
 ## Universal Sources
 
+Skill Index treats this `~/.agents` structure as Universal:
+
+```text
+~/.agents/
+  skills/
+  agents/
+  mcp.json
+```
+
 | Item type | Universal source | Agent-local representation |
 | --- | --- | --- |
 | Skills | Preferred canonical skills directory, default `~/.agents/skills` | Skill package in each agent skills directory, usually a symlink to Universal |
 | Subagents | `~/.agents/agents` | One subagent file per agent, written in that agent's supported format |
 | MCPs | `~/.agents/mcp.json` | One server entry inside each agent MCP config |
-
-MCP Universal entries use this shape:
-
-```json
-{
-  "servers": {
-    "name": {
-      "command": "node",
-      "args": ["server.js"],
-      "agentLocal": {
-        "codex": { "startup_timeout_ms": 20000 }
-      }
-    }
-  }
-}
-```
-
-`agentLocal` stores native fields by agent family. Core fields win; native fields
-inside `agentLocal` cannot override the portable Universal core.
 
 ## Skills
 
@@ -56,6 +46,25 @@ inside `agentLocal` cannot override the portable Universal core.
 | `invalid-definition` | Invalid Definition | Required subagent fields or syntax are invalid. | Diagnostic only. |
 
 ## MCPs
+
+Universal MCP entries use this shape:
+
+```json
+{
+  "servers": {
+    "name": {
+      "command": "node",
+      "args": ["server.js"],
+      "agentLocal": {
+        "codex": { "startup_timeout_ms": 20000 }
+      }
+    }
+  }
+}
+```
+
+`agentLocal` stores native fields by agent family. Core fields win; native fields
+inside `agentLocal` cannot override the portable Universal core.
 
 | Reason | Label | When it appears | Resolution |
 | --- | --- | --- | --- |

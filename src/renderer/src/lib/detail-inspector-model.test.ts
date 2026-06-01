@@ -2205,6 +2205,49 @@ describe('buildMcpInspectorModel', () => {
     ]));
   });
 
+  it('does not treat nested .agents cache MCP paths as the Universal file', () => {
+    const mcp: RepresentativeMcp = {
+      name: 'cached-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [
+        {
+          agentId: 'sandbox-plugin-cache',
+          agentLabel: 'Plugin Cache',
+          scope: 'sandbox',
+          configPath: '/tmp/project/.agents/cache/mcp.json',
+          transport: 'stdio',
+          command: 'node',
+          args: ['cached-server.js'],
+          definitionText: '{"command":"node","args":["cached-server.js"]}',
+          definitionComparisonKey: '{"args":["cached-server.js"],"command":"node","transport":"stdio"}',
+          mutability: 'read-only-managed',
+        },
+      ],
+    };
+
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: null,
+    }, agentIndex, sourceIndex);
+
+    expect(model.locations.find((section) => section.id === 'universal')?.rows).toEqual([
+      objectContaining({
+        path: '~/.skillindex/sandbox/.agents/mcp.json',
+        pathText: '~/.skillindex/sandbox/.agents/mcp.json',
+        statusLabel: 'Missing Universal',
+        tone: 'muted',
+      }),
+    ]);
+    expect(model.locations.find((section) => section.id === 'installed-paths')?.rows).toEqual([
+      objectContaining({
+        label: 'Plugin Cache',
+        path: '/tmp/project/.agents/cache/mcp.json',
+      }),
+    ]);
+  });
+
   it('uses compact skill variant ids instead of raw definition text', () => {
     const skill = withDefinitionText(
       findRepresentativeSkill('diagnostic-rich-skill'),

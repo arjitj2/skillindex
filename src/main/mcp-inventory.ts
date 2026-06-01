@@ -788,6 +788,7 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
       args,
       definitionText,
       definitionComparisonKey: stableStringify({
+        agentLocal: splitDefinition.agentLocal,
         core: splitDefinition.core,
         native: splitDefinition.native,
       }),

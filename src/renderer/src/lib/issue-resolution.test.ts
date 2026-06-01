@@ -1049,6 +1049,78 @@ describe('issue resolution request builder', () => {
     });
   });
 
+  it('keeps mixed-scope MCP repairs disabled instead of building a request that fails in main', () => {
+    const mcp: McpRecord = {
+      name: 'mixed-scope-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-from-agents'],
+      locations: [
+        {
+          agentId: 'sandbox-agents',
+          agentLabel: 'Sandbox .agents',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.agents/mcp.json',
+          transport: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          definitionText: '{"command":"node","args":["server.js"]}',
+          definitionComparisonKey: '{"args":["server.js"],"command":"node","transport":"stdio"}',
+          provenance: {
+            kind: 'universal',
+            sourcePath: '~/.skillindex/sandbox/.agents/mcp.json',
+            discoveredAt: '2026-05-31T00:00:00.000Z',
+          },
+        },
+      ],
+      missingLocations: [
+        {
+          agentId: 'live-codex',
+          agentLabel: 'Codex',
+          scope: 'live',
+          configPath: '/Users/tester/.codex/config.toml',
+        },
+      ],
+    };
+    const baseAgent = representativeInventorySnapshot.agents!.find((agent) => agent.id === 'sandbox-codex')!;
+    const snapshot: SkillInventorySnapshot = {
+      ...representativeInventorySnapshot,
+      mcps: [mcp],
+      agents: [
+        ...(representativeInventorySnapshot.agents ?? []),
+        {
+          ...baseAgent,
+          id: 'live-codex',
+          label: 'Codex',
+          scope: 'live',
+          writable: true,
+          installState: 'installed',
+          mcpParserKind: 'toml',
+          mcpConfigLocation: {
+            state: 'available',
+            path: '/Users/tester/.codex/config.toml',
+            displayPath: '~/.codex/config.toml',
+            exists: true,
+          },
+        },
+      ],
+    };
+    const localAgentIndex = new Map((snapshot.agents ?? []).map((agent) => [agent.id, agent]));
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'missing-from-agents',
+      selectedVariantPath: null,
+    }, localAgentIndex);
+
+    expect(getMcpResolveActionState(mcp, model, snapshot)).toEqual({
+      disabledReason: 'This MCP can only be resolved when every affected location is in the same inventory source.',
+      request: null,
+    });
+    expect(getAutoResolvableMcpRequests(snapshot)).not.toContainEqual(expect.objectContaining({
+      entity: 'mcp',
+      mcpName: 'mixed-scope-mcp',
+    }));
+  });
+
   it('auto-selects the canonical subagent definition for missing-from-agents', () => {
     const subagent = findRepresentativeSubagent('reviewer');
     const model = buildSubagentInspectorModel(subagent, {
@@ -1176,6 +1248,7 @@ describe('issue resolution request builder', () => {
     const baseMcp = findRepresentativeMcp('missing-from-agents-mcp');
     const sourceLocation = {
       ...baseMcp.locations[0],
+      scope: 'live' as const,
       definitionText: '{"command":"node","args":["server.js"],"cwd":"/Users/tester/project"}',
       definitionComparisonKey: '{"args":["server.js"],"command":"node","cwd":"/Users/tester/project"}',
     };
@@ -1246,7 +1319,10 @@ describe('issue resolution request builder', () => {
       'toml-mcpServers-array',
     ];
     const baseMcp = findRepresentativeMcp('missing-from-agents-mcp');
-    const [sourceLocation] = baseMcp.locations;
+    const sourceLocation = {
+      ...baseMcp.locations[0],
+      scope: 'live' as const,
+    };
     const baseAgent = representativeInventorySnapshot.agents!.find((agent) => agent.id === 'sandbox-codex')!;
 
     for (const parserKind of supportedParserKinds) {
@@ -1302,7 +1378,10 @@ describe('issue resolution request builder', () => {
 
   it('allows MCP missing-from-agents repairs when at least one target is writable', () => {
     const baseMcp = findRepresentativeMcp('missing-from-agents-mcp');
-    const [sourceLocation] = baseMcp.locations;
+    const sourceLocation = {
+      ...baseMcp.locations[0],
+      scope: 'live' as const,
+    };
     const baseAgent = representativeInventorySnapshot.agents!.find((agent) => agent.id === 'sandbox-codex')!;
     const writableTargetId = 'target-json';
     const unsupportedTargetId = 'target-yaml';
@@ -1379,7 +1458,10 @@ describe('issue resolution request builder', () => {
 
   it('keeps MCP repairs disabled for installed agents with unsupported parser kinds', () => {
     const baseMcp = findRepresentativeMcp('missing-from-agents-mcp');
-    const [sourceLocation] = baseMcp.locations;
+    const sourceLocation = {
+      ...baseMcp.locations[0],
+      scope: 'live' as const,
+    };
     const baseAgent = representativeInventorySnapshot.agents!.find((agent) => agent.id === 'sandbox-codex')!;
     const targetAgentId = 'target-yaml';
     const mcp: McpRecord = {

@@ -557,6 +557,69 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
+  it('includes universal agentLocal drift in MCP dismissal signatures', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-agent-local-signature-'));
+    const env = {
+      SKILL_INDEX_DATA_DIR: root,
+      SKILL_INDEX_AGENT_SUBSET: 'factory',
+    };
+    const paths = resolveSkillIndexPaths({ env });
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const writeUniversalConfig = async (timeoutMs: number) => {
+      await writeFile(agentsConfigPath, `${JSON.stringify({
+        servers: {
+          nativeMismatch: {
+            command: 'node',
+            args: ['server.js'],
+            agentLocal: {
+              factory: {
+                startup_timeout_ms: timeoutMs,
+              },
+            },
+          },
+        },
+      }, null, 2)}\n`, 'utf8');
+    };
+
+    await mkdir(path.dirname(agentsConfigPath), { recursive: true });
+    await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await writeUniversalConfig(1_000);
+    await writeFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        nativeMismatch: {
+          command: 'node',
+          args: ['server.js'],
+          startup_timeout_ms: 2_000,
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const firstInventory = await scanInventory({
+      paths,
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    const firstSignature = firstInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.signature;
+
+    await writeUniversalConfig(3_000);
+    const secondInventory = await scanInventory({
+      paths,
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    const secondSignature = secondInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.signature;
+
+    expect(firstInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.issueReasons)
+      .toContain('definition-mismatch');
+    expect(firstSignature).toBeTruthy();
+    expect(secondSignature).toBeTruthy();
+    expect(secondSignature).not.toBe(firstSignature);
+  });
+
   it('compares MCP definitions using portable launch, cwd, and auth fields only', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-portable-fields-'));
     const paths = resolveSkillIndexPaths({

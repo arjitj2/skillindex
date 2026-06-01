@@ -118,6 +118,13 @@ export function getMcpResolveActionState(
   }
 
   const issue = activeProblem.key as McpResolvableIssue;
+  if (hasMcpMultipleResolutionScopes(mcp)) {
+    return {
+      disabledReason: 'This MCP can only be resolved when every affected location is in the same inventory source.',
+      request: null,
+    };
+  }
+
   const targetLocations = getMcpResolutionTargetsForAction(mcp, issue);
   const targetableLocations = targetLocations.filter((location) => isWritableSupportedMcpTarget(location, snapshot));
   const blockedTarget = targetLocations.length > 0 && targetableLocations.length === 0;
@@ -443,7 +450,8 @@ function getUniversalMcpLocation(
 }
 
 function isAgentsMcpConfigPath(value: string): boolean {
-  return value.replace(/\\/g, '/').includes('/.agents/');
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.at(-1) === 'mcp.json' && parts.at(-2) === '.agents';
 }
 
 function getSubagentSelectedVariantPath(subagent: SubagentRecord, selectedVariantPath: string | null): string | null {
@@ -498,6 +506,13 @@ function isSkillResolvableIssue(value: string): value is SkillResolvableIssue {
 
 function isMcpResolvableIssue(value: string): value is McpResolvableIssue {
   return MCP_RESOLVABLE_ISSUES.has(value as McpResolvableIssue);
+}
+
+function hasMcpMultipleResolutionScopes(mcp: McpRecord): boolean {
+  return new Set([
+    ...mcp.locations.map((location) => location.scope),
+    ...(mcp.missingLocations ?? []).map((location) => location.scope),
+  ]).size > 1;
 }
 
 function isSubagentResolvableIssue(value: string): value is SubagentResolvableIssue {
@@ -567,6 +582,10 @@ export function getAutoResolvableMcpRequests(
     }
 
     if (hasPluginMcpLocation(mcp, sourceIndex)) {
+      continue;
+    }
+
+    if (hasMcpMultipleResolutionScopes(mcp)) {
       continue;
     }
 

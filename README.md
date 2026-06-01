@@ -18,7 +18,16 @@ Agents should share your knowledge.
 
 If you teach one agent a skill, write one subagent, install one MCP server, or standardize one capability, you should be able to move between agents without rebuilding the same setup over and over. Skill Index is built around a simple opinion: your agent knowledge should be portable, inspectable, and shared by default.
 
-Skill Index treats `~/.agents/skills`, `~/.agents/agents`, and `~/.agents/mcp.json` as user-owned Universal sources. Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved.
+Skill Index treats `~/.agents` as the user-owned Universal knowledge directory and keeps compatible agents in tune with it.
+
+```text
+~/.agents/
+  skills/
+  agents/
+  mcp.json
+```
+
+Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved.
 
 Skill Index still respects agent-native folders, config files, and plugin caches. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
 
@@ -73,6 +82,7 @@ Windows and Linux support are planned, but the current release path is macOS.
 
 ## Roadmap
 
+- [x] Subagent support, such as `.claude/agents`, `.codex/agents`, `.gemini/agents`, and `.qwen/agents`. Added in 0.2.0.
 - [ ] Automatic background resolution for straightforward issues.
 - [ ] First-run onboarding for alternate canonical skill sources, including repo-backed skill folders.
 - [ ] Project-level agent configuration, not just user-home configuration.

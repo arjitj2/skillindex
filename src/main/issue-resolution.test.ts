@@ -2522,6 +2522,58 @@ describe('resolveInventoryIssue', () => {
       .not.toContain('missing-universal');
   });
 
+  it('creates live universal MCP config at ~/.agents/mcp.json when promoting an agent-only definition', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-live-mcp-universal-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-mcp-universal-home-'));
+    const env = {
+      SKILL_INDEX_DATA_DIR: root,
+      SKILL_INDEX_AGENT_SUBSET: 'factory',
+    };
+    const paths = resolveSkillIndexPaths({ env, homeDir });
+    const agentsConfigPath = path.join(homeDir, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(homeDir, '.factory', 'mcp.json');
+
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        localOnly: {
+          command: 'node',
+          args: ['local-only.js'],
+          disabled: false,
+        },
+      },
+    }, null, 2)}\n`);
+
+    await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'localOnly',
+        selectedVariantPath: factoryConfigPath,
+      },
+      {
+        paths,
+        env,
+        homeDir,
+        includeSandboxSources: false,
+        includeLiveSources: true,
+      },
+    );
+
+    const agentsConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(agentsConfig.servers?.localOnly).toEqual({
+      command: 'node',
+      args: ['local-only.js'],
+      agentLocal: {
+        factory: {
+          disabled: false,
+        },
+      },
+    });
+  });
+
   it('preserves native MCP fields when standardizing a selected definition', async () => {
     const paths = await createPaths('skillindex-resolve-portable-mcp-');
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
@@ -2584,6 +2636,83 @@ describe('resolveInventoryIssue', () => {
       agentLocal: {
         codex: {
           enabled_tools: ['app_get_state', 'project_open'],
+        },
+        factory: {
+          disabled: false,
+        },
+      },
+    });
+  });
+
+  it('refreshes universal agentLocal from active native MCP fields and drops inactive blocks', async () => {
+    const paths = await createPaths('skillindex-resolve-mcp-agent-local-refresh-');
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+
+    await writeSkillFile(agentsConfigPath, `${JSON.stringify({
+      servers: {
+        staleLocal: {
+          command: 'node',
+          args: ['old.js'],
+          agentLocal: {
+            codex: {
+              enabled_tools: ['old_tool'],
+            },
+            factory: {
+              disabled: true,
+            },
+            removed: {
+              stale: true,
+            },
+          },
+        },
+      },
+    }, null, 2)}\n`);
+    await writeSkillFile(codexConfigPath, [
+      '[mcp_servers.staleLocal]',
+      'command = "node"',
+      'args = ["new.js"]',
+      'enabled_tools = ["new_tool"]',
+      '',
+    ].join('\n'));
+    await writeSkillFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        staleLocal: {
+          command: 'node',
+          args: ['old.js'],
+          disabled: false,
+        },
+      },
+    }, null, 2)}\n`);
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'definition-mismatch',
+        mcpName: 'staleLocal',
+        selectedVariantPath: codexConfigPath,
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: {
+          SKILL_INDEX_AGENT_SUBSET: 'codex,factory',
+        },
+      },
+    );
+
+    const agentsConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(agentsConfig.servers?.staleLocal).toEqual({
+      command: 'node',
+      args: ['new.js'],
+      agentLocal: {
+        codex: {
+          enabled_tools: ['new_tool'],
         },
         factory: {
           disabled: false,
