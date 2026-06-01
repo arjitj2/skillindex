@@ -117,7 +117,7 @@ export function getMcpResolveActionState(
     };
   }
 
-  const issue = activeProblem.key as McpResolvableIssue;
+  const issue = activeProblem.key;
   if (hasMcpMultipleResolutionScopes(mcp)) {
     return {
       disabledReason: 'This MCP can only be resolved when every affected location is in the same inventory source.',
