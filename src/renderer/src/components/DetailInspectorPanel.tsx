@@ -817,8 +817,8 @@ function McpDefinitionBreakdownView({
 
         <div className="detail-inspector-panel__definition-subsection">
           <div className="detail-inspector-panel__definition-subsection-header">
-            <strong>Agent-Local Settings</strong>
-            <span>These are visible but left alone during standardization.</span>
+            <strong>Agent-specific settings</strong>
+            <span>These settings are preserved during repair.</span>
           </div>
           {breakdown.ignoredSettings.length > 0 ? (
             <div className="detail-inspector-panel__ignored-setting-list">
@@ -830,7 +830,7 @@ function McpDefinitionBreakdownView({
               ))}
             </div>
           ) : (
-            <p className="detail-inspector-panel__definition-empty-copy">No ignored local settings differ for this selection.</p>
+            <p className="detail-inspector-panel__definition-empty-copy">No agent-specific settings are present for this selection.</p>
           )}
         </div>
 

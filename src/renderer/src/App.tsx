@@ -910,9 +910,9 @@ export default function App() {
       ? buildMcpInspectorModel(selectedMcp, {
         selectedProblemKey: selectedMcpProblemKey,
         selectedVariantPath: selectedMcpVariantPath,
-      }, agentIndex)
+      }, agentIndex, sourceIndex)
       : null,
-    [agentIndex, selectedMcp, selectedMcpProblemKey, selectedMcpVariantPath],
+    [agentIndex, selectedMcp, selectedMcpProblemKey, selectedMcpVariantPath, sourceIndex],
   );
   const selectedSubagent = useMemo(
     () => inventorySnapshot?.subagents?.find((subagent) => subagent.name === selectedSubagentName) ?? null,

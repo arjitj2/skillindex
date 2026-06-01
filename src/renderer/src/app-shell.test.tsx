@@ -940,10 +940,19 @@ describe('App shell inventory views', () => {
 
     await openSettings();
     expect(screen.getByRole('switch', { name: /Show sidebar source switcher/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('heading', { name: 'Universal structure' })).toBeInTheDocument();
+    const universalLocations = screen.getByLabelText('Universal locations');
+    expect(within(universalLocations).getByText(`${DEFAULT_SANDBOX_ROOT}/.agents/skills`)).toBeInTheDocument();
+    expect(within(universalLocations).getByText(`${DEFAULT_SANDBOX_ROOT}/.agents/agents`)).toBeInTheDocument();
+    expect(within(universalLocations).getByText(`${DEFAULT_SANDBOX_ROOT}/.agents/mcp.json`)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Inventory refresh' })).toBeInTheDocument();
+    expect(screen.getByText('Watch files for changes')).toBeInTheDocument();
+    expect(screen.getByText('Rescan when Skill Index opens')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Custom scan paths for skills' })).toBeInTheDocument();
     const settingsSourceControl = screen.getByRole('radiogroup', { name: 'Inventory source' });
     expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toHaveAttribute('aria-checked', 'true');
     expect(within(settingsSourceControl).getByRole('radio', { name: /Live/i })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByLabelText(/Custom scan path/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Custom scan path for skills/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add path/i })).toBeInTheDocument();
     expect(screen.getByText('Reset representative sandbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Run$/i })).toBeInTheDocument();
@@ -2388,7 +2397,7 @@ describe('App shell inventory views', () => {
     expect(screen.getByText('Detected Definitions')).toBeInTheDocument();
     expect(screen.getByText('Definition Breakdown')).toBeInTheDocument();
     expect(screen.getByText('Compared Fields')).toBeInTheDocument();
-    expect(screen.getByText('Agent-Local Settings')).toBeInTheDocument();
+    expect(screen.getByText('Agent-specific settings')).toBeInTheDocument();
     expect(screen.getByText('Raw Configs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Apply Selected Definition Across Agents$/i })).toBeEnabled();
   });
@@ -2715,6 +2724,7 @@ function createShellState(overrides: Partial<AppShellState> = {}): AppShellState
     dataDir: DEFAULT_DATA_DIR,
     cacheFile: `${DEFAULT_DATA_DIR}/cache.json`,
     configFile: `${DEFAULT_DATA_DIR}/config.json`,
+    liveAgentsDir: '/Users/arjitjaiswal/.agents',
     liveCanonicalUserSkillsDir: '/Users/arjitjaiswal/.agents/skills',
     devTools: {
       sandboxEnabled: true,

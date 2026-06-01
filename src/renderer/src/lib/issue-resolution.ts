@@ -35,6 +35,7 @@ const SKILL_RESOLVABLE_ISSUES = new Set([
 ] as const);
 
 const MCP_RESOLVABLE_ISSUES = new Set([
+  'missing-universal',
   'definition-mismatch',
   'missing-from-agents',
 ] as const);
@@ -116,13 +117,17 @@ export function getMcpResolveActionState(
     };
   }
 
-  const targetLocations = activeProblem.key === 'definition-mismatch'
-    ? mcp.locations
-    : mcp.missingLocations ?? [];
+  const issue = activeProblem.key;
+  if (hasMcpMultipleResolutionScopes(mcp)) {
+    return {
+      disabledReason: 'This MCP can only be resolved when every affected location is in the same inventory source.',
+      request: null,
+    };
+  }
+
+  const targetLocations = getMcpResolutionTargetsForAction(mcp, issue);
   const targetableLocations = targetLocations.filter((location) => isWritableSupportedMcpTarget(location, snapshot));
-  const blockedTarget = activeProblem.key === 'definition-mismatch'
-    ? targetableLocations.length === 0
-    : targetableLocations.length !== targetLocations.length;
+  const blockedTarget = targetLocations.length > 0 && targetableLocations.length === 0;
 
   if (blockedTarget) {
     return {
@@ -131,9 +136,9 @@ export function getMcpResolveActionState(
     };
   }
 
-  const selectedVariantPath = getMcpSelectedVariantPath(mcp, inspectorModel?.selectedVariantPath ?? null);
-  const requiresVariantSelection = activeProblem.key === 'definition-mismatch'
-    || ((activeProblem.key === 'missing-from-agents') && getDistinctMcpVariantCount(mcp) > 1);
+  const selectedVariantPath = getMcpSelectedVariantPath(mcp, inspectorModel?.selectedVariantPath ?? null, issue, snapshot);
+  const requiresVariantSelection = issue === 'definition-mismatch'
+    || issue === 'missing-universal';
 
   if (requiresVariantSelection && !selectedVariantPath) {
     return {
@@ -146,7 +151,7 @@ export function getMcpResolveActionState(
     disabledReason: null,
     request: {
       entity: 'mcp',
-      issue: activeProblem.key,
+      issue,
       mcpName: mcp.name,
       selectedVariantPath: selectedVariantPath ?? undefined,
     },
@@ -201,6 +206,20 @@ export function getSubagentResolveActionState(
       selectedVariantPath,
     },
   };
+}
+
+function getMcpResolutionTargetsForAction(
+  mcp: McpRecord,
+  issue: McpResolvableIssue,
+): Array<McpRecord['locations'][number] | NonNullable<McpRecord['missingLocations']>[number]> {
+  switch (issue) {
+    case 'missing-universal':
+      return [];
+    case 'definition-mismatch':
+      return mcp.locations;
+    case 'missing-from-agents':
+      return mcp.missingLocations ?? [];
+  }
 }
 
 function isWritableSupportedMcpTarget(
@@ -396,12 +415,43 @@ function getSkillSelectedVariantPath(
   return groups.size === 1 ? realFileLocations[0]?.path ?? null : null;
 }
 
-function getMcpSelectedVariantPath(mcp: McpRecord, selectedVariantPath: string | null): string | null {
+function getMcpSelectedVariantPath(
+  mcp: McpRecord,
+  selectedVariantPath: string | null,
+  issue: McpResolvableIssue,
+  snapshot: SkillInventorySnapshot,
+): string | null {
+  if (issue === 'missing-from-agents') {
+    const universalLocation = getUniversalMcpLocation(mcp, snapshot);
+    if (universalLocation) {
+      return universalLocation.configPath;
+    }
+  }
+
   if (selectedVariantPath && mcp.locations.some((location) => location.configPath === selectedVariantPath)) {
     return selectedVariantPath;
   }
 
   return getDistinctMcpVariantCount(mcp) === 1 ? mcp.locations[0]?.configPath ?? null : null;
+}
+
+function getUniversalMcpLocation(
+  mcp: McpRecord,
+  snapshot: SkillInventorySnapshot,
+): McpRecord['locations'][number] | null {
+  const canonicalSourceIds = new Set(
+    snapshot.sources.filter((source) => source.canonical).map((source) => source.id),
+  );
+
+  return mcp.locations.find((location) =>
+    location.provenance?.kind === 'universal'
+    || canonicalSourceIds.has(location.agentId)
+    || isAgentsMcpConfigPath(location.configPath)) ?? null;
+}
+
+function isAgentsMcpConfigPath(value: string): boolean {
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.at(-1) === 'mcp.json' && parts.at(-2) === '.agents';
 }
 
 function getSubagentSelectedVariantPath(subagent: SubagentRecord, selectedVariantPath: string | null): string | null {
@@ -456,6 +506,13 @@ function isSkillResolvableIssue(value: string): value is SkillResolvableIssue {
 
 function isMcpResolvableIssue(value: string): value is McpResolvableIssue {
   return MCP_RESOLVABLE_ISSUES.has(value as McpResolvableIssue);
+}
+
+function hasMcpMultipleResolutionScopes(mcp: McpRecord): boolean {
+  return new Set([
+    ...mcp.locations.map((location) => location.scope),
+    ...(mcp.missingLocations ?? []).map((location) => location.scope),
+  ]).size > 1;
 }
 
 function isSubagentResolvableIssue(value: string): value is SubagentResolvableIssue {
@@ -528,18 +585,22 @@ export function getAutoResolvableMcpRequests(
       continue;
     }
 
+    if (hasMcpMultipleResolutionScopes(mcp)) {
+      continue;
+    }
+
     const targetLocations = mcp.missingLocations ?? [];
     if (targetLocations.length === 0) {
       continue;
     }
 
     const targetableLocations = targetLocations.filter((location) => isWritableSupportedMcpTarget(location, snapshot));
-    if (targetableLocations.length !== targetLocations.length) {
+    if (targetableLocations.length === 0) {
       continue;
     }
 
-    const selectedVariantPath = getMcpSelectedVariantPath(mcp, null);
-    if (getDistinctMcpVariantCount(mcp) > 1 && !selectedVariantPath) {
+    const selectedVariantPath = getMcpSelectedVariantPath(mcp, null, 'missing-from-agents', snapshot);
+    if (!selectedVariantPath) {
       continue;
     }
 

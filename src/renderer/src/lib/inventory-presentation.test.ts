@@ -66,6 +66,7 @@ describe('inventory presentation severity mapping', () => {
   it('formats stable problem labels for skill and MCP issue lists', () => {
     expect(formatSkillIssueReason('missing-canonical')).toBe('Missing Universal');
     expect(formatSkillIssueReason('diverged-copies')).toBe('Diverged Copies');
+    expect(formatMcpIssueReason('missing-universal')).toBe('Missing Universal');
     expect(formatMcpIssueReason('definition-mismatch')).toBe('Definition Mismatch');
     expect(formatMcpIssueReason('invalid-definition')).toBe('Invalid Definition');
     expect(formatMcpIssueReason('connection-failed')).toBe('Connection Failed');

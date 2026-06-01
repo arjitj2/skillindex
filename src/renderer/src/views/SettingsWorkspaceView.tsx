@@ -69,6 +69,7 @@ export function SettingsWorkspaceView({
   const customScanPendingOperation = pendingInventoryOperation?.area === 'scan-paths' ? pendingInventoryOperation : null;
   const developmentPendingOperation = pendingInventoryOperation?.area === 'development' ? pendingInventoryOperation : null;
   const scanPathRows = buildScanPathRows(settingsState, inventorySnapshot);
+  const universalRows = buildUniversalStructureRows(shellState, inventorySourceMode, devToolsEnabled);
 
   return (
     <main className="workspace-view">
@@ -86,28 +87,37 @@ export function SettingsWorkspaceView({
         <div className="settings-card-stack">
           <section className="settings-card">
             <SettingsGroupHeader
-              description="How Skill Index discovers and watches skills on this machine."
-              title="Scanning"
+              description="The user-owned definitions Skill Index treats as Universal before mirroring them into agent-specific formats."
+              title="Universal structure"
+            />
+            <div className="settings-universal-list" aria-label="Universal locations">
+              {universalRows.map((row) => (
+                <div className="settings-universal-row" key={row.label}>
+                  <div className="settings-universal-label">
+                    <strong>{row.label}</strong>
+                    <span>{row.description}</span>
+                  </div>
+                  <code className="settings-universal-path" title={row.path}>
+                    <Lock aria-hidden="true" size={12} />
+                    <span>{row.path}</span>
+                  </code>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="settings-card">
+            <SettingsGroupHeader
+              description="How Skill Index keeps the current inventory up to date."
+              title="Inventory refresh"
             />
             <SettingsValueRow
-              description="Fallback universal home for skills with no preferred canonical source. Set by Skill Index - read-only."
-              label="Universal location"
-              trailing={(
-                <span className="settings-mono-pill">
-                  <Lock aria-hidden="true" size={12} />
-                  {inventorySourceMode === 'sandbox' && devToolsEnabled
-                    ? shellState?.devTools?.sandboxAgentsSkillsDir ?? '~/.agents/skills'
-                    : shellState?.liveCanonicalUserSkillsDir ?? '~/.agents/skills'}
-                </span>
-              )}
-            />
-            <SettingsValueRow
-              description="Re-index automatically when skills or configs change on disk."
+              description="Re-index automatically when watched inventory files change on disk."
               label="Watch files for changes"
               trailing={<StaticSwitch active />}
             />
             <SettingsValueRow
-              description="Run the same inventory refresh that the Rescan button runs when Skill Index opens."
+              description="Run a fresh inventory refresh when Skill Index opens."
               label="Rescan when Skill Index opens"
               trailing={<StaticSwitch active />}
             />
@@ -115,8 +125,8 @@ export function SettingsWorkspaceView({
 
           <section className="settings-card">
             <SettingsGroupHeader
-              description="Extra directories to include when looking for skills. Mark one as canonical - agents read from it directly and other installs link to it."
-              title="Custom scan paths"
+              description="Extra directories to include when looking for skills. Mark one as the preferred Universal source for skills; MCPs and subagents still use the Universal structure above."
+              title="Custom scan paths for skills"
             />
             {customScanPendingOperation ? <SettingsPendingBanner operation={customScanPendingOperation} /> : null}
             <div className="settings-path-table">
@@ -183,7 +193,7 @@ export function SettingsWorkspaceView({
 
               <form className="settings-inline-form settings-inline-form--paths" onSubmit={(event) => void handleAddCustomScanPath(event)}>
                 <input
-                  aria-label="Custom scan path"
+                  aria-label="Custom scan path for skills"
                   className="settings-inline-input"
                   placeholder="~/repos/my-custom-skills-repo"
                   type="text"
@@ -302,6 +312,66 @@ export function SettingsWorkspaceView({
       </div>
     </main>
   );
+}
+
+function buildUniversalStructureRows(
+  shellState: AppShellState | null,
+  inventorySourceMode: InventorySourceMode,
+  devToolsEnabled: boolean,
+): Array<{ description: string; label: string; path: string }> {
+  const rootPath = getUniversalRootPath(shellState, inventorySourceMode, devToolsEnabled);
+
+  return [
+    {
+      description: 'Portable skill packages; compatible agent installs usually link here.',
+      label: 'Skills',
+      path: joinDisplayPath(rootPath, 'skills'),
+    },
+    {
+      description: 'Portable subagent definitions; agents receive files in their supported format.',
+      label: 'Subagents',
+      path: joinDisplayPath(rootPath, 'agents'),
+    },
+    {
+      description: 'Portable MCP servers plus preserved agent-specific settings.',
+      label: 'MCPs',
+      path: joinDisplayPath(rootPath, 'mcp.json'),
+    },
+  ];
+}
+
+function getUniversalRootPath(
+  shellState: AppShellState | null,
+  inventorySourceMode: InventorySourceMode,
+  devToolsEnabled: boolean,
+): string {
+  if (inventorySourceMode === 'sandbox' && devToolsEnabled) {
+    return shellState?.devTools?.sandboxAgentsDir
+      ?? getDisplayParentPath(shellState?.devTools?.sandboxAgentsSkillsDir)
+      ?? '~/.skillindex/sandbox/.agents';
+  }
+
+  return shellState?.liveAgentsDir
+    ?? getDisplayParentPath(shellState?.liveCanonicalUserSkillsDir)
+    ?? '~/.agents';
+}
+
+function getDisplayParentPath(displayPath: string | undefined): string | null {
+  if (!displayPath) {
+    return null;
+  }
+
+  const normalizedPath = displayPath.replace(/\/+$/u, '');
+  const separatorIndex = normalizedPath.lastIndexOf('/');
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  return normalizedPath.slice(0, separatorIndex);
+}
+
+function joinDisplayPath(rootPath: string, childPath: string): string {
+  return `${rootPath.replace(/\/+$/u, '')}/${childPath.replace(/^\/+/u, '')}`;
 }
 
 function SettingsPendingBanner({ operation }: { operation: PendingInventoryOperation }) {

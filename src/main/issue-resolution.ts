@@ -20,7 +20,7 @@ import type {
   SubagentLocationRecord,
   SubagentRecord,
 } from '@shared/contracts';
-import { buildPortableMcpDefinition, isMcpDefinitionObject, isMcpServerDefinitions } from '@shared/mcp-definition';
+import { MCP_AGENT_LOCAL_KEY, buildPortableMcpDefinition, isMcpDefinitionObject, isMcpServerDefinitions, splitMcpDefinitionForComparison } from '@shared/mcp-definition';
 import {
   ensureSkillIndexLayout,
   resolveSkillIndexPaths,
@@ -66,7 +66,15 @@ export interface McpMutationTarget {
     | 'jsonc-opencode-mcp'
     | 'toml'
     | 'toml-mcpServers-array';
+  universal?: boolean;
   writeDialect: AgentMcpWriteDialect;
+}
+
+interface SelectedMcpDefinition {
+  agentLocal: Record<string, McpDefinitionObject>;
+  agentLocalKey?: string;
+  core: McpDefinitionObject;
+  native: McpDefinitionObject;
 }
 
 interface CanonicalSkillPackage {
@@ -107,7 +115,10 @@ export async function resolveInventoryIssue(
       paths,
     });
   } else if (request.entity === 'mcp') {
-    await resolveMcpIssueIfCurrent(snapshot, request);
+    await resolveMcpIssueIfCurrent(snapshot, request, {
+      ...options,
+      paths,
+    });
   } else {
     await resolveSubagentIssueIfCurrent(snapshot, request, {
       ...options,
@@ -211,7 +222,7 @@ function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, requ
 
   if (request.entity === 'mcp') {
     const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
-    if (mcp && mcp.issueReasons.includes(request.issue)) {
+    if (mcp && mcp.issueReasons.includes(request.issue) && hasWritableMcpResolutionWorkRemaining(snapshot, request, mcp)) {
       throw new Error(`MCP "${request.mcpName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
     }
     return;
@@ -221,6 +232,48 @@ function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, requ
   if (subagent && subagent.issueReasons.includes(request.issue)) {
     throw new Error(`Subagent "${request.subagentName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
   }
+}
+
+function hasWritableMcpResolutionWorkRemaining(
+  snapshot: SkillInventorySnapshot,
+  request: Extract<ResolveIssueRequest, { entity: 'mcp' }>,
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+): boolean {
+  switch (request.issue) {
+    case 'missing-universal':
+      return true;
+    case 'missing-from-agents':
+      return (mcp.missingLocations ?? []).some((location) =>
+        canBuildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath));
+    case 'definition-mismatch': {
+      const selectedLocation = request.selectedVariantPath
+        ? mcp.locations.find((location) => location.configPath === request.selectedVariantPath)
+        : null;
+      const selectedKey = selectedLocation ? getMcpResolutionComparisonKey(selectedLocation) : null;
+      return mcp.locations.some((location) =>
+        canBuildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath)
+        && (!selectedKey || getMcpResolutionComparisonKey(location) !== selectedKey));
+    }
+  }
+}
+
+function canBuildWritableMcpMutationTarget(
+  snapshot: SkillInventorySnapshot,
+  agentId: string,
+  configPath: string | undefined,
+): boolean {
+  try {
+    return buildWritableMcpMutationTarget(snapshot, agentId, configPath) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function getMcpResolutionComparisonKey(location: McpLocationRecord): string {
+  return location.definitionComparisonKey
+    ?? location.coreDefinitionComparisonKey
+    ?? location.definitionText
+    ?? `path:${location.configPath}`;
 }
 
 function formatIssueLabel(issue: ResolveIssueRequest['issue']): string {
@@ -405,6 +458,7 @@ function isMcpTransportSupportedByAgent(
 async function resolveMcpIssueIfCurrent(
   snapshot: SkillInventorySnapshot,
   request: Extract<ResolveIssueRequest, { entity: 'mcp' }>,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
 ): Promise<void> {
   const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
   if (!mcp) {
@@ -415,16 +469,15 @@ async function resolveMcpIssueIfCurrent(
     throw new Error(`MCP "${request.mcpName}" no longer has ${formatIssueLabel(request.issue)}. Refresh inventory and try again if it still needs attention.`);
   }
 
+  assertMcpResolutionScopeAllowed(mcp);
+
   const selectedVariant = pickMcpSelection(mcp.locations, request.selectedVariantPath, {
-    requireSelectionOnAmbiguous: request.issue === 'definition-mismatch',
+    requireSelectionOnAmbiguous: request.issue === 'definition-mismatch' || request.issue === 'missing-universal',
+    preferUniversal: request.issue === 'missing-from-agents',
   });
   const selectedDefinition = parseSelectedMcpDefinition(selectedVariant);
-  const targetLocations = request.issue === 'definition-mismatch'
-    ? mcp.locations
-    : mcp.missingLocations ?? [];
-  const mutationTargets = targetLocations
-    .map((location) => buildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath))
-    .filter((target): target is McpMutationTarget => target !== null);
+  const agentLocalDefinitions = collectAgentLocalDefinitionsForMcp(mcp, selectedDefinition);
+  const mutationTargets = collectMcpResolutionTargets(snapshot, request.issue, mcp, selectedVariant, options);
 
   if (mutationTargets.length === 0) {
     throw new Error(`MCP "${request.mcpName}" has no writable supported targets for ${request.issue}.`);
@@ -443,10 +496,212 @@ async function resolveMcpIssueIfCurrent(
       if (definitionName !== request.mcpName) {
         delete target.definitions[request.mcpName];
       }
-      target.definitions[definitionName] = selectedDefinition;
+      target.definitions[definitionName] = buildMcpDefinitionForTarget(
+        snapshot,
+        target,
+        target.definitions[definitionName],
+        selectedDefinition,
+        agentLocalDefinitions,
+      );
       await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
     }),
   );
+}
+
+function collectMcpResolutionTargets(
+  snapshot: SkillInventorySnapshot,
+  issue: Extract<ResolveIssueRequest, { entity: 'mcp' }>['issue'],
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  selectedVariant: McpLocationRecord,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): McpMutationTarget[] {
+  const targets = issue === 'missing-universal'
+    ? buildWritableUniversalMcpTargets(snapshot, selectedVariant.scope, options)
+    : issue === 'definition-mismatch'
+      ? [
+          ...mcp.locations
+            .map((location) => buildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath))
+            .filter((target): target is McpMutationTarget => target !== null),
+          ...(mcp.locations.some((location) => isUniversalMcpTarget(snapshot, location.agentId))
+            ? []
+            : buildWritableUniversalMcpTargets(snapshot, selectedVariant.scope, options)),
+        ]
+      : (mcp.missingLocations ?? [])
+          .map((location) => buildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath))
+          .filter((target): target is McpMutationTarget => target !== null);
+
+  return dedupeMcpMutationTargets(targets);
+}
+
+function assertMcpResolutionScopeAllowed(mcp: NonNullable<SkillInventorySnapshot['mcps']>[number]): void {
+  const scopes = new Set([
+    ...mcp.locations.map((location) => location.scope),
+    ...(mcp.missingLocations ?? []).map((location) => location.scope),
+  ]);
+  if (scopes.size > 1) {
+    throw new Error('MCP resolution currently requires every affected location to stay within one scope.');
+  }
+}
+
+function buildWritableUniversalMcpTargets(
+  snapshot: SkillInventorySnapshot,
+  scope: McpLocationRecord['scope'],
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): McpMutationTarget[] {
+  const sourceTargets = snapshot.sources
+    .filter((source) => source.canonical && source.writable && source.scope === scope)
+    .map((source) => ({
+      ...buildMcpMutationTarget(snapshot, source.id, path.join(path.dirname(source.skillsDir), 'mcp.json')),
+      universal: true,
+    }));
+  if (sourceTargets.length > 0) {
+    return sourceTargets;
+  }
+
+  const fallbackPath = getFallbackUniversalMcpConfigPath(options.paths, scope);
+  return fallbackPath
+    ? [{
+        agentId: `universal:${scope}`,
+        configPath: fallbackPath,
+        parserKind: 'json-servers',
+        universal: true,
+        writeDialect: 'json-type-url',
+      }]
+    : [];
+}
+
+function dedupeMcpMutationTargets(targets: McpMutationTarget[]): McpMutationTarget[] {
+  const seen = new Set<string>();
+  return targets.filter((target) => {
+    const key = `${target.agentId}:${path.normalize(target.configPath)}`;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function collectAgentLocalDefinitionsForMcp(
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  selectedDefinition: SelectedMcpDefinition,
+): Record<string, McpDefinitionObject> {
+  const agentLocal: Record<string, McpDefinitionObject> = {};
+  const activeAgentLocalKeys = getActiveMcpAgentLocalKeys(mcp, selectedDefinition);
+
+  mergeAgentLocalDefinitions(agentLocal, selectedDefinition.agentLocal, activeAgentLocalKeys);
+
+  for (const location of mcp.locations) {
+    mergeAgentLocalDefinitions(agentLocal, location.agentLocal ?? {}, activeAgentLocalKeys);
+  }
+
+  for (const location of mcp.locations) {
+    if (location.agentLocalKey && isNonEmptyMcpDefinitionObject(location.nativeDefinition)) {
+      agentLocal[location.agentLocalKey] = location.nativeDefinition;
+    }
+  }
+
+  if (selectedDefinition.agentLocalKey && isNonEmptyMcpDefinitionObject(selectedDefinition.native)) {
+    agentLocal[selectedDefinition.agentLocalKey] = selectedDefinition.native;
+  }
+
+  return agentLocal;
+}
+
+function getActiveMcpAgentLocalKeys(
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  selectedDefinition: SelectedMcpDefinition,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const location of mcp.locations) {
+    if (location.agentLocalKey) {
+      keys.add(location.agentLocalKey);
+    }
+  }
+
+  if (selectedDefinition.agentLocalKey) {
+    keys.add(selectedDefinition.agentLocalKey);
+  }
+
+  return keys;
+}
+
+function mergeAgentLocalDefinitions(
+  target: Record<string, McpDefinitionObject>,
+  source: Record<string, McpDefinitionObject>,
+  allowedKeys: Set<string>,
+): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (allowedKeys.has(key) && isNonEmptyMcpDefinitionObject(value)) {
+      target[key] = value;
+    }
+  }
+}
+
+function buildMcpDefinitionForTarget(
+  snapshot: SkillInventorySnapshot,
+  target: McpMutationTarget,
+  existingDefinition: McpDefinitionValue | undefined,
+  selectedDefinition: SelectedMcpDefinition,
+  agentLocalDefinitions: Record<string, McpDefinitionObject>,
+): McpDefinitionObject {
+  if (target.universal || isUniversalMcpTarget(snapshot, target.agentId)) {
+    return buildUniversalMcpDefinition(selectedDefinition.core, agentLocalDefinitions);
+  }
+
+  const family = findMcpTargetFamily(snapshot, target.agentId);
+  const existingNative = isMcpDefinitionObject(existingDefinition)
+    ? splitMcpDefinitionForComparison(existingDefinition).native
+    : {};
+  const native = isNonEmptyMcpDefinitionObject(existingNative)
+    ? existingNative
+    : family
+      ? agentLocalDefinitions[family] ?? {}
+      : {};
+
+  return {
+    ...selectedDefinition.core,
+    ...native,
+  };
+}
+
+function buildUniversalMcpDefinition(
+  core: McpDefinitionObject,
+  agentLocalDefinitions: Record<string, McpDefinitionObject>,
+): McpDefinitionObject {
+  const definition: McpDefinitionObject = { ...core };
+  if (Object.keys(agentLocalDefinitions).length > 0) {
+    definition[MCP_AGENT_LOCAL_KEY] = sortRecordValue(agentLocalDefinitions) as McpDefinitionObject;
+  }
+  return definition;
+}
+
+function isUniversalMcpTarget(snapshot: SkillInventorySnapshot, agentId: string): boolean {
+  return snapshot.sources.some((source) => source.id === agentId && source.canonical);
+}
+
+function findMcpTargetFamily(snapshot: SkillInventorySnapshot, agentId: string): string | undefined {
+  return (snapshot.agents ?? []).find((agent) => agent.id === agentId)?.family;
+}
+
+function getFallbackUniversalMcpConfigPath(
+  paths: SkillIndexPaths,
+  scope: McpLocationRecord['scope'],
+): string | null {
+  if (scope === 'sandbox') {
+    return path.join(paths.sandboxAgentsDir, 'mcp.json');
+  }
+
+  if (scope === 'live') {
+    return path.join(paths.liveAgentsDir, 'mcp.json');
+  }
+
+  return null;
+}
+
+function isNonEmptyMcpDefinitionObject(value: McpDefinitionObject | undefined): value is McpDefinitionObject {
+  return isMcpDefinitionObject(value) && Object.keys(value).length > 0;
 }
 
 async function resolveSubagentIssueIfCurrent(
@@ -986,10 +1241,17 @@ function resolveMissingSkillInstallPath(
 function pickMcpSelection(
   locations: McpLocationRecord[],
   selectedVariantPath: string | undefined,
-  options: { requireSelectionOnAmbiguous: boolean },
+  options: { preferUniversal?: boolean; requireSelectionOnAmbiguous: boolean },
 ): McpLocationRecord {
   if (locations.length === 0) {
     throw new Error('Choose an MCP definition before resolving this issue.');
+  }
+
+  if (options.preferUniversal) {
+    const universalLocation = locations.find(isUniversalMcpSelectionLocation);
+    if (universalLocation) {
+      return universalLocation;
+    }
   }
 
   if (selectedVariantPath) {
@@ -1020,12 +1282,29 @@ function pickMcpSelection(
   return locations[0];
 }
 
-function parseSelectedMcpDefinition(location: McpLocationRecord): McpServerDefinition {
+function isUniversalMcpSelectionLocation(location: McpLocationRecord): boolean {
+  return location.provenance?.kind === 'universal'
+    || isAgentsMcpConfigPath(location.configPath);
+}
+
+function isAgentsMcpConfigPath(value: string): boolean {
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.at(-1) === 'mcp.json' && parts.at(-2) === '.agents';
+}
+
+function parseSelectedMcpDefinition(location: McpLocationRecord): SelectedMcpDefinition {
   if (!location.definitionText) {
-    return buildPortableMcpDefinition({
+    const fallbackDefinition = {
       ...(location.command ? { command: location.command } : {}),
       ...(location.args.length > 0 ? { args: location.args } : {}),
-    }, location);
+    };
+    const splitDefinition = splitMcpDefinitionForComparison(fallbackDefinition, location);
+    return {
+      agentLocal: splitDefinition.agentLocal,
+      agentLocalKey: location.agentLocalKey,
+      core: buildPortableMcpDefinition(fallbackDefinition, location),
+      native: splitDefinition.native,
+    };
   }
 
   const parsed = JSON.parse(location.definitionText) as unknown;
@@ -1033,7 +1312,13 @@ function parseSelectedMcpDefinition(location: McpLocationRecord): McpServerDefin
     throw new Error('Choose an MCP definition with a supported object structure before resolving this issue.');
   }
 
-  return buildPortableMcpDefinition(parsed, location);
+  const splitDefinition = splitMcpDefinitionForComparison(parsed, location);
+  return {
+    agentLocal: splitDefinition.agentLocal,
+    agentLocalKey: location.agentLocalKey,
+    core: buildPortableMcpDefinition(parsed, location),
+    native: splitDefinition.native,
+  };
 }
 
 function buildMcpMutationTarget(
@@ -1090,13 +1375,27 @@ function buildWritableMcpMutationTarget(
     return null;
   }
 
-  const agent = (snapshot.agents ?? []).find((entry) => entry.id === agentId);
-  if (agent && !agent.writable) {
+  if (!configPath) {
     return null;
+  }
+
+  const agent = (snapshot.agents ?? []).find((entry) => entry.id === agentId);
+  if (agent) {
+    if (!agent.writable || agent.mcpConfigLocation.state !== 'available' || agent.mcpConfigLocation.path !== configPath) {
+      return null;
+    }
+
+    if (!isSupportedWritableMcpParser(agent.mcpParserKind ?? 'json-servers')) {
+      return null;
+    }
   }
 
   const source = snapshot.sources.find((entry) => entry.id === agentId);
   if (source && !source.writable) {
+    return null;
+  }
+
+  if (!agent && !source) {
     return null;
   }
 

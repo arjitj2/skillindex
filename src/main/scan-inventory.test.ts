@@ -66,7 +66,8 @@ describe('representative-agent scan foundation', () => {
     });
 
     expect(inventory.mcps?.find((mcp) => mcp.name === 'codexLocal')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-codex',
@@ -77,7 +78,8 @@ describe('representative-agent scan foundation', () => {
       ],
     });
     expect(inventory.mcps?.find((mcp) => mcp.name === 'openaiDeveloperDocs')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-codex',
@@ -129,7 +131,20 @@ describe('representative-agent scan foundation', () => {
     );
 
     await mkdir(path.join(paths.sandboxRoot, '.codex'), { recursive: true });
+    await mkdir(path.join(paths.sandboxRoot, '.agents'), { recursive: true });
     await mkdir(path.dirname(claudeDesktopConfigPath), { recursive: true });
+    await writeFile(path.join(paths.sandboxRoot, '.agents', 'mcp.json'), `${JSON.stringify({
+      servers: {
+        remoteDocs: {
+          type: 'http',
+          url: 'https://example.test/mcp',
+        },
+        localDocs: {
+          command: 'node',
+          args: ['local-docs.js'],
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
     await writeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), [
       '[mcp_servers.remoteDocs]',
       'url = "https://example.test/mcp"',
@@ -195,7 +210,16 @@ describe('representative-agent scan foundation', () => {
     try {
       (claudeDesktopFamily as { mcpSupportedTransports?: string[] }).mcpSupportedTransports = ['stdio', 'streamable-http'];
       await mkdir(path.join(paths.sandboxRoot, '.codex'), { recursive: true });
+      await mkdir(path.join(paths.sandboxRoot, '.agents'), { recursive: true });
       await mkdir(path.dirname(claudeDesktopConfigPath), { recursive: true });
+      await writeFile(path.join(paths.sandboxRoot, '.agents', 'mcp.json'), `${JSON.stringify({
+        servers: {
+          eventStreamDocs: {
+            transport: 'sse',
+            url: 'https://example.test/sse',
+          },
+        },
+      }, null, 2)}\n`, 'utf8');
       await writeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), [
         '[mcp_servers.eventStreamDocs]',
         'transport = "sse"',
@@ -269,7 +293,8 @@ describe('representative-agent scan foundation', () => {
     });
 
     expect(inventory.mcps?.find((mcp) => mcp.name === 'localDocs')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-opencode',
@@ -280,7 +305,8 @@ describe('representative-agent scan foundation', () => {
       ],
     });
     expect(inventory.mcps?.find((mcp) => mcp.name === 'remoteDocs')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-opencode',
@@ -378,7 +404,7 @@ describe('representative-agent scan foundation', () => {
     expect(invalidMcp?.locations[0]?.connectivity).toBeUndefined();
   });
 
-  it('ignores non-portable MCP metadata when comparing definitions across agents', async () => {
+  it('treats native MCP metadata as healthy when universal agentLocal records it', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-metadata-'));
     const paths = resolveSkillIndexPaths({
       env: {
@@ -396,6 +422,11 @@ describe('representative-agent scan foundation', () => {
           url: 'https://stitch.googleapis.com/mcp',
           headers: {
             'X-Goog-Api-Key': 'test-key',
+          },
+          agentLocal: {
+            factory: {
+              disabled: false,
+            },
           },
         },
       },
@@ -441,6 +472,154 @@ describe('representative-agent scan foundation', () => {
       .toContain('"disabled": false');
   });
 
+  it('marks agent-only MCP definitions as missing universal instead of missing from agents', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-missing-universal-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+
+    await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await writeFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        localOnly: {
+          command: 'node',
+          args: ['local-only.js'],
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const inventory = await scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'localOnly')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      missingLocations: [],
+    });
+  });
+
+  it('folds agent-specific native field drift into definition mismatch', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-native-mismatch-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+
+    await mkdir(path.dirname(agentsConfigPath), { recursive: true });
+    await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await writeFile(agentsConfigPath, `${JSON.stringify({
+      servers: {
+        nativeMismatch: {
+          command: 'node',
+          args: ['server.js'],
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+    await writeFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        nativeMismatch: {
+          command: 'node',
+          args: ['server.js'],
+          disabled: false,
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const inventory = await scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['definition-mismatch'],
+      locations: arrayContaining([
+        objectContaining({
+          agentId: 'sandbox-factory',
+          agentLocalKey: 'factory',
+          nativeDefinition: {
+            disabled: false,
+          },
+        }),
+      ]),
+    });
+  });
+
+  it('includes universal agentLocal drift in MCP dismissal signatures', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-agent-local-signature-'));
+    const env = {
+      SKILL_INDEX_DATA_DIR: root,
+      SKILL_INDEX_AGENT_SUBSET: 'factory',
+    };
+    const paths = resolveSkillIndexPaths({ env });
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const writeUniversalConfig = async (timeoutMs: number) => {
+      await writeFile(agentsConfigPath, `${JSON.stringify({
+        servers: {
+          nativeMismatch: {
+            command: 'node',
+            args: ['server.js'],
+            agentLocal: {
+              factory: {
+                startup_timeout_ms: timeoutMs,
+              },
+            },
+          },
+        },
+      }, null, 2)}\n`, 'utf8');
+    };
+
+    await mkdir(path.dirname(agentsConfigPath), { recursive: true });
+    await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await writeUniversalConfig(1_000);
+    await writeFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        nativeMismatch: {
+          command: 'node',
+          args: ['server.js'],
+          startup_timeout_ms: 2_000,
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const firstInventory = await scanInventory({
+      paths,
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    const firstSignature = firstInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.signature;
+
+    await writeUniversalConfig(3_000);
+    const secondInventory = await scanInventory({
+      paths,
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    const secondSignature = secondInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.signature;
+
+    expect(firstInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.issueReasons)
+      .toContain('definition-mismatch');
+    expect(firstSignature).toBeTruthy();
+    expect(secondSignature).toBeTruthy();
+    expect(secondSignature).not.toBe(firstSignature);
+  });
+
   it('compares MCP definitions using portable launch, cwd, and auth fields only', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-portable-fields-'));
     const paths = resolveSkillIndexPaths({
@@ -480,10 +659,10 @@ describe('representative-agent scan foundation', () => {
 
     const blitz = inventory.mcps?.find((mcp) => mcp.name === 'blitz-macos');
     expect(blitz).toMatchObject({
-      status: 'healthy',
-      issueReasons: [],
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
     });
-    expect(new Set(blitz?.locations.map((location) => location.definitionComparisonKey)).size).toBe(1);
+    expect(new Set(blitz?.locations.map((location) => location.coreDefinitionComparisonKey)).size).toBe(1);
   });
 
   it('treats Codex nested auth headers and implied HTTP transport as equivalent to JSON MCP definitions', async () => {
@@ -1131,6 +1310,7 @@ describe('representative-agent scan foundation', () => {
     ]));
     expect(new Set((inventory.mcps ?? []).flatMap((mcp) => mcp.issueReasons))).toEqual(new Set([
       'definition-mismatch',
+      'missing-universal',
       'missing-from-agents',
       'invalid-definition',
     ]));
@@ -1325,7 +1505,8 @@ describe('representative-agent scan foundation', () => {
       },
     });
     expect(inventory.mcps?.find((mcp) => mcp.name === 'jsonc-trailing-comma')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-pochi',
@@ -1377,7 +1558,8 @@ describe('representative-agent scan foundation', () => {
     });
 
     expect(inventory.mcps?.find((mcp) => mcp.name === 'opencode-local')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-opencode',
@@ -1387,7 +1569,8 @@ describe('representative-agent scan foundation', () => {
       ],
     });
     expect(inventory.mcps?.find((mcp) => mcp.name === 'opencode-remote')).toMatchObject({
-      status: 'healthy',
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
       locations: [
         expect.objectContaining({
           agentId: 'sandbox-opencode',
@@ -1516,8 +1699,21 @@ describe('representative-agent scan foundation', () => {
     const claudeInstallPath = path.join(paths.sandboxRoot, '.claude');
 
     await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await mkdir(path.join(paths.sandboxRoot, '.agents'), { recursive: true });
     await mkdir(path.dirname(claudeConfigPath), { recursive: true });
     await mkdir(claudeInstallPath, { recursive: true });
+    await writeFile(
+      path.join(paths.sandboxRoot, '.agents', 'mcp.json'),
+      `${JSON.stringify({
+        servers: {
+          'factory-only-installed-agent-mcp': {
+            command: 'uvx',
+            args: ['factory-only-installed-agent-mcp'],
+          },
+        },
+      }, null, 2)}\n`,
+      'utf8',
+    );
     await writeFile(
       factoryConfigPath,
       `${JSON.stringify({
@@ -1547,11 +1743,11 @@ describe('representative-agent scan foundation', () => {
     expect(inventory.mcps?.find((mcp) => mcp.name === 'factory-only-installed-agent-mcp')).toMatchObject({
       status: 'needs-attention',
       issueReasons: ['missing-from-agents'],
-      locations: [
+      locations: arrayContaining([
         expect.objectContaining({
           agentId: 'sandbox-factory',
         }),
-      ],
+      ]),
       missingLocations: arrayContaining([
         objectContaining({
           agentId: 'sandbox-claude',

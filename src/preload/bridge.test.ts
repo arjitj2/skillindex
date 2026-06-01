@@ -24,6 +24,7 @@ describe('createSkillIndexDesktopApi', () => {
       dataDir: '/tmp/skillindex',
       cacheFile: '/tmp/skillindex/cache.json',
       configFile: '/tmp/skillindex/config.json',
+      liveAgentsDir: '/Users/arjitjaiswal/.agents',
       liveCanonicalUserSkillsDir: '/Users/arjitjaiswal/.agents/skills',
       devTools: {
         sandboxEnabled: true,

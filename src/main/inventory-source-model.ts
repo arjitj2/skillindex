@@ -193,7 +193,7 @@ export async function filterInstalledInventorySources(sources: SkillScanSource[]
   const installed = await Promise.all(
     sources.map(async (source) => ({
       source,
-      exists: await directoryExists(source.skillsDir),
+      exists: await sourceExistsForInventory(source),
     })),
   );
 
@@ -201,7 +201,24 @@ export async function filterInstalledInventorySources(sources: SkillScanSource[]
 }
 
 export function filterInstalledInventorySourcesSync(sources: SkillScanSource[]): SkillScanSource[] {
-  return sources.filter((source) => directoryExistsSync(source.skillsDir));
+  return sources.filter(sourceExistsForInventorySync);
+}
+
+async function sourceExistsForInventory(source: SkillScanSource): Promise<boolean> {
+  if (await directoryExists(source.skillsDir)) {
+    return true;
+  }
+
+  return source.canonical && await pathExists(getCanonicalMcpConfigPathForSource(source));
+}
+
+function sourceExistsForInventorySync(source: SkillScanSource): boolean {
+  return directoryExistsSync(source.skillsDir)
+    || (source.canonical && pathExistsSync(getCanonicalMcpConfigPathForSource(source)));
+}
+
+function getCanonicalMcpConfigPathForSource(source: SkillScanSource): string {
+  return path.join(path.dirname(source.skillsDir), 'mcp.json');
 }
 
 function createCompatibleSourceDefinitions(

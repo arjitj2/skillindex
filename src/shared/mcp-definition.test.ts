@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildPortableMcpDefinition, normalizeMcpDefinitionForComparison } from './mcp-definition';
+import { buildPortableMcpDefinition, normalizeMcpDefinitionForComparison, splitMcpDefinitionForComparison } from './mcp-definition';
 
 describe('MCP definition normalization', () => {
   it('compares stdio definitions by launch and environment fields only', () => {
@@ -90,6 +90,85 @@ describe('MCP definition normalization', () => {
       url: 'https://example.test/mcp',
       headers: {
         'X-Api-Key': 'secret',
+      },
+    });
+  });
+
+  it('splits portable core from agent-specific native fields', () => {
+    expect(splitMcpDefinitionForComparison({
+      type: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      cwd: '/Users/tester/project',
+      env: {
+        API_KEY: 'secret',
+      },
+      disabled: false,
+      enabled_tools: ['search'],
+      tool_timeout_sec: 120,
+    })).toEqual({
+      core: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['server.js'],
+        cwd: '/Users/tester/project',
+        env: {
+          API_KEY: 'secret',
+        },
+      },
+      native: {
+        disabled: false,
+        enabled_tools: ['search'],
+        tool_timeout_sec: 120,
+      },
+      agentLocal: {},
+    });
+  });
+
+  it('keeps agentLocal out of core and native fields', () => {
+    expect(splitMcpDefinitionForComparison({
+      command: 'node',
+      args: ['server.js'],
+      agentLocal: {
+        codex: {
+          startup_timeout_ms: 20000,
+        },
+      },
+    })).toEqual({
+      core: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['server.js'],
+      },
+      native: {},
+      agentLocal: {
+        codex: {
+          startup_timeout_ms: 20000,
+        },
+      },
+    });
+  });
+
+  it('filters core and dialect fields out of agentLocal blocks', () => {
+    expect(splitMcpDefinitionForComparison({
+      url: 'https://example.test/mcp',
+      agentLocal: {
+        codex: {
+          command: 'node',
+          transport: 'stdio',
+          enabled_tools: ['search'],
+        },
+      },
+    })).toEqual({
+      core: {
+        transport: 'http',
+        url: 'https://example.test/mcp',
+      },
+      native: {},
+      agentLocal: {
+        codex: {
+          enabled_tools: ['search'],
+        },
       },
     });
   });

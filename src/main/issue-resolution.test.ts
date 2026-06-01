@@ -381,6 +381,14 @@ describe('resolveInventoryIssue', () => {
       'url = "https://stitch.googleapis.com/mcp"',
       '',
     ].join('\n'), 'utf8');
+    await writeFile(path.join(paths.sandboxRoot, '.agents', 'mcp.json'), `${JSON.stringify({
+      servers: {
+        stitch: {
+          type: 'http',
+          url: 'https://stitch.googleapis.com/mcp',
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
     await writeFile(claudeConfigPath as string, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`, 'utf8');
 
     await resolveInventoryIssue(
@@ -2279,7 +2287,7 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
-  it('fills missing MCP agents without rewriting existing mismatched definitions', async () => {
+  it('fills missing MCP agents from Universal without rewriting existing mismatched definitions', async () => {
     const paths = await createPaths('skillindex-resolve-');
     await seedRepresentativeFixtures({ paths });
     const inventoryBefore = await scanInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
@@ -2314,7 +2322,8 @@ describe('resolveInventoryIssue', () => {
 
     expect(await readFile(path.join(paths.sandboxRoot, '.agents', 'mcp.json'), 'utf8')).toBe(beforeAgentsConfig);
     expect(await readFile(claudeConfigPath as string, 'utf8')).toBe(beforeClaudeConfig);
-    expect(await readFile(factoryConfigPath as string, 'utf8')).toContain('missing-from-agents-claude');
+    expect(await readFile(factoryConfigPath as string, 'utf8')).toContain('missing-from-agents.js');
+    expect(await readFile(factoryConfigPath as string, 'utf8')).not.toContain('missing-from-agents-claude');
     expect(resolvedMcp?.issueReasons).toEqual(['definition-mismatch']);
   });
 
@@ -2397,8 +2406,46 @@ describe('resolveInventoryIssue', () => {
       },
     );
 
-    expect(await readFile(factoryConfigPath as string, 'utf8')).toContain('missing-from-agents-claude');
+    expect(await readFile(factoryConfigPath as string, 'utf8')).toContain('missing-from-agents.js');
+    expect(await readFile(factoryConfigPath as string, 'utf8')).not.toContain('missing-from-agents-claude');
     expect(resolvedSnapshot.mcps?.find((mcp) => mcp.name === 'missing-from-agents-mcp')?.missingLocations).toEqual([]);
+  });
+
+  it('rejects MCP resolutions that span multiple inventory scopes', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-mcp-scope-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-scope-home-'));
+    const env = {
+      SKILL_INDEX_DATA_DIR: root,
+    };
+    const paths = resolveSkillIndexPaths({
+      env,
+      homeDir,
+    });
+    await seedRepresentativeFixtures({ paths });
+    await writeSkillFile(path.join(homeDir, '.agents', 'skills', '.keep'), '');
+    await writeSkillFile(path.join(homeDir, '.agents', 'mcp.json'), `${JSON.stringify({
+      servers: {
+        'missing-from-agents-mcp': {
+          command: 'node',
+          args: ['live-scope.js'],
+        },
+      },
+    }, null, 2)}\n`);
+
+    await expect(resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-from-agents',
+        mcpName: 'missing-from-agents-mcp',
+      },
+      {
+        paths,
+        env,
+        homeDir,
+        includeSandboxSources: true,
+        includeLiveSources: true,
+      },
+    )).rejects.toThrow('MCP resolution currently requires every affected location to stay within one scope.');
   });
 
   it('applies a selected MCP definition across existing configs and can clear invalid definitions indirectly', async () => {
@@ -2428,11 +2475,112 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(path.join(paths.sandboxRoot, '.claude.json'), 'utf8')).toContain('recovered-command.js');
   });
 
-  it('applies only portable MCP fields when standardizing a selected definition', async () => {
+  it('promotes an agent-only MCP into universal config with its native fields captured as agentLocal', async () => {
+    const paths = await createPaths('skillindex-resolve-mcp-missing-universal-');
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+
+    await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await writeFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        localOnly: {
+          command: 'node',
+          args: ['local-only.js'],
+          disabled: false,
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const resolvedSnapshot = await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'localOnly',
+        selectedVariantPath: factoryConfigPath,
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+      },
+    );
+
+    const agentsConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(agentsConfig.servers?.localOnly).toEqual({
+      command: 'node',
+      args: ['local-only.js'],
+      agentLocal: {
+        factory: {
+          disabled: false,
+        },
+      },
+    });
+    expect(resolvedSnapshot.mcps?.find((mcp) => mcp.name === 'localOnly')?.issueReasons)
+      .not.toContain('missing-universal');
+  });
+
+  it('creates live universal MCP config at ~/.agents/mcp.json when promoting an agent-only definition', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-live-mcp-universal-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-mcp-universal-home-'));
+    const env = {
+      SKILL_INDEX_DATA_DIR: root,
+      SKILL_INDEX_AGENT_SUBSET: 'factory',
+    };
+    const paths = resolveSkillIndexPaths({ env, homeDir });
+    const agentsConfigPath = path.join(homeDir, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(homeDir, '.factory', 'mcp.json');
+
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        localOnly: {
+          command: 'node',
+          args: ['local-only.js'],
+          disabled: false,
+        },
+      },
+    }, null, 2)}\n`);
+
+    await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'localOnly',
+        selectedVariantPath: factoryConfigPath,
+      },
+      {
+        paths,
+        env,
+        homeDir,
+        includeSandboxSources: false,
+        includeLiveSources: true,
+      },
+    );
+
+    const agentsConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(agentsConfig.servers?.localOnly).toEqual({
+      command: 'node',
+      args: ['local-only.js'],
+      agentLocal: {
+        factory: {
+          disabled: false,
+        },
+      },
+    });
+  });
+
+  it('preserves native MCP fields when standardizing a selected definition', async () => {
     const paths = await createPaths('skillindex-resolve-portable-mcp-');
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
     const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
 
+    await mkdir(path.dirname(agentsConfigPath), { recursive: true });
     await mkdir(path.dirname(codexConfigPath), { recursive: true });
     await mkdir(path.dirname(factoryConfigPath), { recursive: true });
     await writeFile(codexConfigPath, [
@@ -2476,6 +2624,100 @@ describe('resolveInventoryIssue', () => {
       command: '/Users/tester/.blitz/blitz-macos-mcp',
       args: ['--mode', 'app-store'],
       cwd: '/Users/tester/.blitz/mcps',
+      disabled: false,
+    });
+    const agentsConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(agentsConfig.servers?.['blitz-macos']).toEqual({
+      command: '/Users/tester/.blitz/blitz-macos-mcp',
+      args: ['--mode', 'app-store'],
+      cwd: '/Users/tester/.blitz/mcps',
+      agentLocal: {
+        codex: {
+          enabled_tools: ['app_get_state', 'project_open'],
+        },
+        factory: {
+          disabled: false,
+        },
+      },
+    });
+  });
+
+  it('refreshes universal agentLocal from active native MCP fields and drops inactive blocks', async () => {
+    const paths = await createPaths('skillindex-resolve-mcp-agent-local-refresh-');
+    const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+
+    await writeSkillFile(agentsConfigPath, `${JSON.stringify({
+      servers: {
+        staleLocal: {
+          command: 'node',
+          args: ['old.js'],
+          agentLocal: {
+            codex: {
+              enabled_tools: ['old_tool'],
+            },
+            factory: {
+              disabled: true,
+            },
+            removed: {
+              stale: true,
+            },
+          },
+        },
+      },
+    }, null, 2)}\n`);
+    await writeSkillFile(codexConfigPath, [
+      '[mcp_servers.staleLocal]',
+      'command = "node"',
+      'args = ["new.js"]',
+      'enabled_tools = ["new_tool"]',
+      '',
+    ].join('\n'));
+    await writeSkillFile(factoryConfigPath, `${JSON.stringify({
+      mcpServers: {
+        staleLocal: {
+          command: 'node',
+          args: ['old.js'],
+          disabled: false,
+        },
+      },
+    }, null, 2)}\n`);
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'definition-mismatch',
+        mcpName: 'staleLocal',
+        selectedVariantPath: codexConfigPath,
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: {
+          SKILL_INDEX_AGENT_SUBSET: 'codex,factory',
+        },
+      },
+    );
+
+    const agentsConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(agentsConfig.servers?.staleLocal).toEqual({
+      command: 'node',
+      args: ['new.js'],
+      agentLocal: {
+        codex: {
+          enabled_tools: ['new_tool'],
+        },
+        factory: {
+          disabled: false,
+        },
+      },
     });
   });
 
@@ -2541,7 +2783,23 @@ describe('resolveInventoryIssue', () => {
     ].join('\n'), 'utf8');
 
     const mcpName = 'signal-tools:signalMap';
-    const beforeSnapshot = await scanInventory({
+    let beforeSnapshot = await scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    const initialPluginMcp = beforeSnapshot.mcps?.find((mcp) => mcp.name === mcpName);
+    const initialPluginLocation = initialPluginMcp?.locations.find((location) => location.agentId.startsWith('plugin:'));
+    expect(initialPluginLocation?.command).toBeDefined();
+    await writeFile(path.join(paths.sandboxRoot, '.agents', 'mcp.json'), `${JSON.stringify({
+      servers: {
+        signalMap: {
+          command: initialPluginLocation?.command,
+          args: initialPluginLocation?.args ?? [],
+        },
+      },
+    }, null, 2)}\n`, 'utf8');
+    beforeSnapshot = await scanInventory({
       paths,
       includeSandboxSources: true,
       includeLiveSources: false,
@@ -2718,6 +2976,15 @@ describe('resolveInventoryIssue', () => {
 
     await Promise.all([
       writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), '{}\n'),
+      writeSkillFile(path.join(homeDir, '.agents', 'skills', '.keep'), ''),
+      writeSkillFile(path.join(homeDir, '.agents', 'mcp.json'), `${JSON.stringify({
+        servers: {
+          'live-mcp': {
+            command: 'uvx',
+            args: ['live-mcp'],
+          },
+        },
+      }, null, 2)}\n`),
       writeSkillFile(path.join(homeDir, '.config', 'opencode', 'opencode.json'), `${JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         mcp: {},

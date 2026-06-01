@@ -18,6 +18,7 @@ export interface SkillIndexPaths {
   configFile: string;
   sandboxRoot: string;
   sandboxAgentsDir: string;
+  liveAgentsDir: string;
   liveCanonicalUserSkillsDir: string;
   sandboxCanonicalUserSkillsDir: string;
   sandboxAgentsSkillsDir: string;
@@ -72,7 +73,8 @@ export function resolveSkillIndexPaths(options: ResolveSkillIndexPathOptions = {
   const dataDir = env.SKILL_INDEX_DATA_DIR ? path.resolve(env.SKILL_INDEX_DATA_DIR) : path.join(homeDir, '.skillindex');
   const sandboxRoot = env.SKILL_INDEX_SANDBOX_ROOT ? path.resolve(env.SKILL_INDEX_SANDBOX_ROOT) : path.join(dataDir, 'sandbox');
   const sandboxAgentsDir = path.join(sandboxRoot, '.agents');
-  const liveCanonicalUserSkillsDir = path.join(homeDir, '.agents', 'skills');
+  const liveAgentsDir = path.join(homeDir, '.agents');
+  const liveCanonicalUserSkillsDir = path.join(liveAgentsDir, 'skills');
   const sandboxCanonicalUserSkillsDir = path.join(sandboxAgentsDir, 'skills');
   const fixturesDir = path.join(dataDir, 'fixtures');
 
@@ -83,6 +85,7 @@ export function resolveSkillIndexPaths(options: ResolveSkillIndexPathOptions = {
     configFile: path.join(dataDir, 'config.json'),
     sandboxRoot,
     sandboxAgentsDir,
+    liveAgentsDir,
     liveCanonicalUserSkillsDir,
     sandboxCanonicalUserSkillsDir,
     sandboxAgentsSkillsDir: sandboxCanonicalUserSkillsDir,
