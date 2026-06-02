@@ -108,6 +108,13 @@ export function DetailInspectorPanel({
       ? PLUGIN_SUBAGENT_TOOLTIP
       : PLUGIN_SKILL_TOOLTIP;
   const hasRemoveAction = footerActions?.some((action) => action.variant === 'danger') ?? false;
+  const primaryDisabledAction = footerActions
+    ?.map((action, index) => ({ action, index }))
+    .find(({ action }) => action.variant === 'strong' && action.disabled && Boolean(action.title ?? action.detail));
+  const primaryDisabledReason = primaryDisabledAction?.action.title ?? primaryDisabledAction?.action.detail ?? null;
+  const primaryDisabledReasonId = primaryDisabledReason && primaryDisabledAction
+    ? `detail-inspector-footer-action-${primaryDisabledAction.index}-disabled-reason`
+    : undefined;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -585,12 +592,17 @@ export function DetailInspectorPanel({
 
       {activeTab === 'problems' && footerActions && footerActions.length > 0 ? (
         <section className={`detail-inspector-panel__footer-block${hasRemoveAction ? ' detail-inspector-panel__footer-block--with-remove' : ''}`}>
-          {activeProblem.actionSummary ? (
-            <p className="detail-inspector-panel__action-summary">{activeProblem.actionSummary}</p>
+          {primaryDisabledReason ? (
+            <p className="detail-inspector-panel__action-summary" id={primaryDisabledReasonId}>{primaryDisabledReason}</p>
           ) : null}
           {footerActions.map((action, actionIndex) => {
             const disabledReasonId = `detail-inspector-footer-action-${actionIndex}-disabled-reason`;
-            const visibleDetail = action.variant === 'note' ? null : action.disabled && action.title ? action.title : action.detail;
+            const usesPrimaryDisabledReason = actionIndex === primaryDisabledAction?.index && Boolean(primaryDisabledReasonId);
+            const actionReasonId = actionIndex === primaryDisabledAction?.index
+              ? primaryDisabledReasonId
+              : disabledReasonId;
+            const visibleDetail = action.variant === 'note' || !action.disabled ? null : action.title ?? action.detail ?? null;
+            const shouldRenderVisibleDetail = visibleDetail && !usesPrimaryDisabledReason;
             if (action.variant === 'note') {
               return (
                 <p className="detail-inspector-panel__footer-note" key={action.label} role="note">
@@ -612,7 +624,7 @@ export function DetailInspectorPanel({
               >
                 <button
                   aria-keyshortcuts={action.shortcut ? action.shortcut.toUpperCase() : undefined}
-                  aria-describedby={visibleDetail ? disabledReasonId : undefined}
+                  aria-describedby={visibleDetail ? actionReasonId : undefined}
                   className={[
                     'detail-inspector-panel__footer-action',
                     action.variant === 'strong' ? 'detail-inspector-panel__footer-action--primary' : '',
@@ -631,7 +643,7 @@ export function DetailInspectorPanel({
                     </kbd>
                   ) : null}
                 </button>
-                {visibleDetail ? (
+                {shouldRenderVisibleDetail ? (
                   <p className="detail-inspector-panel__footer-action-reason" id={disabledReasonId}>
                     {visibleDetail}
                   </p>

@@ -1676,6 +1676,80 @@ describe('buildSkillInspectorModel', () => {
     expect(activeProblem.primaryActionLabel).toBe('Repair Symlinks');
   });
 
+  it('puts Missing Universal first when it appears with symlink repair problems', () => {
+    const skill: SkillRecord = {
+      name: 'needs-universal-before-links-skill',
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['wrong-symlink-target', 'broken-symlink', 'missing-canonical'],
+      locations: [
+        {
+          path: packagePath('~/.skillindex/sandbox/.claude/skills/needs-universal-before-links-skill.md'),
+          sourceId: 'sandbox-claude',
+          sourceLabel: 'Sandbox Claude',
+          sourceScope: 'sandbox',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-04T12:15:00.000Z',
+          canonical: false,
+          resolvedPath: packagePath('~/.skillindex/sandbox/.claude/skills/needs-universal-before-links-skill.md'),
+          contentHash: 'claude-copy',
+          definitionText: 'claude body',
+        },
+        {
+          path: packagePath('~/.skillindex/sandbox/.factory/skills/needs-universal-before-links-skill.md'),
+          sourceId: 'sandbox-factory',
+          sourceLabel: 'Sandbox Factory',
+          sourceScope: 'sandbox',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-04T12:15:01.000Z',
+          canonical: false,
+          resolvedPath: packagePath('~/.skillindex/sandbox/.factory/skills/needs-universal-before-links-skill.md'),
+          contentHash: 'factory-copy',
+          definitionText: 'factory body',
+        },
+        {
+          path: packagePath('~/.skillindex/sandbox/.codex/skills/needs-universal-before-links-skill.md'),
+          sourceId: 'sandbox-codex',
+          sourceLabel: 'Sandbox Codex',
+          sourceScope: 'sandbox',
+          fileType: 'symlink',
+          modifiedAt: '2026-01-04T12:15:02.000Z',
+          canonical: false,
+          resolvedPath: packagePath('~/.skillindex/sandbox/.agents/skills/other-skill.md'),
+          symlinkTarget: packagePath('~/.skillindex/sandbox/.agents/skills/other-skill.md'),
+        },
+        {
+          path: packagePath('~/.skillindex/sandbox/.amp/skills/needs-universal-before-links-skill.md'),
+          sourceId: 'sandbox-amp',
+          sourceLabel: 'Sandbox Amp',
+          sourceScope: 'sandbox',
+          fileType: 'symlink',
+          modifiedAt: '2026-01-04T12:15:03.000Z',
+          canonical: false,
+        },
+      ],
+      detailDiagnostics: {
+        duplicateCandidates: [],
+        installSources: [],
+        missingInstallSources: [],
+        definitionIssues: [],
+      },
+    };
+
+    const model = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: null,
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    expect(model.problems.map((problem) => problem.key)).toEqual([
+      'missing-canonical',
+      'wrong-symlink-target',
+      'broken-symlink',
+    ]);
+    expect(model.activeProblem.key).toBe('missing-canonical');
+  });
+
   it('does not mark any detected version as universal when a skill is missing the universal copy', () => {
     const skill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'single-source-skill')!;
 
