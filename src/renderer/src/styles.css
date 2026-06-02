@@ -9528,7 +9528,7 @@ body {
 }
 
 .detail-inspector-panel__footer-block--with-remove .detail-inspector-panel__footer-action-group--danger {
-  grid-column: span 1;
+  grid-column: 3 / 4;
 }
 
 .detail-inspector-panel__footer-action {

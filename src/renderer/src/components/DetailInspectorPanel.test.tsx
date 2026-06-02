@@ -922,6 +922,32 @@ describe('DetailInspectorPanel', () => {
     expect(screen.queryByRole('button', { name: helpText })).not.toBeInTheDocument();
   });
 
+  it('marks a remove-only healthy detail footer action as end aligned', () => {
+    const skill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'healthy-skill');
+    expect(skill).toBeDefined();
+
+    const model = buildSkillInspectorModel(skill!, sourceIndex, {}, agentIndex);
+
+    render(
+      <DetailInspectorPanel
+        footerActions={[{ label: 'Remove', shortcut: 'R', variant: 'danger' }]}
+        model={model}
+        onClose={() => undefined}
+      />,
+    );
+
+    const footer = document.querySelector('.detail-inspector-panel__footer-block');
+    const removeGroup = screen.getByRole('button', { name: /^Remove$/i })
+      .closest('.detail-inspector-panel__footer-action-group');
+
+    expect(screen.getByText('No problems')).toBeInTheDocument();
+    expect(footer).toHaveClass('detail-inspector-panel__footer-block--with-remove');
+    expect(removeGroup).toHaveClass(
+      'detail-inspector-panel__footer-action-group--danger',
+      'detail-inspector-panel__footer-action-group--end',
+    );
+  });
+
   it('renders dismiss and remove footer actions as a two-third and one-third action row', () => {
     const skill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'identical-drift-skill');
     expect(skill).toBeDefined();
