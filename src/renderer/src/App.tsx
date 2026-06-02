@@ -70,7 +70,7 @@ import { AgentsWorkspaceView } from './views/AgentsWorkspaceView';
 import { AuditWorkspaceView } from './views/AuditWorkspaceView';
 import { HomeDashboard } from './views/HomeDashboard';
 import { AddServerModal, McpWorkspaceView } from './views/McpWorkspaceView';
-import { OnboardingFlow } from './views/OnboardingFlow';
+import { OnboardingFlow, type OnboardingPreferredSourceSelection } from './views/OnboardingFlow';
 import { PluginsWorkspaceView } from './views/PluginsWorkspaceView';
 import { SettingsWorkspaceView } from './views/SettingsWorkspaceView';
 import { AddSkillModal, SkillsWorkspaceView } from './views/SkillsWorkspaceView';
@@ -89,11 +89,6 @@ function getAutoResolvableRequestsForSnapshot(
   ];
 
   return entity ? requests.filter((request) => request.entity === entity) : requests;
-}
-
-interface OnboardingPreferredSourceSelection {
-  didChangePreferredSource: boolean;
-  preferredSourcePath: string | null;
 }
 
 interface PendingRemoveItem {

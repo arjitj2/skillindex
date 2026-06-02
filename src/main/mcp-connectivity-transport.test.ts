@@ -2,13 +2,15 @@
 
 import path from 'node:path';
 
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { McpLocationRecord } from '@shared/contracts';
 
 interface MockClientConnectCall {
-  transport: unknown;
-  options: unknown;
+  transport: Transport;
+  options?: RequestOptions;
 }
 
 interface MockClientInstance {
@@ -56,7 +58,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
       sdkRecords.clients.push(this);
     }
 
-    connect(transport: unknown, options: unknown): Promise<void> {
+    connect(transport: Transport, options?: RequestOptions): Promise<void> {
       this.connectCalls.push({ transport, options });
       return Promise.resolve();
     }

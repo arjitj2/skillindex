@@ -29,7 +29,6 @@ import {
   collectMcpRecords,
   compareMcps,
   countMcps,
-  reconcileCachedMcps,
 } from '@main/mcp-inventory';
 import { buildPluginSkillScanSources, scanPluginInventory } from '@main/plugin-inventory';
 import {
@@ -269,7 +268,7 @@ export async function dismissDrift(
   return nextSnapshot;
 }
 
-export async function resolveScanContext(options: ScanSkillInventoryOptions): Promise<{
+async function resolveScanContext(options: ScanSkillInventoryOptions): Promise<{
   config: SkillIndexConfig;
   paths: SkillIndexPaths;
   registeredSources: SkillScanSource[];
@@ -345,36 +344,4 @@ async function scanPluginsForOptions(options: ScanSkillInventoryOptions, paths: 
   ]);
 
   return pluginGroups.flat();
-}
-
-export function reconcileCachedInventory(
-  snapshot: SkillInventorySnapshot,
-  agents: SkillInventorySnapshot['agents'],
-  sources: SkillScanSource[],
-  plugins: PluginRecord[],
-  dismissedDriftSignatures: string[],
-  dismissedMcpSignatures: string[],
-  dismissedSubagentSignatures: string[],
-): SkillInventorySnapshot {
-  const activeAgents = agents ?? [];
-  const reconciledMcps = applyDismissedMcpState(
-    reconcileCachedMcps(snapshot.mcps ?? [], activeAgents, sources, plugins),
-    dismissedMcpSignatures,
-  );
-  const mcpCounts = countMcps(reconciledMcps);
-  const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
-  const subagentCounts = countSubagents(subagents);
-  const agentCounts = countAgents(activeAgents);
-
-  return applyDismissedDriftState({
-    ...snapshot,
-    mcps: reconciledMcps,
-    mcpCounts,
-    subagents,
-    subagentCounts,
-    agents: activeAgents,
-    plugins,
-    agentCounts,
-    homeSummary: buildHomeSummary(snapshot.counts, mcpCounts, agentCounts),
-  }, dismissedDriftSignatures, sources);
 }

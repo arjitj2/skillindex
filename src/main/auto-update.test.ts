@@ -7,6 +7,8 @@ import {
   getAutoUpdateStatus,
   requestAutoUpdateCheck,
   shouldEnableAutoUpdates,
+  type AutoUpdaterEvent,
+  type AutoUpdaterEventMap,
 } from './auto-update';
 
 describe('auto-update lifecycle', () => {
@@ -53,7 +55,7 @@ describe('auto-update lifecycle', () => {
     const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
 
     configureAutoUpdates(runtime);
-    runtime.listeners.get('update-available')?.({ version: '0.2.0' });
+    runtime.listeners.get('update-available')?.(createUpdateInfo('0.2.0'));
     const downloadingStatus = getAutoUpdateStatus();
     expect(downloadingStatus.phase).toBe('downloading');
     expect(downloadingStatus.version).toBe('0.2.0');
@@ -61,6 +63,7 @@ describe('auto-update lifecycle', () => {
 
     runtime.listeners.get('download-progress')?.({
       bytesPerSecond: 1_024_000,
+      delta: 6_600_000,
       percent: 23.5714,
       total: 28_000_000,
       transferred: 6_600_000,
@@ -76,7 +79,10 @@ describe('auto-update lifecycle', () => {
       version: '0.2.0',
     }));
 
-    runtime.listeners.get('update-downloaded')?.({ version: '0.2.0' });
+    runtime.listeners.get('update-downloaded')?.({
+      ...createUpdateInfo('0.2.0'),
+      downloadedFile: '/tmp/Skill Index-0.2.0.zip',
+    });
     const readyStatus = getAutoUpdateStatus();
     expect(readyStatus.phase).toBe('ready');
     expect(readyStatus.version).toBe('0.2.0');
@@ -100,14 +106,14 @@ interface RuntimeOptions {
 }
 
 function createRuntime(options: RuntimeOptions) {
-  const listeners = new Map<string, (...args: unknown[]) => void>();
+  const listeners = createAutoUpdaterListenerRegistry();
   const scheduledTimeouts: Array<() => void> = [];
   const scheduledIntervals: Array<() => void> = [];
   const updater = {
     autoDownload: false,
     autoInstallOnAppQuit: true,
-    checkForUpdates: vi.fn<() => Promise<unknown>>().mockResolvedValue(null),
-    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+    checkForUpdates: vi.fn<() => Promise<null>>().mockResolvedValue(null),
+    on: vi.fn(<Event extends AutoUpdaterEvent>(event: Event, listener: AutoUpdaterEventMap[Event]) => {
       listeners.set(event, listener);
       return updater;
     }),
@@ -133,5 +139,28 @@ function createRuntime(options: RuntimeOptions) {
       return 1;
     }),
     updater,
+  };
+}
+
+function createAutoUpdaterListenerRegistry() {
+  const listeners: Partial<AutoUpdaterEventMap> = {};
+
+  return {
+    get<Event extends AutoUpdaterEvent>(event: Event): AutoUpdaterEventMap[Event] | undefined {
+      return listeners[event] as AutoUpdaterEventMap[Event] | undefined;
+    },
+    set<Event extends AutoUpdaterEvent>(event: Event, listener: AutoUpdaterEventMap[Event]): void {
+      listeners[event] = listener;
+    },
+  };
+}
+
+function createUpdateInfo(version: string): Parameters<AutoUpdaterEventMap['update-available']>[0] {
+  return {
+    files: [],
+    path: '',
+    releaseDate: '2026-05-17T00:00:00.000Z',
+    sha512: '',
+    version,
   };
 }

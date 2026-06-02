@@ -249,7 +249,7 @@ describe('createSkillIndexDesktopApi', () => {
     await expect(api.readCachedInventory()).resolves.toEqual(inventorySnapshot);
     await expect(api.scanInventory()).resolves.toEqual(inventorySnapshot);
     await expect(api.rescanInventory({ verifyMcpConnectivity: false })).resolves.toEqual(inventorySnapshot);
-    await expect((api as unknown as { testMcpConnectivity(): Promise<SkillInventorySnapshot> }).testMcpConnectivity()).resolves.toEqual(inventorySnapshot);
+    await expect(api.testMcpConnectivity()).resolves.toEqual(inventorySnapshot);
     await expect(api.cancelMcpConnectivityTest()).resolves.toBeUndefined();
     await expect(api.addSkill({
       sourceType: 'url',

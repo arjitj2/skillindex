@@ -47,7 +47,7 @@ export async function persistSkillUniversalDecisionForSelection(
   });
 }
 
-export function buildSkillUniversalOrigin(location: SkillLocationRecord): SkillUniversalOrigin {
+function buildSkillUniversalOrigin(location: SkillLocationRecord): SkillUniversalOrigin {
   const plugin = location.provenance?.plugin;
   if (plugin) {
     return {
@@ -66,7 +66,7 @@ export function buildSkillUniversalOrigin(location: SkillLocationRecord): SkillU
   };
 }
 
-export function buildSkillUniversalAlternate(location: SkillLocationRecord): SkillUniversalAlternate | null {
+function buildSkillUniversalAlternate(location: SkillLocationRecord): SkillUniversalAlternate | null {
   const plugin = location.provenance?.plugin;
   if (!plugin) {
     return null;

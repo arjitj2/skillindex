@@ -254,7 +254,31 @@ async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await lstat(targetPath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return false;
+    }
+
+    throw new Error(`Failed to inspect subagent install path ${targetPath}: ${formatUnknownError(error)}`, { cause: error });
   }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return isErrnoException(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error;
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  return 'Unknown error';
 }

@@ -47,12 +47,7 @@ export function normalizeMcpDefinitionForComparison(
   definition: McpDefinitionObject,
   connection?: McpDefinitionConnectionHint,
 ): McpServerDefinition {
-  const comparable = buildComparableMcpDefinition(definition, connection);
-  if (comparable.transport) {
-    return comparable;
-  }
-
-  return comparable;
+  return buildComparableMcpDefinition(definition, connection);
 }
 
 export function splitMcpDefinitionForComparison(
@@ -124,12 +119,12 @@ function buildComparableMcpDefinition(
   }
 
   if (transport === 'stdio' || (!transport && connection?.command)) {
-    const command = getMcpCommand(definition) ?? connection?.command;
+    const command = getMcpDefinitionCommand(definition) ?? connection?.command;
     if (command) {
       comparable.command = command;
     }
 
-    const args = getMcpArgs(definition, connection);
+    const args = getMcpDefinitionArgs(definition, connection);
     if (args.length > 0) {
       comparable.args = args;
     }
@@ -148,7 +143,7 @@ function buildComparableMcpDefinition(
   }
 
   if (isRemoteMcpTransport(transport) || (!transport && connection?.url)) {
-    const url = getMcpRemoteUrl(definition) ?? connection?.url;
+    const url = getMcpDefinitionRemoteUrl(definition) ?? connection?.url;
     if (url) {
       comparable.url = url;
     }
@@ -211,7 +206,7 @@ function getPortableMcpTransport(
     ?? normalizeMcpTransport(definition.type)
     ?? normalizeConnectionHintTransport(connection?.transport)
     ?? inferMcpTransport({
-      command: getMcpCommand(definition),
+      command: getMcpDefinitionCommand(definition),
       url: getNonEmptyString(definition.url),
       httpUrl: getNonEmptyString(definition.httpUrl),
     });
@@ -276,11 +271,11 @@ function getNonEmptyString(value: McpDefinitionValue | undefined): string | unde
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-function getMcpRemoteUrl(definition: McpDefinitionObject): string | undefined {
+export function getMcpDefinitionRemoteUrl(definition: McpDefinitionObject): string | undefined {
   return getNonEmptyString(definition.httpUrl) ?? getNonEmptyString(definition.url);
 }
 
-function getMcpCommand(definition: McpDefinitionObject): string | undefined {
+export function getMcpDefinitionCommand(definition: McpDefinitionObject): string | undefined {
   const command = definition.command;
   if (Array.isArray(command)) {
     return getNonEmptyString(command[0]);
@@ -289,7 +284,7 @@ function getMcpCommand(definition: McpDefinitionObject): string | undefined {
   return getNonEmptyString(command);
 }
 
-function getMcpArgs(
+export function getMcpDefinitionArgs(
   definition: McpDefinitionObject,
   connection?: McpDefinitionConnectionHint,
 ): string[] {

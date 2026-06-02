@@ -163,10 +163,6 @@ export function HeaderSearch({
   );
 }
 
-export function DetailValue({ value }: { value: string }) {
-  return <code className="detail-value">{value}</code>;
-}
-
 export function PageTopBar({
   actions,
   search,
@@ -656,46 +652,6 @@ function getAgentSubagentsTitle(agent: AgentRecord): string {
   }
 
   return agent.subagentsLocation?.path ?? getAgentSubagentsDisplayPath(agent);
-}
-
-export function SettingsCard({
-  children,
-  description,
-  title,
-}: {
-  children: ReactNode;
-  description?: string;
-  title: string;
-}) {
-  return (
-    <section className="settings-card">
-      <div className="settings-card-header">
-        <h3>{title}</h3>
-        {description ? <p>{description}</p> : null}
-      </div>
-      <div className="settings-card-body">{children}</div>
-    </section>
-  );
-}
-
-export function SettingsRow({
-  description,
-  label,
-  trailing,
-}: {
-  description: string;
-  label: string;
-  trailing: ReactNode;
-}) {
-  return (
-    <div className="settings-row">
-      <div className="settings-row-copy">
-        <strong>{label}</strong>
-        <p>{description}</p>
-      </div>
-      <div className="settings-row-trailing">{trailing}</div>
-    </div>
-  );
 }
 
 export function EmptyStatePanel({ message }: { message: string }) {

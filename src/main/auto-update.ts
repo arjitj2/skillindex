@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import type { ProgressInfo, UpdateCheckResult, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater';
 
 import { getSkillIndexBuildFlavor, type SkillIndexBuildFlavor } from '@shared/build-flavor';
 import { IPC_CHANNELS, type AutoUpdateDownloadProgress, type AutoUpdateStatus } from '@shared/contracts';
@@ -13,19 +14,25 @@ export interface AutoUpdateEligibility {
   disableAutoUpdate?: boolean;
 }
 
-type AutoUpdaterEvent = 'error'
-  | 'checking-for-update'
-  | 'download-progress'
-  | 'update-available'
-  | 'update-downloaded'
-  | 'update-not-available';
+export interface AutoUpdaterEventMap {
+  error: (error: Error, message?: string) => void;
+  'checking-for-update': () => void;
+  'download-progress': (info: ProgressInfo) => void;
+  'update-available': (info: UpdateInfo) => void;
+  'update-downloaded': (info: UpdateDownloadedEvent) => void;
+  'update-not-available': (info: UpdateInfo) => void;
+}
+
+export type AutoUpdaterEvent = keyof AutoUpdaterEventMap;
+
+type TimerHandle = NodeJS.Timeout | number;
 
 interface AutoUpdaterLike {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
-  checkForUpdates(): Promise<unknown>;
+  checkForUpdates(): Promise<UpdateCheckResult | null>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
-  on(event: AutoUpdaterEvent, listener: (...args: unknown[]) => void): unknown;
+  on<Event extends AutoUpdaterEvent>(event: Event, listener: AutoUpdaterEventMap[Event]): AutoUpdaterLike;
 }
 
 interface AutoUpdateRuntime {
@@ -33,8 +40,8 @@ interface AutoUpdateRuntime {
   disableAutoUpdate?: boolean;
   isPackaged: boolean;
   logger: Pick<Console, 'error' | 'info'>;
-  setInterval: (callback: () => void, delayMs: number) => unknown;
-  setTimeout: (callback: () => void, delayMs: number) => unknown;
+  setInterval: (callback: () => void, delayMs: number) => TimerHandle;
+  setTimeout: (callback: () => void, delayMs: number) => TimerHandle;
   updater: AutoUpdaterLike;
 }
 
@@ -72,7 +79,7 @@ export function configureAutoUpdates(runtime: AutoUpdateRuntime): boolean {
   runtime.updater.on('update-available', (info) => {
     setAutoUpdateStatus({
       phase: 'downloading',
-      version: readUpdateVersion(info),
+      version: info.version,
       lastCheckedAt: new Date().toISOString(),
     });
   });
@@ -81,13 +88,13 @@ export function configureAutoUpdates(runtime: AutoUpdateRuntime): boolean {
       ...getAutoUpdateStatus(),
       downloadProgress: readDownloadProgress(info),
       phase: 'downloading',
-      version: getAutoUpdateStatus().version ?? readUpdateVersion(info),
+      version: getAutoUpdateStatus().version,
     });
   });
   runtime.updater.on('update-downloaded', (info) => {
     setAutoUpdateStatus({
       phase: 'ready',
-      version: readUpdateVersion(info) ?? getAutoUpdateStatus().version,
+      version: info.version,
       lastCheckedAt: new Date().toISOString(),
     });
   });
@@ -195,32 +202,18 @@ function broadcastAutoUpdateStatus(status: AutoUpdateStatus): void {
   }
 }
 
-function readUpdateVersion(info: unknown): string | undefined {
-  if (!info || typeof info !== 'object' || !('version' in info)) {
-    return undefined;
-  }
-
-  const version = (info as { version?: unknown }).version;
-  return typeof version === 'string' ? version : undefined;
-}
-
-function readDownloadProgress(info: unknown): AutoUpdateDownloadProgress | undefined {
-  if (!info || typeof info !== 'object') {
-    return undefined;
-  }
-
+function readDownloadProgress(info: ProgressInfo): AutoUpdateDownloadProgress | undefined {
   const downloadProgress = removeUndefinedFields({
-    bytesPerSecond: readFiniteNumberField(info, 'bytesPerSecond'),
-    percent: readFiniteNumberField(info, 'percent'),
-    totalBytes: readFiniteNumberField(info, 'total'),
-    transferredBytes: readFiniteNumberField(info, 'transferred'),
+    bytesPerSecond: readFiniteNumber(info.bytesPerSecond),
+    percent: readFiniteNumber(info.percent),
+    totalBytes: readFiniteNumber(info.total),
+    transferredBytes: readFiniteNumber(info.transferred),
   });
 
   return Object.keys(downloadProgress).length > 0 ? downloadProgress : undefined;
 }
 
-function readFiniteNumberField(source: object, field: string): number | undefined {
-  const value = (source as Record<string, unknown>)[field];
+function readFiniteNumber(value: number): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 

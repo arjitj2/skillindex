@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -72,6 +72,29 @@ describe('addSubagent', () => {
     const canonicalPath = path.join(paths.sandboxRoot, '.agents', 'agents', 'codex-reviewer.md');
     await expect(readFile(canonicalPath, 'utf8')).resolves.toContain('Use Codex-specific review guidance.');
     expect(snapshot.subagents?.some((subagent) => subagent.name === 'codex-reviewer')).toBe(true);
+  });
+
+  it('fails instead of treating an uninspectable install path as available', async () => {
+    const paths = await createSandboxPaths();
+    const canonicalSubagentsDir = path.join(path.dirname(paths.sandboxCanonicalUserSkillsDir), 'agents');
+    await mkdir(canonicalSubagentsDir, { recursive: true });
+    await chmod(canonicalSubagentsDir, 0o600);
+
+    try {
+      await expect(addSubagent({
+        sourceType: 'fields',
+        name: 'blocked-reviewer',
+        description: 'Reviews blocked paths.',
+        prompt: 'Review blocked paths.',
+      }, {
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        paths,
+        homeDir: path.dirname(paths.dataDir),
+      })).rejects.toThrow(`Failed to inspect subagent install path ${path.join(canonicalSubagentsDir, 'blocked-reviewer.md')}`);
+    } finally {
+      await chmod(canonicalSubagentsDir, 0o700);
+    }
   });
 });
 

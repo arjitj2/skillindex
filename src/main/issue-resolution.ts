@@ -20,7 +20,14 @@ import type {
   SubagentLocationRecord,
   SubagentRecord,
 } from '@shared/contracts';
-import { MCP_AGENT_LOCAL_KEY, buildPortableMcpDefinition, isMcpDefinitionObject, isMcpServerDefinitions, splitMcpDefinitionForComparison } from '@shared/mcp-definition';
+import {
+  MCP_AGENT_LOCAL_KEY,
+  buildPortableMcpDefinition,
+  getMcpDefinitionArgs,
+  isMcpDefinitionObject,
+  isMcpServerDefinitions,
+  splitMcpDefinitionForComparison,
+} from '@shared/mcp-definition';
 import {
   ensureSkillIndexLayout,
   resolveSkillIndexPaths,
@@ -263,11 +270,7 @@ function canBuildWritableMcpMutationTarget(
   agentId: string,
   configPath: string | undefined,
 ): boolean {
-  try {
-    return buildWritableMcpMutationTarget(snapshot, agentId, configPath) !== null;
-  } catch {
-    return false;
-  }
+  return buildWritableMcpMutationTarget(snapshot, agentId, configPath) !== null;
 }
 
 function getMcpResolutionComparisonKey(location: McpLocationRecord): string {
@@ -2040,7 +2043,7 @@ function toOpenCodeMcpDefinition(definition: McpDefinitionValue): McpDefinitionO
   };
   const command = getMcpCommand(normalizedDefinition);
   if (command) {
-    localDefinition.command = [command, ...getMcpArgs(normalizedDefinition)];
+    localDefinition.command = [command, ...getMcpDefinitionArgs(normalizedDefinition)];
   }
   const environment = isMcpDefinitionObject(normalizedDefinition.environment)
     ? normalizedDefinition.environment
@@ -2129,16 +2132,6 @@ function getMcpCommand(definition: McpDefinitionObject): string | undefined {
   }
 
   return getNonEmptyString(command);
-}
-
-function getMcpArgs(definition: McpDefinitionObject): string[] {
-  if (Array.isArray(definition.command)) {
-    return definition.command.slice(1).filter((value): value is string => typeof value === 'string');
-  }
-
-  return Array.isArray(definition.args)
-    ? definition.args.filter((value): value is string => typeof value === 'string')
-    : [];
 }
 
 function getNonEmptyString(value: McpDefinitionValue | undefined): string | undefined {

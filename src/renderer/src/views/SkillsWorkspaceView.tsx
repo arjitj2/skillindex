@@ -35,6 +35,7 @@ import {
   RescanToolbarButton,
   WorkspaceFilterBar,
 } from '../components/ui';
+import { scrollSelectedInventoryRowIntoView, useCloseOnEscape } from '../lib/inventory-workspace-dom';
 
 export function SkillsWorkspaceView({
   autoResolvableRequests = [],
@@ -399,14 +400,6 @@ function SkillDetailPanel({
   );
 }
 
-function scrollSelectedInventoryRowIntoView(ariaLabel: string) {
-  window.requestAnimationFrame(() => {
-    const list = document.querySelector<HTMLElement>(`[aria-label="${ariaLabel}"]`);
-    const selectedRow = list?.querySelector<HTMLElement>('.master-list-row--selected');
-    selectedRow?.scrollIntoView?.({ block: 'nearest' });
-  });
-}
-
 function hasPluginSkillLocation(skill: SkillRecord, sourceIndex: Map<string, SkillScanSource>): boolean {
   return skill.locations.some((location) =>
     location.provenance?.kind === 'plugin' || sourceIndex.get(location.sourceId)?.kind === 'plugin');
@@ -427,19 +420,7 @@ export function AddSkillModal({
   const [markdown, setMarkdown] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isSubmitting) {
-        event.preventDefault();
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isSubmitting, onClose]);
+  useCloseOnEscape({ disabled: isSubmitting, onClose });
 
   useEffect(() => {
     setSubmitError(null);

@@ -641,7 +641,7 @@ describe('inventory runtime', () => {
       },
     });
     const connectivityDeferred = createDeferred<McpConnectivityRecord>();
-    let connectivityProbeStarted = false;
+    const connectivityProbeStarted = createDeferred<void>();
 
     const runtime = createInventoryRuntime();
     runtimes.push(runtime);
@@ -663,14 +663,12 @@ describe('inventory runtime', () => {
       includeLiveSources: false,
       mcpConnectivityConcurrency: 1,
       verifyMcpConnectivity: async () => {
-        connectivityProbeStarted = true;
+        connectivityProbeStarted.resolve();
         return connectivityDeferred.promise;
       },
     });
 
-    await waitFor(() => {
-      expect(connectivityProbeStarted).toBe(true);
-    });
+    await connectivityProbeStarted.promise;
 
     const dismissPromise = runtime.dismissDrift({
       skillName: 'identical-drift-skill',
@@ -710,7 +708,7 @@ describe('inventory runtime', () => {
       },
     });
     const connectivityDeferred = createDeferred<McpConnectivityRecord>();
-    let connectivityProbeStarted = false;
+    const connectivityProbeStarted = createDeferred<void>();
 
     const runtime = createInventoryRuntime();
     runtimes.push(runtime);
@@ -733,14 +731,12 @@ describe('inventory runtime', () => {
       includeLiveSources: false,
       mcpConnectivityConcurrency: 1,
       verifyMcpConnectivity: async () => {
-        connectivityProbeStarted = true;
+        connectivityProbeStarted.resolve();
         return connectivityDeferred.promise;
       },
     });
 
-    await waitFor(() => {
-      expect(connectivityProbeStarted).toBe(true);
-    });
+    await connectivityProbeStarted.promise;
 
     runtime.cancelMcpConnectivityTest();
 

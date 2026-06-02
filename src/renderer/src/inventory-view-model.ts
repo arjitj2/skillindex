@@ -205,16 +205,6 @@ export function filterSkillRows(rows: SkillRecord[], query: string): SkillRecord
   return rows.filter((row) => matchesSearchFields(normalizedQuery, [getSkillDisplayName(row), row.name, row.description]));
 }
 
-export function filterNamedRows<T extends { name: string }>(rows: T[], query: string): T[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-
-  if (!normalizedQuery) {
-    return rows;
-  }
-
-  return rows.filter((row) => row.name.toLocaleLowerCase().includes(normalizedQuery));
-}
-
 export function filterMcpRows(rows: McpRecord[], query: string): McpRecord[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
 

@@ -4,7 +4,16 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { IPC_CHANNELS } from '@shared/contracts';
+import {
+  IPC_CHANNELS,
+  type AuditOperation,
+  type CompleteOnboardingRequest,
+  type RescanInventoryRequest,
+  type SeedRepresentativeFixturesResult,
+  type SettingsState,
+  type SkillInventorySnapshot,
+  type UndoAuditOperationResult,
+} from '@shared/contracts';
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import { getInventoryMode, setInventoryMode } from '@main/inventory-mode-session';
 import { completeOnboarding, setDevSidebarInventorySourceSwitcherVisible } from '@main/settings-state';
@@ -159,7 +168,7 @@ describe('registerIpcHandlers', () => {
 
       const seedHandler = electronMocks.ipcHandle.mock.calls.find(
         ([channel]) => channel === IPC_CHANNELS.seedRepresentativeFixtures,
-      )?.[1] as (() => Promise<unknown>) | undefined;
+      )?.[1] as (() => Promise<SeedRepresentativeFixturesResult>) | undefined;
 
       expect(seedHandler).toBeTypeOf('function');
 
@@ -255,7 +264,7 @@ describe('registerIpcHandlers', () => {
 
     const completeOnboardingHandler = electronMocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === IPC_CHANNELS.completeOnboarding,
-    )?.[1] as ((_event: never, request?: { completedAt?: string; preferredCanonicalSourcePath?: string | null }) => Promise<unknown>) | undefined;
+    )?.[1] as ((_event: never, request?: CompleteOnboardingRequest) => Promise<SettingsState>) | undefined;
 
     expect(completeOnboardingHandler).toBeTypeOf('function');
 
@@ -300,10 +309,10 @@ describe('registerIpcHandlers', () => {
 
     const readAuditHandler = electronMocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === IPC_CHANNELS.readAuditLog,
-    )?.[1] as ((_event: never, options?: { limit?: number }) => Promise<unknown>) | undefined;
+    )?.[1] as ((_event: never, options?: { limit?: number }) => Promise<AuditOperation[]>) | undefined;
     const undoAuditHandler = electronMocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === IPC_CHANNELS.undoAuditOperation,
-    )?.[1] as ((_event: never, operationId: string) => Promise<unknown>) | undefined;
+    )?.[1] as ((_event: never, operationId: string) => Promise<UndoAuditOperationResult>) | undefined;
 
     expect(readAuditHandler).toBeTypeOf('function');
     expect(undoAuditHandler).toBeTypeOf('function');
@@ -349,7 +358,7 @@ describe('registerIpcHandlers', () => {
 
       const setSwitcherHandler = electronMocks.ipcHandle.mock.calls.find(
         ([channel]) => channel === IPC_CHANNELS.setDevSidebarInventorySourceSwitcherVisible,
-      )?.[1] as ((_event: never, visible: boolean) => Promise<unknown>) | undefined;
+      )?.[1] as ((_event: never, visible: boolean) => Promise<SettingsState>) | undefined;
 
       expect(setSwitcherHandler).toBeTypeOf('function');
 
@@ -399,7 +408,7 @@ describe('registerIpcHandlers', () => {
 
     const rescanHandler = electronMocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === IPC_CHANNELS.rescanInventory,
-    )?.[1] as ((event: never, request?: { verifyMcpConnectivity?: boolean }) => Promise<unknown>) | undefined;
+    )?.[1] as ((event: never, request?: RescanInventoryRequest) => Promise<SkillInventorySnapshot>) | undefined;
 
     expect(rescanHandler).toBeTypeOf('function');
 
@@ -422,7 +431,7 @@ describe('registerIpcHandlers', () => {
 
     const testConnectivityHandler = electronMocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === IPC_CHANNELS.testMcpConnectivity,
-    )?.[1] as (() => Promise<unknown>) | undefined;
+    )?.[1] as (() => Promise<SkillInventorySnapshot>) | undefined;
 
     expect(testConnectivityHandler).toBeTypeOf('function');
 
@@ -435,7 +444,7 @@ describe('registerIpcHandlers', () => {
     expect(inventoryRuntime.testMcpConnectivity).toHaveBeenCalledWith(expect.objectContaining({}));
   });
 
-  it('registers a standalone MCP connectivity cancellation handler', async () => {
+  it('registers a standalone MCP connectivity cancellation handler', () => {
     electronMocks.ipcHandle.mockClear();
     inventoryRuntime.cancelMcpConnectivityTest.mockClear();
 
@@ -443,7 +452,7 @@ describe('registerIpcHandlers', () => {
 
     const cancelConnectivityHandler = electronMocks.ipcHandle.mock.calls.find(
       ([channel]) => channel === IPC_CHANNELS.cancelMcpConnectivityTest,
-    )?.[1] as (() => Promise<unknown>) | undefined;
+    )?.[1] as (() => void) | undefined;
 
     expect(cancelConnectivityHandler).toBeTypeOf('function');
 
@@ -451,7 +460,7 @@ describe('registerIpcHandlers', () => {
       throw new Error('Expected the MCP connectivity cancellation IPC handler to be registered.');
     }
 
-    await cancelConnectivityHandler();
+    cancelConnectivityHandler();
 
     expect(inventoryRuntime.cancelMcpConnectivityTest).toHaveBeenCalledTimes(1);
   });

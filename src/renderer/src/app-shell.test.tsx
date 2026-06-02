@@ -20,7 +20,10 @@ import {
   buildSkillInspectorModel,
 } from './lib/detail-inspector-model';
 import { getHomeSummary } from './inventory-view-model';
-import { representativeInventorySnapshot } from './representative-preview-data';
+import {
+  representativeInventorySnapshot,
+  type SnapshotWithoutDetailDiagnostics,
+} from './representative-preview-data';
 import {
   AGENT_CATALOG,
   deriveAgentDefaultHomeDir,
@@ -4470,11 +4473,6 @@ function createRepresentativeWrongSymlinkTargetSkillSnapshot(): SkillInventorySn
 
   return snapshot;
 }
-
-type SkillRecordWithoutDetailDiagnostics = Omit<SkillInventorySnapshot['skills'][number], 'detailDiagnostics'>;
-type SnapshotWithoutDetailDiagnostics = Omit<SkillInventorySnapshot, 'skills'> & {
-  skills: SkillRecordWithoutDetailDiagnostics[];
-};
 
 const REPRESENTATIVE_SKILL_DESCRIPTIONS: Record<string, string> = {
   'diagnostic-rich-skill': 'Canonical detail candidate.',

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildPortableMcpDefinition, normalizeMcpDefinitionForComparison, splitMcpDefinitionForComparison } from './mcp-definition';
+import {
+  buildPortableMcpDefinition,
+  getMcpDefinitionArgs,
+  normalizeMcpDefinitionForComparison,
+  splitMcpDefinitionForComparison,
+} from './mcp-definition';
 
 describe('MCP definition normalization', () => {
   it('compares stdio definitions by launch and environment fields only', () => {
@@ -92,6 +97,24 @@ describe('MCP definition normalization', () => {
         'X-Api-Key': 'secret',
       },
     });
+  });
+
+  it('extracts portable stdio args from command arrays, args fields, and connection hints', () => {
+    expect(getMcpDefinitionArgs({
+      command: ['node', 'server.js', 42, '--verbose'],
+      args: ['ignored.js'],
+    })).toEqual(['server.js', '--verbose']);
+
+    expect(getMcpDefinitionArgs({
+      command: 'node',
+      args: ['server.js', 42, '--verbose'],
+    })).toEqual(['server.js', '--verbose']);
+
+    expect(getMcpDefinitionArgs({}, {
+      transport: 'stdio',
+      command: 'node',
+      args: ['hinted.js'],
+    })).toEqual(['hinted.js']);
   });
 
   it('splits portable core from agent-specific native fields', () => {
