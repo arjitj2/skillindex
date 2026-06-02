@@ -606,6 +606,7 @@ export function DetailInspectorPanel({
                   action.variant === 'strong' ? 'detail-inspector-panel__footer-action-group--primary' : '',
                   action.variant === 'subtle' ? 'detail-inspector-panel__footer-action-group--secondary' : '',
                   action.variant === 'danger' ? 'detail-inspector-panel__footer-action-group--danger' : '',
+                  action.variant === 'danger' ? 'detail-inspector-panel__footer-action-group--end' : '',
                 ].filter(Boolean).join(' ')}
                 key={action.label}
               >
