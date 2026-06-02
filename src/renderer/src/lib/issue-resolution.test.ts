@@ -685,6 +685,68 @@ describe('issue resolution request builder', () => {
     });
   });
 
+  it('explains symlink repairs that are disabled until a Universal version is chosen', () => {
+    const skill: SkillRecord = {
+      name: 'needs-universal-before-link-repair',
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['missing-canonical', 'wrong-symlink-target'],
+      locations: [
+        {
+          path: '~/.skillindex/sandbox/.claude/skills/needs-universal-before-link-repair.md',
+          sourceId: 'sandbox-claude',
+          sourceLabel: 'Sandbox Claude',
+          sourceScope: 'sandbox',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-04T12:15:00.000Z',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.claude/skills/needs-universal-before-link-repair.md',
+          contentHash: 'claude-copy',
+          definitionText: 'claude body',
+        },
+        {
+          path: '~/.skillindex/sandbox/.factory/skills/needs-universal-before-link-repair.md',
+          sourceId: 'sandbox-factory',
+          sourceLabel: 'Sandbox Factory',
+          sourceScope: 'sandbox',
+          fileType: 'real-file',
+          modifiedAt: '2026-01-04T12:15:01.000Z',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.factory/skills/needs-universal-before-link-repair.md',
+          contentHash: 'factory-copy',
+          definitionText: 'factory body',
+        },
+        {
+          path: '~/.skillindex/sandbox/.codex/skills/needs-universal-before-link-repair.md',
+          sourceId: 'sandbox-codex',
+          sourceLabel: 'Sandbox Codex',
+          sourceScope: 'sandbox',
+          fileType: 'symlink',
+          modifiedAt: '2026-01-04T12:15:02.000Z',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.agents/skills/other-skill.md',
+          symlinkTarget: '~/.skillindex/sandbox/.agents/skills/other-skill.md',
+        },
+      ],
+      detailDiagnostics: {
+        duplicateCandidates: [],
+        installSources: [],
+        missingInstallSources: [],
+        definitionIssues: [],
+      },
+    };
+    const model = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: 'wrong-symlink-target',
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    expect(getSkillResolveActionState(skill, model, sourceIndex)).toEqual({
+      disabledReason: 'Choose a Universal version first. Symlink repairs need a Universal target.',
+      request: null,
+    });
+  });
+
   it('allows repairing Universal links to a read-only plugin skill', () => {
     const skill: SkillRecord = {
       ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'plugin-readonly-skill')!,

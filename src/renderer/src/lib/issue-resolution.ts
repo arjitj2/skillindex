@@ -48,6 +48,7 @@ const SUBAGENT_RESOLVABLE_ISSUES = new Set([
   'broken-symlink',
   'wrong-symlink-target',
 ] as const);
+const SKILL_UNIVERSAL_TARGET_REQUIRED_REASON = 'Choose a Universal version first. Symlink repairs need a Universal target.';
 
 export function getSkillResolveActionState(
   skill: SkillRecord,
@@ -72,16 +73,17 @@ export function getSkillResolveActionState(
   }
 
   const selectedVariantPath = getSkillSelectedVariantPath(skill, inspectorModel?.selectedVariantPath ?? null, activeProblem.key);
+  const hasUniversalRealFile = hasCanonicalRealFile(skill);
   const requiresVariantSelection = activeProblem.key === 'diverged-copies'
     || activeProblem.key === 'missing-canonical'
     || ((activeProblem.key === 'missing-symlinks'
       || activeProblem.key === 'broken-symlink'
       || activeProblem.key === 'wrong-symlink-target')
-      && !hasCanonicalRealFile(skill));
+      && !hasUniversalRealFile);
 
   if (requiresVariantSelection && !selectedVariantPath) {
     return {
-      disabledReason: null,
+      disabledReason: getSkillMissingUniversalTargetReason(activeProblem.key, hasUniversalRealFile),
       request: null,
     };
   }
@@ -352,6 +354,21 @@ function hasSubagentLocalExtras(location: { localExtrasKeys?: string[] }): boole
 
 function hasCanonicalRealFile(skill: SkillRecord): boolean {
   return skill.locations.some((location) => location.canonical && location.fileType === 'real-file');
+}
+
+function getSkillMissingUniversalTargetReason(
+  issue: SkillIssueReason,
+  hasUniversalRealFile: boolean,
+): string | null {
+  if (hasUniversalRealFile) {
+    return null;
+  }
+
+  return issue === 'missing-symlinks'
+    || issue === 'broken-symlink'
+    || issue === 'wrong-symlink-target'
+    ? SKILL_UNIVERSAL_TARGET_REQUIRED_REASON
+    : null;
 }
 
 function getReadOnlyNonPluginSource(

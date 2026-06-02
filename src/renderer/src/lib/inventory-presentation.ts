@@ -327,15 +327,15 @@ function compareSkillIssueReasons(left: SkillIssueReason, right: SkillIssueReaso
 
 function getSkillIssueRank(reason: SkillIssueReason): number {
   switch (reason) {
-    case 'diverged-copies':
-      return 0;
-    case 'wrong-symlink-target':
-      return 1;
-    case 'broken-symlink':
-      return 2;
-    case 'identical-copies':
-      return 3;
     case 'missing-canonical':
+      return 0;
+    case 'diverged-copies':
+      return 1;
+    case 'wrong-symlink-target':
+      return 2;
+    case 'broken-symlink':
+      return 3;
+    case 'identical-copies':
       return 4;
     case 'missing-symlinks':
       return 5;

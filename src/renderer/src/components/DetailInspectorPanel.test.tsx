@@ -515,7 +515,7 @@ describe('DetailInspectorPanel', () => {
     );
 
     expect(screen.getByText('Matching Copies')).toBeInTheDocument();
-    expect(screen.getByText('This will replace 1 writable copy with a symlink to the Universal version.')).toBeInTheDocument();
+    expect(screen.queryByText('This will replace 1 writable copy with a symlink to the Universal version.')).not.toBeInTheDocument();
     const list = screen.getByRole('list', { name: 'Matching Copies' });
     expect(within(list).getByText('Factory')).toBeInTheDocument();
     expect(within(list).getByTitle(packagePath('~/.skillindex/sandbox/.factory/skills/identical-drift-skill.md'))).toBeInTheDocument();
@@ -892,6 +892,37 @@ describe('DetailInspectorPanel', () => {
     const action = screen.getByRole('button', { name: /^Add MCP to Agents$/i });
     expect(action).toBeDisabled();
     expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(action).toHaveAccessibleDescription(reason);
+  });
+
+  it('uses the summary slot only for disabled primary action reasons', () => {
+    const skill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'identical-drift-skill');
+    expect(skill).toBeDefined();
+
+    const model = buildSkillInspectorModel(skill!, sourceIndex, {
+      selectedProblemKey: 'identical-copies',
+      selectedVariantPath: null,
+    }, agentIndex);
+    const reason = 'Choose a Universal version first. Symlink repairs need a Universal target.';
+
+    render(
+      <DetailInspectorPanel
+        footerActions={[{
+          disabled: true,
+          label: 'Convert Copies to Symlinks',
+          title: reason,
+          variant: 'strong',
+        }]}
+        model={model}
+        onClose={() => undefined}
+      />,
+    );
+
+    const action = screen.getByRole('button', { name: /^Convert Copies to Symlinks$/i });
+    const summary = document.querySelector('.detail-inspector-panel__action-summary');
+
+    expect(summary).toHaveTextContent(reason);
+    expect(screen.queryByText('This will replace 1 writable copy with a symlink to the Universal version.')).not.toBeInTheDocument();
     expect(action).toHaveAccessibleDescription(reason);
   });
 
