@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { cp, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -84,12 +85,13 @@ async function persistSkillUniversalDecision(
 ): Promise<void> {
   const skill = findSkill(snapshot, request.skillName);
   const selectedLocation = selectRepresentativeLocation(skill, request.selectedVariantPath);
-  if (selectedLocation.fileType !== 'real-file') {
-    throw new Error('Choose a real-file skill version before making it Universal.');
+  if (!isSelectableUniversalVersion(selectedLocation)) {
+    throw new Error('Choose a readable skill version before making it Universal.');
   }
 
   const capabilityName = getCapabilityName(skill, selectedLocation);
   const acceptedAlternates = findUniversalDecisionAlternates(snapshot, skill, selectedLocation, capabilityName);
+  await materializeSelectedSymlinkUniversal(selectedLocation, snapshot);
   const decision: SkillUniversalDecision = {
     id: createSkillUniversalDecisionId(skill.name, selectedLocation),
     skillName: skill.name,
@@ -116,6 +118,45 @@ async function persistSkillUniversalDecision(
   });
 }
 
+function isSelectableUniversalVersion(location: SkillLocationRecord): boolean {
+  return location.fileType === 'real-file'
+    || (location.fileType === 'symlink' && Boolean(location.resolvedPath));
+}
+
+async function materializeSelectedSymlinkUniversal(
+  selectedLocation: SkillLocationRecord,
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  if (selectedLocation.fileType !== 'symlink') {
+    return;
+  }
+
+  if (!selectedLocation.resolvedPath) {
+    throw new Error('Choose a readable skill version before making it Universal.');
+  }
+
+  assertWritableUniversalMaterializationTarget(selectedLocation, snapshot);
+  await mkdir(path.dirname(selectedLocation.path), { recursive: true });
+  await rm(selectedLocation.path, { recursive: true, force: true });
+  await cp(selectedLocation.resolvedPath, selectedLocation.path, {
+    recursive: true,
+    dereference: true,
+    force: true,
+  });
+}
+
+function assertWritableUniversalMaterializationTarget(
+  selectedLocation: SkillLocationRecord,
+  snapshot: SkillInventorySnapshot,
+): void {
+  const selectedSource = snapshot.sources.find((source) => source.id === selectedLocation.sourceId);
+  if (selectedSource?.writable && selectedSource.kind !== 'plugin') {
+    return;
+  }
+
+  throw new Error('Make Universal can only replace symlinks in writable skill locations.');
+}
+
 function findUniversalDecisionAlternates(
   snapshot: SkillInventorySnapshot,
   selectedSkill: SkillRecord,
@@ -123,10 +164,11 @@ function findUniversalDecisionAlternates(
   capabilityName: string,
 ): SkillUniversalAlternate[] {
   const selectedPath = normalizePath(selectedLocation.path);
+  const selectedCapabilityNames = getSelectedCapabilityNames(selectedSkill, selectedLocation, capabilityName);
   const equivalentLocations = snapshot.skills
     .filter((skill) =>
       skill.name === selectedSkill.name
-      || getCapabilityName(skill, selectRepresentativeLocation(skill)) === capabilityName)
+      || isPotentialSplitPluginAlternate(skill, selectedCapabilityNames))
     .flatMap((skill) => skill.locations)
     .filter((location) =>
       location.fileType === 'real-file'
@@ -147,6 +189,56 @@ function findUniversalDecisionAlternates(
       seen.add(key);
       return true;
     });
+}
+
+function getSelectedCapabilityNames(
+  skill: SkillRecord,
+  selectedLocation: SkillLocationRecord,
+  capabilityName: string,
+): Set<string> {
+  return new Set([
+    capabilityName,
+    skill.displayName ?? undefined,
+    getUnqualifiedSkillName(skill.name),
+    path.basename(selectedLocation.path),
+    selectedLocation.resolvedPath ? path.basename(selectedLocation.resolvedPath) : undefined,
+  ].filter(isNonEmptyString));
+}
+
+function isPotentialSplitPluginAlternate(
+  skill: SkillRecord,
+  selectedCapabilityNames: Set<string>,
+): boolean {
+  const candidateNames = getPluginCapabilityCandidateNames(skill);
+  return candidateNames.some((name) => selectedCapabilityNames.has(name));
+}
+
+function getPluginCapabilityCandidateNames(skill: SkillRecord): string[] {
+  const pluginLocations = skill.locations.filter((location) =>
+    location.fileType === 'real-file'
+    && location.provenance?.kind === 'plugin');
+
+  if (pluginLocations.length === 0) {
+    return [];
+  }
+
+  return [
+    skill.displayName ?? undefined,
+    getUnqualifiedSkillName(skill.name),
+    ...pluginLocations.flatMap((location) => [
+      getCapabilityName(skill, location),
+      path.basename(location.path),
+      location.resolvedPath ? path.basename(location.resolvedPath) : undefined,
+    ]),
+  ].filter(isNonEmptyString);
+}
+
+function getUnqualifiedSkillName(skillName: string): string {
+  return skillName.split(':').pop() ?? skillName;
+}
+
+function isNonEmptyString(value: string | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function buildSkillUniversalOrigin(location: SkillLocationRecord): SkillUniversalOrigin {
