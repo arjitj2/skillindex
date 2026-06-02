@@ -117,11 +117,11 @@ export function resolveSandboxSkillIndexPaths(options: ResolveSkillIndexPathOpti
   return usesSandboxSkillIndexStatePaths(paths) ? paths : withSandboxSkillIndexState(paths);
 }
 
-export function usesSandboxSkillIndexState(options: Pick<ResolveSkillIndexScanPathOptions, 'includeSandboxSources' | 'includeLiveSources'>): boolean {
+function usesSandboxSkillIndexState(options: Pick<ResolveSkillIndexScanPathOptions, 'includeSandboxSources' | 'includeLiveSources'>): boolean {
   return options.includeSandboxSources === true && options.includeLiveSources === false;
 }
 
-export function usesSandboxSkillIndexStatePaths(paths: SkillIndexPaths): boolean {
+function usesSandboxSkillIndexStatePaths(paths: SkillIndexPaths): boolean {
   return path.basename(paths.dataDir) === 'sandbox-state'
     && paths.auditLogFile === path.join(paths.dataDir, 'audit-log.jsonl')
     && paths.cacheFile === path.join(paths.dataDir, 'cache.json')
@@ -250,12 +250,12 @@ export function normalizeCustomScanPath(scanPath: string, options: ResolveSkillI
 }
 
 function normalizeConfiguredCustomScanPaths(
-  scanPaths: string[],
+  scanPaths: readonly unknown[],
   options: ResolveSkillIndexPathOptions,
 ): string[] {
   return [...new Set(
     scanPaths
-      .filter((scanPath) => typeof scanPath === 'string' && scanPath.trim().length > 0)
+      .filter((scanPath): scanPath is string => typeof scanPath === 'string' && scanPath.trim().length > 0)
       .map((scanPath) => normalizeCustomScanPath(scanPath, options)),
   )];
 }
@@ -290,26 +290,27 @@ function isString(value: unknown): value is string {
 }
 
 function parseSkillIndexConfig(raw: string, options: ResolveSkillIndexPathOptions): SkillIndexConfig {
-  const parsed = JSON.parse(raw) as Partial<SkillIndexConfig>;
+  const parsed = JSON.parse(raw) as unknown;
+  const config = isRecord(parsed) ? parsed : {};
 
   return {
-    customScanPaths: Array.isArray(parsed.customScanPaths)
-      ? normalizeConfiguredCustomScanPaths(parsed.customScanPaths, options)
+    customScanPaths: Array.isArray(config.customScanPaths)
+      ? normalizeConfiguredCustomScanPaths(config.customScanPaths, options)
       : [],
-    preferredCanonicalSourcePath: normalizeConfiguredOptionalPath(parsed.preferredCanonicalSourcePath, options),
-    showDevSidebarInventorySourceSwitcher: parsed.showDevSidebarInventorySourceSwitcher !== false,
-    onboardingCompletedAt: normalizeConfiguredOptionalTimestamp(parsed.onboardingCompletedAt),
-    dismissedDriftSignatures: Array.isArray(parsed.dismissedDriftSignatures)
-      ? parsed.dismissedDriftSignatures.filter(isString)
+    preferredCanonicalSourcePath: normalizeConfiguredOptionalPath(config.preferredCanonicalSourcePath, options),
+    showDevSidebarInventorySourceSwitcher: config.showDevSidebarInventorySourceSwitcher !== false,
+    onboardingCompletedAt: normalizeConfiguredOptionalTimestamp(config.onboardingCompletedAt),
+    dismissedDriftSignatures: Array.isArray(config.dismissedDriftSignatures)
+      ? config.dismissedDriftSignatures.filter(isString)
       : [],
-    dismissedMcpSignatures: Array.isArray(parsed.dismissedMcpSignatures)
-      ? parsed.dismissedMcpSignatures.filter(isString)
+    dismissedMcpSignatures: Array.isArray(config.dismissedMcpSignatures)
+      ? config.dismissedMcpSignatures.filter(isString)
       : [],
-    dismissedSubagentSignatures: Array.isArray(parsed.dismissedSubagentSignatures)
-      ? parsed.dismissedSubagentSignatures.filter(isString)
+    dismissedSubagentSignatures: Array.isArray(config.dismissedSubagentSignatures)
+      ? config.dismissedSubagentSignatures.filter(isString)
       : [],
-    skillUniversalDecisions: Array.isArray(parsed.skillUniversalDecisions)
-      ? parsed.skillUniversalDecisions.filter(isSkillUniversalDecision)
+    skillUniversalDecisions: Array.isArray(config.skillUniversalDecisions)
+      ? config.skillUniversalDecisions.filter(isSkillUniversalDecision)
       : [],
   };
 }

@@ -534,9 +534,22 @@ interface NpxSkillLockEntry {
   lockFilePath: string;
 }
 
+interface NpxSkillLockFile {
+  entries: Array<[string, NpxSkillLockRawEntry]>;
+}
+
+interface NpxSkillLockRawEntry {
+  pluginName?: unknown;
+  source?: unknown;
+  sourceType?: unknown;
+  sourceUrl?: unknown;
+  skillPath?: unknown;
+}
+
 const NPX_SKILL_LOCK_PARSE_FAILED = Symbol('npx-skill-lock-parse-failed');
 
-type NpxSkillLockCache = Map<string, unknown>;
+type NpxSkillLockCacheEntry = NpxSkillLockFile | typeof NPX_SKILL_LOCK_PARSE_FAILED;
+type NpxSkillLockCache = Map<string, NpxSkillLockCacheEntry>;
 
 function findNpxSkillLockEntry(
   rootPath: string,
@@ -576,7 +589,7 @@ function readNpxSkillLockEntry(
     return null;
   }
 
-  const entry = getSkillLockEntries(parsed).find(([lockedSkillName, candidate]) =>
+  const entry = parsed.entries.find(([lockedSkillName, candidate]) =>
     lockedSkillName === skillDirName || getLockEntrySkillDirName(candidate) === skillDirName)?.[1];
   if (!entry) {
     return null;
@@ -601,13 +614,13 @@ function readNpxSkillLockEntry(
   };
 }
 
-function readNpxSkillLockFile(lockFilePath: string, npxLockCache: NpxSkillLockCache): unknown {
+function readNpxSkillLockFile(lockFilePath: string, npxLockCache: NpxSkillLockCache): NpxSkillLockCacheEntry {
   if (npxLockCache.has(lockFilePath)) {
-    return npxLockCache.get(lockFilePath);
+    return npxLockCache.get(lockFilePath) ?? NPX_SKILL_LOCK_PARSE_FAILED;
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(lockFilePath, 'utf8')) as unknown;
+    const parsed = parseNpxSkillLockFile(JSON.parse(readFileSync(lockFilePath, 'utf8')) as unknown);
     npxLockCache.set(lockFilePath, parsed);
     return parsed;
   } catch {
@@ -616,22 +629,32 @@ function readNpxSkillLockFile(lockFilePath: string, npxLockCache: NpxSkillLockCa
   }
 }
 
-function getSkillLockEntries(parsed: unknown): Array<[string, Record<string, unknown>]> {
+function parseNpxSkillLockFile(parsed: unknown): NpxSkillLockFile {
+  return {
+    entries: getSkillLockEntries(parsed),
+  };
+}
+
+function getSkillLockEntries(parsed: unknown): Array<[string, NpxSkillLockRawEntry]> {
   if (!isRecord(parsed) || !isRecord(parsed.skills)) {
     return [];
   }
 
-  return Object.entries(parsed.skills).filter((entry): entry is [string, Record<string, unknown>] =>
-    isRecord(entry[1]));
+  return Object.entries(parsed.skills).filter((entry): entry is [string, NpxSkillLockRawEntry] =>
+    isNpxSkillLockRawEntry(entry[1]));
 }
 
-function getLockEntrySkillDirName(entry: Record<string, unknown>): string | null {
+function getLockEntrySkillDirName(entry: NpxSkillLockRawEntry): string | null {
   const skillPath = getOptionalString(entry.skillPath);
   if (!skillPath) {
     return null;
   }
 
   return path.basename(path.dirname(skillPath));
+}
+
+function isNpxSkillLockRawEntry(value: unknown): value is NpxSkillLockRawEntry {
+  return isRecord(value);
 }
 
 function getOptionalString(value: unknown): string | undefined {
@@ -714,7 +737,7 @@ export function countAgents(agents: AgentRecord[]): AgentInventoryCounts {
   );
 }
 
-export function emptyAgentInventoryCounts(): AgentInventoryCounts {
+function emptyAgentInventoryCounts(): AgentInventoryCounts {
   return {
     totalAgents: 0,
     installedAgents: 0,

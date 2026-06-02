@@ -22,7 +22,14 @@ import type {
   RemoteMcpTransportKind,
   SkillScanSource,
 } from '@shared/contracts';
-import { isMcpDefinitionObject, isMcpServerDefinitions, splitMcpDefinitionForComparison } from '@shared/mcp-definition';
+import {
+  getMcpDefinitionArgs,
+  getMcpDefinitionCommand,
+  getMcpDefinitionRemoteUrl,
+  isMcpDefinitionObject,
+  isMcpServerDefinitions,
+  splitMcpDefinitionForComparison,
+} from '@shared/mcp-definition';
 import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
 
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
@@ -766,7 +773,7 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
   const connection = resolveMcpConnection(normalizedDefinition);
   invalidDetails.push(...connection.invalidDetails);
 
-  const args = getMcpArgs(normalizedDefinition);
+  const args = getMcpDefinitionArgs(normalizedDefinition);
   const splitDefinition = splitMcpDefinitionForComparison(normalizedDefinition, connection);
   const coreComparisonKey = stableStringify(splitDefinition.core);
   const nativeComparisonKey = stableStringify(splitDefinition.native);
@@ -857,8 +864,8 @@ function getMcpDefinitionComparisonKey(location: McpLocationRecord): string {
 }
 
 function resolveMcpConnection(definition: McpDefinitionObject): ResolvedMcpConnection {
-  const command = getMcpCommand(definition);
-  const url = getMcpRemoteUrl(definition);
+  const command = getMcpDefinitionCommand(definition);
+  const url = getMcpDefinitionRemoteUrl(definition);
   const explicitTransport = getExplicitMcpTransport(definition);
   const inferredTransport = explicitTransport.transport ?? inferMcpTransport({
     command,
@@ -889,29 +896,6 @@ function resolveMcpConnection(definition: McpDefinitionObject): ResolvedMcpConne
 
 function getNonEmptyString(value: McpDefinitionValue | undefined): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-}
-
-function getMcpRemoteUrl(definition: McpDefinitionObject): string | undefined {
-  return getNonEmptyString(definition.httpUrl) ?? getNonEmptyString(definition.url);
-}
-
-function getMcpCommand(definition: McpDefinitionObject): string | undefined {
-  const command = definition.command;
-  if (Array.isArray(command)) {
-    return getNonEmptyString(command[0]);
-  }
-
-  return getNonEmptyString(command);
-}
-
-function getMcpArgs(definition: McpDefinitionObject): string[] {
-  if (Array.isArray(definition.command)) {
-    return definition.command.slice(1).filter((value): value is string => typeof value === 'string');
-  }
-
-  return Array.isArray(definition.args)
-    ? definition.args.filter((value): value is string => typeof value === 'string')
-    : [];
 }
 
 function getExplicitMcpTransport(definition: McpDefinitionObject): NormalizedExplicitMcpTransport {

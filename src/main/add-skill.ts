@@ -17,7 +17,10 @@ import {
   type SkillsCliAddEnvironment,
 } from '@main/skills-cli-add-adapter';
 
+type InspectInstallPath = (targetPath: string) => Promise<unknown>;
+
 export interface AddSkillOptions extends ScanSkillInventoryOptions {
+  inspectInstallPath?: InspectInstallPath;
   paths?: SkillIndexPaths;
   runSkillsAdd?: (source: string, environment: SkillsCliAddEnvironment) => Promise<void>;
 }
@@ -45,6 +48,7 @@ export async function addSkill(
     await installPackagesFromDefinitions(
       [{ relativeDir: relativeSkillDir, sourceDir: null, skillMarkdown: normalizeSkillMarkdown(request.markdown) }],
       installTargets,
+      options.inspectInstallPath,
     );
   } else {
     const source = request.source.trim();
@@ -70,8 +74,9 @@ async function installPackagesFromDefinitions(
     skillMarkdown: string | null;
   }>,
   targets: InstallTargetContext,
+  inspectInstallPath: InspectInstallPath = inspectPath,
 ): Promise<void> {
-  await assertInstallPathsAreAvailable(packages, targets);
+  await assertInstallPathsAreAvailable(packages, targets, inspectInstallPath);
 
   for (const pkg of packages) {
     const canonicalPackageDir = path.join(targets.canonicalSkillsDir, pkg.relativeDir);
@@ -102,6 +107,7 @@ async function installPackagesFromDefinitions(
 async function assertInstallPathsAreAvailable(
   packages: Array<{ relativeDir: string }>,
   targets: InstallTargetContext,
+  inspectInstallPath: InspectInstallPath,
 ): Promise<void> {
   const plannedPaths = new Set<string>();
   for (const pkg of packages) {
@@ -112,7 +118,7 @@ async function assertInstallPathsAreAvailable(
   }
 
   for (const filePath of plannedPaths) {
-    if (await pathExists(filePath)) {
+    if (await pathExists(filePath, inspectInstallPath)) {
       throw new Error(`A skill already exists at ${filePath}. Remove or rename it before adding this skill.`);
     }
   }
@@ -189,11 +195,42 @@ function normalizeSkillMarkdown(markdown: string): string {
   return `${trimmed}\n`;
 }
 
-async function pathExists(targetPath: string): Promise<boolean> {
+async function pathExists(
+  targetPath: string,
+  inspectInstallPath: InspectInstallPath,
+): Promise<boolean> {
   try {
-    await lstat(targetPath);
+    await inspectInstallPath(targetPath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return false;
+    }
+
+    throw new Error(`Failed to inspect skill install path ${targetPath}: ${formatUnknownError(error)}`, { cause: error });
   }
+}
+
+async function inspectPath(targetPath: string): Promise<unknown> {
+  return lstat(targetPath);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return isErrnoException(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error;
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  return 'Unknown error';
 }

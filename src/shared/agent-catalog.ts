@@ -74,7 +74,7 @@ type AgentCatalogEntryInput = Omit<
   skillDirectoryMetadataSources?: readonly AgentMetadataSource[];
 };
 
-export function resolveAgentCatalogContext(context: AgentCatalogResolutionContext = {}): ResolvedAgentCatalogContext {
+function resolveAgentCatalogContext(context: AgentCatalogResolutionContext = {}): ResolvedAgentCatalogContext {
   return {
     cwd: context.cwd ?? process.cwd(),
     env: context.env ?? process.env,

@@ -120,6 +120,30 @@ describe('addSkill', () => {
     expect(calls).toEqual([{ source: 'https://github.com/example/live-repo', home: liveHome }]);
     await expect(readFile(path.join(liveHome, '.agents', 'skills', 'live-skill', 'SKILL.md'), 'utf8')).resolves.toContain('name: live-skill');
   });
+
+  it('fails instead of treating an uninspectable install path as available', async () => {
+    const paths = await createSandboxPaths();
+    const blockedSkillPath = path.join(paths.sandboxAgentsSkillsDir, 'blocked-skill');
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+
+    await expect(addSkill({
+      sourceType: 'markdown',
+      skillName: 'blocked-skill',
+      markdown: '# blocked-skill\n\nUse this skill.\n',
+    }, {
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      paths,
+      homeDir: path.dirname(paths.dataDir),
+      inspectInstallPath: async (targetPath) => {
+        if (targetPath === blockedSkillPath) {
+          throw permissionError;
+        }
+
+        return lstat(targetPath);
+      },
+    })).rejects.toThrow(`Failed to inspect skill install path ${blockedSkillPath}: permission denied`);
+  });
 });
 
 async function createSandboxPaths() {

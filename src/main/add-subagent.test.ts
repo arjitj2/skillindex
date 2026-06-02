@@ -73,6 +73,32 @@ describe('addSubagent', () => {
     await expect(readFile(canonicalPath, 'utf8')).resolves.toContain('Use Codex-specific review guidance.');
     expect(snapshot.subagents?.some((subagent) => subagent.name === 'codex-reviewer')).toBe(true);
   });
+
+  it('fails instead of treating an uninspectable install path as available', async () => {
+    const paths = await createSandboxPaths();
+    const canonicalSubagentsDir = path.join(path.dirname(paths.sandboxCanonicalUserSkillsDir), 'agents');
+    const blockedSubagentPath = path.join(canonicalSubagentsDir, 'blocked-reviewer.md');
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+
+    await expect(addSubagent({
+      sourceType: 'fields',
+      name: 'blocked-reviewer',
+      description: 'Reviews blocked paths.',
+      prompt: 'Review blocked paths.',
+    }, {
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      paths,
+      homeDir: path.dirname(paths.dataDir),
+      inspectInstallPath: async (targetPath) => {
+        if (targetPath === blockedSubagentPath) {
+          throw permissionError;
+        }
+
+        return lstat(targetPath);
+      },
+    })).rejects.toThrow(`Failed to inspect subagent install path ${blockedSubagentPath}: permission denied`);
+  });
 });
 
 async function createSandboxPaths() {

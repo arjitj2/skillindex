@@ -133,7 +133,7 @@ export function buildPluginSkillScanSources(plugins: PluginRecord[]): SkillScanS
     })));
 }
 
-export function createPluginSourceId(plugin: Pick<PluginRecord, 'host' | 'pluginId' | 'version' | 'scope'>): string {
+function createPluginSourceId(plugin: Pick<PluginRecord, 'host' | 'pluginId' | 'version' | 'scope'>): string {
   const scopePrefix = plugin.scope === 'sandbox' ? 'sandbox:' : '';
   return `plugin:${scopePrefix}${plugin.host}:${plugin.pluginId}:${plugin.version ?? 'unknown'}`;
 }
@@ -752,6 +752,7 @@ function isSubagentFileName(fileName: string): boolean {
 }
 
 async function readPluginSubagentName(agentPath: string): Promise<string> {
+  const fallbackName = path.basename(agentPath).replace(/(?:\.agent)?\.(?:md|toml|jsonc?|ya?ml)$/iu, '');
   try {
     const raw = await readFile(agentPath, 'utf8');
     const frontMatterName = readFrontMatterField(raw, 'name');
@@ -774,10 +775,10 @@ async function readPluginSubagentName(agentPath: string): Promise<string> {
       return parsedJson.name.trim();
     }
   } catch {
-    // Fall back to the filename below.
+    return fallbackName;
   }
 
-  return path.basename(agentPath).replace(/(?:\.agent)?\.(?:md|toml|jsonc?|ya?ml)$/iu, '');
+  return fallbackName;
 }
 
 function readFrontMatterField(raw: string, field: string): string | null {

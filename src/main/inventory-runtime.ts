@@ -270,7 +270,8 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
   };
 
   const refreshInventory = async (optionsOverride?: ScanSkillInventoryOptions): Promise<SkillInventorySnapshot> => {
-    // Connectivity probing is an explicit one-shot choice; keep source options sticky without making later watcher refreshes inherit probe cost.
+    // Connectivity probing is a one-shot option; watcher refreshes should keep
+    // source choices without inheriting probe cost.
     const verifyMcpConnectivity = optionsOverride?.verifyMcpConnectivity;
     lastScanOptions = resolvePersistentRefreshOptions(optionsOverride);
 

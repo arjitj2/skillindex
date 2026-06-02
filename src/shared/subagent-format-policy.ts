@@ -2,7 +2,7 @@ import type { AgentSubagentParserKind } from './contracts';
 
 export type SupportedSubagentDirectoryFormat = Exclude<AgentSubagentParserKind, 'none' | 'unknown'>;
 
-export const SUPPORTED_SUBAGENT_DIRECTORY_FORMATS = [
+const SUPPORTED_SUBAGENT_DIRECTORY_FORMATS = [
   'markdown-frontmatter',
   'codex-toml',
   'json',

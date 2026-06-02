@@ -4,7 +4,6 @@ import type {
   McpRecord,
   SkillDiffLine,
   SkillDriftPresentation,
-  SkillInventorySnapshot,
   SkillIssueReason,
   SkillRecord,
   SubagentIssueReason,
@@ -180,11 +179,6 @@ export function formatLastScanLabel(value: string | undefined): string {
 
   const hours = Math.round(minutes / 60);
   return `${hours}h ago`;
-}
-
-export function formatSidebarInventorySummary(snapshot: SkillInventorySnapshot): string {
-  const directoryCount = snapshot.sources.length;
-  return `${directoryCount} ${directoryCount === 1 ? 'directory' : 'directories'}`;
 }
 
 export function formatDiffLine(line: SkillDiffLine): string {

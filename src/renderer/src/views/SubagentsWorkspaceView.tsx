@@ -36,6 +36,7 @@ import {
   RescanToolbarButton,
   WorkspaceFilterBar,
 } from '../components/ui';
+import { scrollSelectedInventoryRowIntoView, useCloseOnEscape } from '../lib/inventory-workspace-dom';
 
 export function SubagentsWorkspaceView({
   addActionControl,
@@ -371,19 +372,7 @@ export function AddSubagentModal({
   const [markdown, setMarkdown] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isSubmitting) {
-        event.preventDefault();
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isSubmitting, onClose]);
+  useCloseOnEscape({ disabled: isSubmitting, onClose });
 
   useEffect(() => {
     setSubmitError(null);
@@ -492,12 +481,4 @@ function hasPluginSubagentLocation(subagent: SubagentRecord): boolean {
   return subagent.locations.some((location) =>
     location.agentId.startsWith('plugin:')
     || location.provenance?.kind === 'plugin');
-}
-
-function scrollSelectedInventoryRowIntoView(ariaLabel: string) {
-  window.requestAnimationFrame(() => {
-    const list = document.querySelector<HTMLElement>(`[aria-label="${ariaLabel}"]`);
-    const selectedRow = list?.querySelector<HTMLElement>('.master-list-row--selected');
-    selectedRow?.scrollIntoView?.({ block: 'nearest' });
-  });
 }

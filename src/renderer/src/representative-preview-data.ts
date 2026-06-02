@@ -1361,7 +1361,7 @@ function normalizeSkillEntrypointPath(
 }
 
 type SkillRecordWithoutDetailDiagnostics = Omit<SkillInventorySnapshot['skills'][number], 'detailDiagnostics'>;
-type SnapshotWithoutDetailDiagnostics = Omit<SkillInventorySnapshot, 'skills'> & {
+export type SnapshotWithoutDetailDiagnostics = Omit<SkillInventorySnapshot, 'skills'> & {
   skills: SkillRecordWithoutDetailDiagnostics[];
 };
 
