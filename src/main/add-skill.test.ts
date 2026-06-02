@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -123,23 +123,26 @@ describe('addSkill', () => {
 
   it('fails instead of treating an uninspectable install path as available', async () => {
     const paths = await createSandboxPaths();
-    await mkdir(paths.sandboxAgentsSkillsDir, { recursive: true });
-    await chmod(paths.sandboxAgentsSkillsDir, 0o600);
+    const blockedSkillPath = path.join(paths.sandboxAgentsSkillsDir, 'blocked-skill');
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
 
-    try {
-      await expect(addSkill({
-        sourceType: 'markdown',
-        skillName: 'blocked-skill',
-        markdown: '# blocked-skill\n\nUse this skill.\n',
-      }, {
-        includeSandboxSources: true,
-        includeLiveSources: false,
-        paths,
-        homeDir: path.dirname(paths.dataDir),
-      })).rejects.toThrow(`Failed to inspect skill install path ${path.join(paths.sandboxAgentsSkillsDir, 'blocked-skill')}`);
-    } finally {
-      await chmod(paths.sandboxAgentsSkillsDir, 0o700);
-    }
+    await expect(addSkill({
+      sourceType: 'markdown',
+      skillName: 'blocked-skill',
+      markdown: '# blocked-skill\n\nUse this skill.\n',
+    }, {
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      paths,
+      homeDir: path.dirname(paths.dataDir),
+      inspectInstallPath: async (targetPath) => {
+        if (targetPath === blockedSkillPath) {
+          throw permissionError;
+        }
+
+        return lstat(targetPath);
+      },
+    })).rejects.toThrow(`Failed to inspect skill install path ${blockedSkillPath}: permission denied`);
   });
 });
 

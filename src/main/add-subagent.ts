@@ -29,7 +29,10 @@ import {
   type PortableSubagentDefinition,
 } from '@main/subagent-inventory';
 
+type InspectInstallPath = (targetPath: string) => Promise<unknown>;
+
 export interface AddSubagentOptions extends ScanSkillInventoryOptions {
+  inspectInstallPath?: InspectInstallPath;
   paths?: SkillIndexPaths;
 }
 
@@ -64,7 +67,10 @@ export async function addSubagent(
   );
   const targetPaths = buildSubagentInstallTargets(definition, canonicalPath, installTargets);
 
-  await assertInstallPathsAreAvailable([canonicalPath, ...targetPaths.map((target) => target.path)]);
+  await assertInstallPathsAreAvailable(
+    [canonicalPath, ...targetPaths.map((target) => target.path)],
+    options.inspectInstallPath ?? inspectPath,
+  );
   await mkdir(path.dirname(canonicalPath), { recursive: true });
   await writeFile(canonicalPath, renderPortableSubagentDefinition(definition, 'markdown-frontmatter'), 'utf8');
 
@@ -241,18 +247,24 @@ function resolveInstallScope(options: ScanSkillInventoryOptions): 'sandbox' | 'l
   return includeSandboxSources ? 'sandbox' : 'live';
 }
 
-async function assertInstallPathsAreAvailable(filePaths: string[]): Promise<void> {
+async function assertInstallPathsAreAvailable(
+  filePaths: string[],
+  inspectInstallPath: InspectInstallPath,
+): Promise<void> {
   const plannedPaths = [...new Set(filePaths.map((filePath) => path.normalize(filePath)))];
   for (const filePath of plannedPaths) {
-    if (await pathExists(filePath)) {
+    if (await pathExists(filePath, inspectInstallPath)) {
       throw new Error(`A subagent already exists at ${filePath}. Remove or rename it before adding this subagent.`);
     }
   }
 }
 
-async function pathExists(targetPath: string): Promise<boolean> {
+async function pathExists(
+  targetPath: string,
+  inspectInstallPath: InspectInstallPath,
+): Promise<boolean> {
   try {
-    await lstat(targetPath);
+    await inspectInstallPath(targetPath);
     return true;
   } catch (error) {
     if (isMissingPathError(error)) {
@@ -261,6 +273,10 @@ async function pathExists(targetPath: string): Promise<boolean> {
 
     throw new Error(`Failed to inspect subagent install path ${targetPath}: ${formatUnknownError(error)}`, { cause: error });
   }
+}
+
+async function inspectPath(targetPath: string): Promise<unknown> {
+  return lstat(targetPath);
 }
 
 function isMissingPathError(error: unknown): boolean {

@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -77,24 +77,27 @@ describe('addSubagent', () => {
   it('fails instead of treating an uninspectable install path as available', async () => {
     const paths = await createSandboxPaths();
     const canonicalSubagentsDir = path.join(path.dirname(paths.sandboxCanonicalUserSkillsDir), 'agents');
-    await mkdir(canonicalSubagentsDir, { recursive: true });
-    await chmod(canonicalSubagentsDir, 0o600);
+    const blockedSubagentPath = path.join(canonicalSubagentsDir, 'blocked-reviewer.md');
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
 
-    try {
-      await expect(addSubagent({
-        sourceType: 'fields',
-        name: 'blocked-reviewer',
-        description: 'Reviews blocked paths.',
-        prompt: 'Review blocked paths.',
-      }, {
-        includeSandboxSources: true,
-        includeLiveSources: false,
-        paths,
-        homeDir: path.dirname(paths.dataDir),
-      })).rejects.toThrow(`Failed to inspect subagent install path ${path.join(canonicalSubagentsDir, 'blocked-reviewer.md')}`);
-    } finally {
-      await chmod(canonicalSubagentsDir, 0o700);
-    }
+    await expect(addSubagent({
+      sourceType: 'fields',
+      name: 'blocked-reviewer',
+      description: 'Reviews blocked paths.',
+      prompt: 'Review blocked paths.',
+    }, {
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      paths,
+      homeDir: path.dirname(paths.dataDir),
+      inspectInstallPath: async (targetPath) => {
+        if (targetPath === blockedSubagentPath) {
+          throw permissionError;
+        }
+
+        return lstat(targetPath);
+      },
+    })).rejects.toThrow(`Failed to inspect subagent install path ${blockedSubagentPath}: permission denied`);
   });
 });
 
