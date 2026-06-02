@@ -1535,6 +1535,15 @@ function resolveUniversalDecisionCanonicalPaths(
     const pathLocation = locations.find((location) =>
       location.sourceId === universal.sourceId
       && normalizePath(location.path) === normalizePath(universal.path));
+    if (pathLocation?.fileType === 'symlink' && pathLocation.resolvedPath) {
+      const resolvedPath = normalizePath(pathLocation.resolvedPath);
+      const resolvedLocation = locations.find((location) =>
+        location.fileType === 'real-file'
+        && (normalizePath(location.path) === resolvedPath
+          || (location.resolvedPath !== undefined && normalizePath(location.resolvedPath) === resolvedPath)));
+      return [resolvedLocation?.path ?? pathLocation.resolvedPath];
+    }
+
     return [pathLocation?.path ?? universal.path];
   }
 

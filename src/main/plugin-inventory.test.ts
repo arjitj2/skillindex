@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -744,6 +744,8 @@ describe('plugin inventory', () => {
     });
     const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'github-tools', 'abc123');
     const localSkillPath = path.join(homeDir, '.agents', 'skills', 'github');
+    const symlinkOnlySkillPath = path.join(homeDir, '.agents', 'skills', 'browser');
+    const symlinkOnlyTargetPath = path.join(homeDir, 'external-skills', 'browser');
 
     await writeJson(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), {
       name: 'github-tools',
@@ -751,6 +753,8 @@ describe('plugin inventory', () => {
     });
     await writeSkill(path.join(pluginRoot, 'skills', 'github'), 'github', 'GitHub workflow helpers from plugin');
     await writeSkill(localSkillPath, 'github', 'Local GitHub workflow helpers');
+    await writeSkill(symlinkOnlyTargetPath, 'browser', 'Browser helper exposed only through a symlink');
+    await symlink(symlinkOnlyTargetPath, symlinkOnlySkillPath);
 
     const inventory = await applyCapabilityAction({
       entity: 'skill',

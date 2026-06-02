@@ -651,6 +651,127 @@ describe('buildSkillInspectorModel', () => {
     ]);
   });
 
+  it('lets an .agents symlink to the preferred canonical source become Universal', () => {
+    const preferredPath = '/tmp/skillindex/sandbox/repos/arjit-skills/skills/repo-backed-skill';
+    const agentsPath = '/tmp/skillindex/sandbox/.agents/skills/repo-backed-skill';
+    const preferredSource: SkillScanSource = {
+      id: 'preferred-canonical:/tmp/skillindex/sandbox/repos/arjit-skills/skills',
+      label: 'Preferred canonical /tmp/skillindex/sandbox/repos/arjit-skills/skills',
+      canonical: false,
+      kind: 'custom',
+      writable: true,
+      scope: 'sandbox',
+      skillsDir: '/tmp/skillindex/sandbox/repos/arjit-skills/skills',
+      preferredCanonical: true,
+    };
+    const agentsSource: SkillScanSource = {
+      id: 'sandbox-agents',
+      label: 'Sandbox .agents',
+      canonical: true,
+      kind: 'canonical',
+      writable: true,
+      scope: 'sandbox',
+      skillsDir: '/tmp/skillindex/sandbox/.agents/skills',
+    };
+    const skill: SkillRecord = {
+      name: 'repo-backed-skill',
+      description: 'Repo-backed skill exposed through the shared universal directory.',
+      structuralState: 'healthy',
+      isDrifted: false,
+      driftPresentation: 'none',
+      issueReasons: [],
+      locations: [
+        {
+          path: preferredPath,
+          entrypointPath: `${preferredPath}/SKILL.md`,
+          sourceId: preferredSource.id,
+          sourceLabel: preferredSource.label,
+          sourceScope: 'sandbox',
+          installKind: 'directory',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-15T04:00:00.000Z',
+          canonical: true,
+          resolvedPath: preferredPath,
+          contentHash: 'preferred-repo-backed-skill',
+        },
+        {
+          path: agentsPath,
+          entrypointPath: `${preferredPath}/SKILL.md`,
+          sourceId: agentsSource.id,
+          sourceLabel: agentsSource.label,
+          sourceScope: 'sandbox',
+          installKind: 'directory',
+          fileType: 'symlink',
+          modifiedAt: '2026-05-15T04:00:00.000Z',
+          canonical: false,
+          resolvedPath: preferredPath,
+          symlinkTarget: preferredPath,
+          contentHash: 'preferred-repo-backed-skill',
+        },
+      ],
+      detailDiagnostics: {
+        duplicateCandidates: [],
+        installSources: [
+          {
+            sourceId: preferredSource.id,
+            label: preferredSource.label,
+            kind: preferredSource.kind,
+            scope: preferredSource.scope,
+            writable: preferredSource.writable,
+            canonical: true,
+          },
+          {
+            sourceId: agentsSource.id,
+            label: agentsSource.label,
+            kind: agentsSource.kind,
+            scope: agentsSource.scope,
+            writable: agentsSource.writable,
+            canonical: false,
+          },
+        ],
+        missingInstallSources: [],
+        definitionIssues: [],
+        universalDecision: {
+          id: 'skill:repo-backed-stale-agents',
+          skillName: 'repo-backed-skill',
+          state: 'user-confirmed',
+          universal: {
+            kind: 'path',
+            sourceId: agentsSource.id,
+            path: agentsPath,
+          },
+          acceptedAlternates: [],
+          updatedAt: '2026-05-15T04:10:00.000Z',
+        },
+      },
+    };
+
+    const model = buildSkillInspectorModel(skill, new Map([
+      [preferredSource.id, preferredSource],
+      [agentsSource.id, agentsSource],
+    ]), {
+      selectedProblemKey: null,
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    expect(model.locations.find((section) => section.id === 'universal')?.rows).toEqual([
+      expect.objectContaining({
+        path: preferredPath,
+        label: 'Preferred canonical',
+      }),
+      expect.objectContaining({
+        path: agentsPath,
+        statusLabel: 'symlink',
+        tone: 'healthy',
+        action: {
+          kind: 'choose-skill-universal-version',
+          label: 'Make Universal',
+          path: agentsPath,
+        },
+      }),
+    ]);
+  });
+
   it('pluralizes read-only plugin copies in action summaries', () => {
     const pluginSources: SkillScanSource[] = [
       buildPluginSource('codex', 'workflow-kit@sandbox-curated', 'Codex Plugin workflow-kit', '/tmp/skillindex/codex/workflow-kit'),

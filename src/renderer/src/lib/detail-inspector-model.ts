@@ -1658,23 +1658,66 @@ function mapSkillLocationRow(
     pathText: location.path,
     statusLabel: issue.statusLabel,
     tone: issue.tone,
-    action: getSkillLocationAction(skill, location),
+    action: getSkillLocationAction(skill, location, sourceIndex),
   };
 }
 
 function getSkillLocationAction(
   skill: SkillRecord,
   location: SkillLocationRecord,
+  sourceIndex: Map<string, SkillScanSource>,
 ): InspectorLocationAction | undefined {
-  if (location.fileType !== 'real-file' || !isAcceptedSkillAlternate(skill, location)) {
+  const actionPath = getSkillLocationActionPath(skill, location, sourceIndex);
+  if (!actionPath) {
     return undefined;
   }
 
   return {
     kind: 'choose-skill-universal-version',
     label: 'Make Universal',
-    path: location.path,
+    path: actionPath,
   };
+}
+
+function getSkillLocationActionPath(
+  skill: SkillRecord,
+  location: SkillLocationRecord,
+  sourceIndex: Map<string, SkillScanSource>,
+): string | null {
+  if (location.fileType === 'real-file') {
+    return isAcceptedSkillAlternate(skill, location) ? location.path : null;
+  }
+
+  return isAgentsSymlinkToPreferredCanonicalSource(skill, location, sourceIndex)
+    ? location.path
+    : null;
+}
+
+function isAgentsSymlinkToPreferredCanonicalSource(
+  skill: SkillRecord,
+  location: SkillLocationRecord,
+  sourceIndex: Map<string, SkillScanSource>,
+): boolean {
+  if (
+    location.fileType !== 'symlink'
+    || !isAgentsPath(location.path)
+    || !location.resolvedPath
+  ) {
+    return false;
+  }
+
+  const resolvedPath = normalizeLocationPath(location.resolvedPath);
+  return skill.locations.some((candidate) => {
+    if (
+      candidate.fileType !== 'real-file'
+      || sourceIndex.get(candidate.sourceId)?.preferredCanonical !== true
+    ) {
+      return false;
+    }
+
+    return [candidate.path, candidate.resolvedPath].some((candidatePath) =>
+      candidatePath !== undefined && normalizeLocationPath(candidatePath) === resolvedPath);
+  });
 }
 
 function getSkillInstallSourceForLocation(

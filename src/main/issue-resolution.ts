@@ -1850,6 +1850,11 @@ function resolveCanonicalSkillPath(
   selectedVariantPath: string | undefined,
 ): string {
   const canonicalScope = resolveSkillMutationScope(skill, selectedVariantPath);
+  const decisionCanonicalPath = resolveUserConfirmedPathDecisionSkillPath(skill);
+  if (decisionCanonicalPath) {
+    return decisionCanonicalPath;
+  }
+
   const preferredCanonicalPath = resolvePreferredCanonicalSkillPath(skill, snapshot, canonicalScope);
   if (preferredCanonicalPath) {
     return preferredCanonicalPath;
@@ -1862,6 +1867,19 @@ function resolveCanonicalSkillPath(
   }
 
   throw new Error(`Unable to locate the canonical ${canonicalScope} skills directory for "${skill.name}".`);
+}
+
+function resolveUserConfirmedPathDecisionSkillPath(skill: SkillRecord): string | null {
+  const decision = skill.detailDiagnostics.universalDecision;
+  if (
+    decision?.state !== 'user-confirmed'
+    || decision.skillName !== skill.name
+    || decision.universal.kind !== 'path'
+  ) {
+    return null;
+  }
+
+  return decision.universal.path;
 }
 
 function resolvePreferredCanonicalSkillPath(

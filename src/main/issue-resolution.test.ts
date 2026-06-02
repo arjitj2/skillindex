@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -1724,6 +1724,87 @@ describe('resolveInventoryIssue', () => {
       pluginSkillName: 'foo',
     });
     expect(resolvedSkill?.detailDiagnostics.universalDecision?.acceptedAlternates).toEqual([]);
+  });
+
+  it('materializes an .agents symlink as Universal when it points at the preferred canonical source', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-preferred-agents-choice-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+      homeDir,
+    });
+    const skillName = 'repo-backed-skill';
+    const preferredSkillsDir = path.join(homeDir, 'repos', 'arjit-skills', 'skills');
+    const preferredPath = path.join(preferredSkillsDir, skillName);
+    const agentsPath = path.join(homeDir, '.agents', 'skills', skillName);
+    const factoryPath = path.join(homeDir, '.factory', 'skills', skillName);
+    const symlinkOnlySkillPath = path.join(homeDir, '.agents', 'skills', 'browser');
+    const symlinkOnlyTargetPath = path.join(homeDir, 'external-skills', 'browser');
+
+    await writeSkillFile(path.join(preferredPath, 'SKILL.md'), [
+      '---',
+      `name: ${skillName}`,
+      'description: Preferred canonical repo skill.',
+      '---',
+      '',
+      '# Repo backed skill',
+      '',
+    ].join('\n'));
+    await mkdir(path.dirname(agentsPath), { recursive: true });
+    await symlink(preferredPath, agentsPath);
+    await mkdir(path.dirname(factoryPath), { recursive: true });
+    await symlink(preferredPath, factoryPath);
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillFile(path.join(symlinkOnlyTargetPath, 'SKILL.md'), [
+      '---',
+      'name: browser',
+      'description: Browser helper exposed only through a symlink.',
+      '---',
+      '',
+      '# Browser',
+      '',
+    ].join('\n'));
+    await symlink(symlinkOnlyTargetPath, symlinkOnlySkillPath);
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: preferredSkillsDir,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+
+    const resolvedSnapshot = await applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName,
+      selectedVariantPath: agentsPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    await expect(lstat(agentsPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
+    await expect(readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).resolves.toContain('Preferred canonical repo skill.');
+    expect(await readlink(preferredPath)).toBe(agentsPath);
+    expect(await readlink(factoryPath)).toBe(agentsPath);
+    expect(resolvedSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
+      structuralState: 'healthy',
+      isDrifted: false,
+      driftPresentation: 'none',
+      detailDiagnostics: {
+        universalDecision: {
+          state: 'user-confirmed',
+          universal: {
+            kind: 'path',
+            sourceId: 'live-agents',
+            path: agentsPath,
+          },
+        },
+      },
+    });
   });
 
   it('rejects stale skill issue resolution requests after the issue is already resolved', async () => {
