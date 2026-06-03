@@ -586,7 +586,7 @@ describe('DetailInspectorPanel', () => {
           ...claudeLocation,
           path: packagePath('~/.skillindex/sandbox/.claude/skills/broken-symlink-skill.md'),
           resolvedPath: undefined,
-          symlinkTarget: undefined,
+          symlinkTarget: packagePath('~/.skillindex/sandbox/.agents/skills/missing-broken-symlink-target.md'),
         },
       ],
     };
@@ -612,6 +612,14 @@ describe('DetailInspectorPanel', () => {
     })).not.toBeInTheDocument();
     expect(screen.queryByText(/Broken:/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/expected/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Locations/i }));
+    const installedPaths = screen.getByRole('list', { name: 'Installed Paths' });
+    const row = within(installedPaths).getByText('Broken Symlink').closest('.detail-inspector-panel__location-row');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText(
+      `Points to ${packagePath('~/.skillindex/sandbox/.agents/skills/missing-broken-symlink-target.md')}`,
+    )).toBeInTheDocument();
   });
 
   it('renders wrong symlink target rows with the compact path and current target underneath', () => {

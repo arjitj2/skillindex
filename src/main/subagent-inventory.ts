@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readlinkSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -303,6 +303,7 @@ function buildSubagentLocation(
   const stats = lstatSync(filePath);
   const fileType: SkillLocationType = stats.isSymbolicLink() ? 'symlink' : 'real-file';
   const resolvedPath = safeRealpathSync(filePath);
+  const symlinkTarget = fileType === 'symlink' ? safeReadlinkSync(filePath) ?? resolvedPath : undefined;
   const modifiedAt = new Date(stats.mtimeMs).toISOString();
   const definitionComparisonKey = fileType === 'real-file'
     ? getSubagentDefinitionComparisonKey(parsed)
@@ -327,7 +328,7 @@ function buildSubagentLocation(
     localExtrasKeys: localExtrasKeys.length > 0 ? localExtrasKeys : undefined,
     invalidDetails: parsed.invalidDetails.length > 0 ? parsed.invalidDetails : undefined,
     resolvedPath,
-    symlinkTarget: fileType === 'symlink' ? resolvedPath : undefined,
+    symlinkTarget,
     provenance: createSubagentProvenance(filePath, owner, modifiedAt),
     canonicalRole: owner.canonical ? 'canonical' : 'materialized-copy',
     mutability: owner.writable ? 'writable' : owner.plugin ? 'read-only-managed' : 'unknown',
@@ -1419,6 +1420,14 @@ function safeFileExists(filePath: string): boolean {
 function safeRealpathSync(filePath: string): string | undefined {
   try {
     return realpathSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeReadlinkSync(filePath: string): string | undefined {
+  try {
+    return readlinkSync(filePath);
   } catch {
     return undefined;
   }

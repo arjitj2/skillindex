@@ -105,6 +105,7 @@ export interface InspectorLocationRow {
   label: string | null;
   path: string | null;
   pathText: string;
+  detailText?: string;
   statusLabel?: string;
   tone: InspectorLocationTone;
   action?: InspectorLocationAction;
@@ -1550,6 +1551,7 @@ function buildSkillLocationSections(
               label: formatSkillInstallSourceLabel(source, sourceIndex, agentIndex),
               path: location?.path ?? null,
               pathText: location?.path ?? 'not installed',
+              detailText: getBrokenSymlinkLocationDetail(issue, location),
               statusLabel: issue.statusLabel,
               tone: issue.tone,
             };
@@ -1656,6 +1658,7 @@ function mapSkillLocationRow(
     label,
     path: location.path,
     pathText: location.path,
+    detailText: getBrokenSymlinkLocationDetail(issue, location),
     statusLabel: issue.statusLabel,
     tone: issue.tone,
     action: getSkillLocationAction(skill, location, sourceIndex),
@@ -2219,6 +2222,7 @@ function buildSubagentLocationSections(
         label: entry.label,
         path: entry.location?.path ?? entry.path ?? null,
         pathText: entry.location?.path ?? entry.path ?? 'Not configured',
+        detailText: getBrokenSymlinkLocationDetail(issue, entry.location),
         statusLabel: issue.statusLabel,
         tone: issue.tone,
       };
@@ -2281,9 +2285,22 @@ function mapSubagentLocationRow(
     label,
     path: location.path,
     pathText: location.path,
+    detailText: getBrokenSymlinkLocationDetail(issue, location),
     statusLabel: issue.statusLabel,
     tone: issue.tone,
   };
+}
+
+function getBrokenSymlinkLocationDetail(
+  issue: { statusLabel?: string },
+  location: { resolvedPath?: string; symlinkTarget?: string } | null,
+): string | undefined {
+  if (issue.statusLabel !== 'Broken Symlink') {
+    return undefined;
+  }
+
+  const target = location?.symlinkTarget ?? location?.resolvedPath;
+  return target ? `Points to ${target}` : undefined;
 }
 
 function getSubagentAgentEntries(

@@ -228,13 +228,19 @@ describe('subagent inventory', () => {
 
     await writeMarkdownSubagent(canonicalPath, 'broken-link', 'Covers broken symlink repair.', 'Repair safely.');
     await mkdir(path.dirname(claudePath), { recursive: true });
-    await symlink(path.join(homeDir, '.agents', 'agents', 'missing-target.md'), claudePath);
+    const missingTargetPath = path.join(homeDir, '.agents', 'agents', 'missing-target.md');
+    await symlink(missingTargetPath, claudePath);
 
     const inventory = await scanInventory(scanOptions);
     const brokenLink = inventory.subagents?.find((subagent) => subagent.name === 'broken-link');
 
     expect(brokenLink?.issueReasons).toContain('broken-symlink');
     expect(brokenLink?.issueReasons).not.toContain('invalid-definition');
+    expect(brokenLink?.locations.find((location) =>
+      location.path === claudePath && location.fileType === 'symlink' && !location.resolvedPath,
+    )).toMatchObject({
+      symlinkTarget: missingTargetPath,
+    });
 
     const repaired = await resolveInventoryIssue({
       entity: 'subagent',

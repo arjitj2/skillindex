@@ -557,21 +557,28 @@ export function DetailInspectorPanel({
                           <strong className="detail-inspector-panel__location-label">{renderLocationLabel(row.label)}</strong>
                         ) : null}
                       </span>
-                      {row.path ? (
-                        <button
-                          aria-label={`Open ${formatDisplayPath(row.path)} in the default editor`}
-                          className="detail-inspector-panel__location-path-button"
-                          title={formatDisplayPath(row.path)}
-                          type="button"
-                          onClick={() => handleOpenPath(row.path as string)}
-                        >
-                          {formatDisplayPath(row.path)}
-                        </button>
-                      ) : (
-                        <span className={`detail-inspector-panel__location-path detail-inspector-panel__location-path--${row.tone}`}>
-                          {row.pathText}
-                        </span>
-                      )}
+                      <span className="detail-inspector-panel__location-path-cell">
+                        {row.path ? (
+                          <button
+                            aria-label={`Open ${formatDisplayPath(row.path)} in the default editor`}
+                            className="detail-inspector-panel__location-path-button"
+                            title={formatDisplayPath(row.path)}
+                            type="button"
+                            onClick={() => handleOpenPath(row.path as string)}
+                          >
+                            {formatDisplayPath(row.path)}
+                          </button>
+                        ) : (
+                          <span className={`detail-inspector-panel__location-path detail-inspector-panel__location-path--${row.tone}`}>
+                            {row.pathText}
+                          </span>
+                        )}
+                        {row.detailText ? (
+                          <span className="detail-inspector-panel__location-detail">
+                            {row.detailText}
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="detail-inspector-panel__location-status-cell">
                         <span
                           className={[
