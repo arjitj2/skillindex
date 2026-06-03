@@ -81,7 +81,7 @@ interface ParsedMcpConfigResult {
 
 interface PluginMcpIndexEntry {
   inventoryName: string;
-  definitionComparisonKey?: string;
+  coreDefinitionComparisonKey?: string;
 }
 
 interface ResolvedMcpConnection {
@@ -249,7 +249,7 @@ function buildPluginMcpIndex(results: ParsedMcpConfigResult[]): Map<string, Plug
       const existing = pluginMcpIndex.get(entry.name) ?? [];
       existing.push({
         inventoryName: `${result.owner.plugin.pluginName}:${entry.name}`,
-        definitionComparisonKey: entry.location.definitionComparisonKey,
+        coreDefinitionComparisonKey: getMcpCoreDefinitionComparisonKey(entry.location),
       });
       pluginMcpIndex.set(entry.name, existing);
     }
@@ -269,7 +269,7 @@ function createInventoryMcpName(
 
   const pluginCandidates = pluginMcpIndex.get(entry.name) ?? [];
   const matchingDefinitionCandidates = pluginCandidates.filter((candidate) =>
-    candidate.definitionComparisonKey === entry.location.definitionComparisonKey);
+    candidate.coreDefinitionComparisonKey === getMcpCoreDefinitionComparisonKey(entry.location));
 
   if (matchingDefinitionCandidates.length === 1) {
     return matchingDefinitionCandidates[0].inventoryName;
@@ -432,18 +432,7 @@ function hasMcpDefinitionMismatch(
 ): boolean {
   if (universalLocation) {
     const universalCoreKey = getMcpCoreDefinitionComparisonKey(universalLocation);
-    return locations.some((location) => {
-      if (getMcpCoreDefinitionComparisonKey(location) !== universalCoreKey) {
-        return true;
-      }
-
-      if (isUniversalMcpLocation(location) || !location.agentLocalKey) {
-        return false;
-      }
-
-      return getMcpNativeDefinitionComparisonKey(location)
-        !== getUniversalAgentLocalComparisonKey(universalLocation, location.agentLocalKey);
-    });
+    return locations.some((location) => getMcpCoreDefinitionComparisonKey(location) !== universalCoreKey);
   }
 
   return new Set(locations.map(getMcpCoreDefinitionComparisonKey)).size > 1;
@@ -455,14 +444,6 @@ function isUniversalMcpLocation(location: McpLocationRecord): boolean {
 
 function getMcpCoreDefinitionComparisonKey(location: McpLocationRecord): string {
   return location.coreDefinitionComparisonKey ?? location.definitionComparisonKey ?? location.definitionText ?? 'null';
-}
-
-function getMcpNativeDefinitionComparisonKey(location: McpLocationRecord): string {
-  return location.nativeDefinitionComparisonKey ?? stableStringify(location.nativeDefinition ?? {});
-}
-
-function getUniversalAgentLocalComparisonKey(location: McpLocationRecord, agentLocalKey: string): string {
-  return stableStringify(location.agentLocal?.[agentLocalKey] ?? {});
 }
 
 function buildMcpExpectedLocation(
@@ -860,7 +841,7 @@ function createMcpSignature(
 }
 
 function getMcpDefinitionComparisonKey(location: McpLocationRecord): string {
-  return location.definitionComparisonKey ?? location.definitionText ?? 'null';
+  return getMcpCoreDefinitionComparisonKey(location);
 }
 
 function resolveMcpConnection(definition: McpDefinitionObject): ResolvedMcpConnection {
