@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, type Dirent } from 'node:fs';
-import { lstat, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, readlink, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -441,7 +441,7 @@ async function readSkillLocation(
   const fileStats = await lstat(rootPath);
   const fileType: SkillLocationType = fileStats.isSymbolicLink() ? 'symlink' : 'real-file';
   const resolvedPath = await safeRealpath(rootPath);
-  const symlinkTarget = fileType === 'symlink' ? resolvedPath : undefined;
+  const symlinkTarget = fileType === 'symlink' ? await safeReadlink(rootPath) ?? resolvedPath : undefined;
   const modifiedAt = await getLocationModifiedAt(rootPath, packageEntry.entrypointPath, fileType, resolvedPath);
   const packageFiles = fileType === 'symlink' && resolvedPath === undefined
     ? []
@@ -2711,6 +2711,14 @@ async function safeStat(filePath: string) {
 async function safeRealpath(filePath: string): Promise<string | undefined> {
   try {
     return await realpath(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+async function safeReadlink(filePath: string): Promise<string | undefined> {
+  try {
+    return await readlink(filePath);
   } catch {
     return undefined;
   }

@@ -1059,9 +1059,15 @@ describe('representative-agent scan foundation', () => {
         ]),
       },
     });
-    expect(inventory.skills.find((skill) => skill.name === 'broken-symlink-skill')).toMatchObject({
+    const brokenSymlinkSkill = inventory.skills.find((skill) => skill.name === 'broken-symlink-skill');
+    expect(brokenSymlinkSkill).toMatchObject({
       structuralState: 'missing-symlinks',
       issueReasons: arrayContaining(['broken-symlink']),
+    });
+    expect(brokenSymlinkSkill?.locations.find((location) =>
+      location.sourceId === 'sandbox-claude' && location.fileType === 'symlink' && !location.resolvedPath,
+    )).toMatchObject({
+      symlinkTarget: path.join(paths.sandboxRoot, '.agents', 'skills', 'missing-broken-symlink-target'),
     });
     expect(inventory.skills.find((skill) => skill.name === 'wrong-symlink-target-skill')).toMatchObject({
       structuralState: 'missing-symlinks',

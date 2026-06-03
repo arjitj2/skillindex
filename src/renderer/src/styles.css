@@ -9340,6 +9340,12 @@ body {
   white-space: nowrap;
 }
 
+.detail-inspector-panel__location-path-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .detail-inspector-panel__location-path,
 .detail-inspector-panel__location-path-button {
   min-width: 0;
@@ -9374,6 +9380,16 @@ body {
 .detail-inspector-panel__location-path-button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--detail-inspector-accent) 36%, white);
   outline-offset: 1px;
+}
+
+.detail-inspector-panel__location-detail {
+  min-width: 0;
+  color: var(--detail-inspector-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 14px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-inspector-panel__location-status-cell {

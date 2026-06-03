@@ -1,4 +1,4 @@
-import type { AgentRecord, SkillRecord, SkillScanSource } from '@shared/contracts';
+import type { AgentRecord, SkillRecord, SkillScanSource, SubagentRecord } from '@shared/contracts';
 
 import { describe, expect, it } from 'vitest';
 
@@ -6,6 +6,7 @@ import { representativeInventorySnapshot } from '../representative-preview-data'
 import {
   DETAIL_DIFF_TITLE,
   buildMcpInspectorModel,
+  buildSubagentInspectorModel,
   buildSkillInspectorModel,
   type InspectorActiveProblemModel,
   type StructuralRepairProblemModel,
@@ -1722,7 +1723,7 @@ describe('buildSkillInspectorModel', () => {
           ...claudeLocation,
           path: packagePath('~/.skillindex/sandbox/.claude/skills/broken-symlink-skill.md'),
           resolvedPath: undefined,
-          symlinkTarget: undefined,
+          symlinkTarget: packagePath('~/.skillindex/sandbox/.agents/skills/missing-broken-symlink-target.md'),
         },
       ],
     };
@@ -1749,6 +1750,71 @@ describe('buildSkillInspectorModel', () => {
         path: packagePath('~/.skillindex/sandbox/.claude/skills/broken-symlink-skill.md'),
       }),
     ]);
+    expect(model.locations.flatMap((section) => section.rows)).toEqual(arrayContaining([
+      objectContaining({
+        path: packagePath('~/.skillindex/sandbox/.claude/skills/broken-symlink-skill.md'),
+        statusLabel: 'Broken Symlink',
+        detailText: `Points to ${packagePath('~/.skillindex/sandbox/.agents/skills/missing-broken-symlink-target.md')}`,
+      }),
+    ]));
+  });
+
+  it('shows the current broken subagent symlink target in Locations', () => {
+    const canonicalPath = '~/.skillindex/sandbox/.agents/agents/broken-link.md';
+    const claudePath = '~/.skillindex/sandbox/.claude/agents/broken-link.md';
+    const missingTargetPath = '~/.skillindex/sandbox/.agents/agents/missing-target.md';
+    const subagent: SubagentRecord = {
+      name: 'broken-link',
+      description: 'Covers broken symlink repair.',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['broken-symlink'],
+      locations: [
+        {
+          agentId: 'sandbox-agents-subagents',
+          agentLabel: 'Sandbox .agents',
+          scope: 'sandbox',
+          path: canonicalPath,
+          directoryPath: '~/.skillindex/sandbox/.agents/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-05-15T00:00:00.000Z',
+          canonical: true,
+          format: 'markdown-frontmatter',
+          definitionText: '---\nname: broken-link\ndescription: Covers broken symlink repair.\n---\nRepair safely.\n',
+          definitionComparisonKey: 'canonical-broken-link',
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          path: claudePath,
+          directoryPath: '~/.skillindex/sandbox/.claude/agents',
+          fileType: 'symlink',
+          modifiedAt: '2026-05-15T01:00:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          description: null,
+          resolvedPath: undefined,
+          symlinkTarget: missingTargetPath,
+        },
+      ],
+      expectedLocations: [],
+      missingLocations: [],
+    };
+
+    const model = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'broken-symlink',
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    expect(model.locations.flatMap((section) => section.rows)).toEqual(arrayContaining([
+      objectContaining({
+        label: 'Claude Code',
+        path: claudePath,
+        statusLabel: 'Broken Symlink',
+        detailText: `Points to ${missingTargetPath}`,
+      }),
+    ]));
   });
 
   it('shows the current wrong symlink target underneath the affected path', () => {
