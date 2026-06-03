@@ -2179,8 +2179,7 @@ function getMcpLocationIssueState(
   }
 
   if (mcp.issueReasons.includes('definition-mismatch') && canonicalLocation) {
-    if (isMcpCoreDefinitionMismatch(location, canonicalLocation)
-      || isMcpAgentSpecificDefinitionMismatch(location, canonicalLocation)) {
+    if (isMcpCoreDefinitionMismatch(location, canonicalLocation)) {
       return { statusLabel: 'Definition Mismatch', tone: 'warning' };
     }
   }
@@ -2201,19 +2200,6 @@ function getMcpCoreDefinitionKey(location: McpLocationRecord): string {
     ?? normalizeDefinitionText(location.definitionText ?? buildMcpDefinitionText(location))
     ?? 'null';
 }
-
-function isMcpAgentSpecificDefinitionMismatch(
-  location: McpLocationRecord,
-  canonicalLocation: McpLocationRecord,
-): boolean {
-  if (isUniversalMcpLocation(location) || !location.agentLocalKey) {
-    return false;
-  }
-
-  return stableDefinitionString(location.nativeDefinition ?? {})
-    !== stableDefinitionString(canonicalLocation.agentLocal?.[location.agentLocalKey] ?? {});
-}
-
 
 function buildSubagentLocationSections(
   subagent: SubagentRecord,

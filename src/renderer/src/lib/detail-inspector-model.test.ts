@@ -2227,6 +2227,96 @@ describe('buildMcpInspectorModel', () => {
     ]);
   });
 
+  it('marks only core-different MCP locations as definition mismatches', () => {
+    const matchingCoreKey = JSON.stringify({
+      args: ['server.js'],
+      command: 'node',
+      transport: 'stdio',
+    });
+    const divergentCoreKey = JSON.stringify({
+      args: ['other-server.js'],
+      command: 'node',
+      transport: 'stdio',
+    });
+    const mcp: RepresentativeMcp = {
+      name: 'mixed-core-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['definition-mismatch'],
+      locations: [
+        {
+          agentId: 'sandbox-agents',
+          agentLabel: 'Universal',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.agents/mcp.json',
+          transport: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          definitionText: JSON.stringify({
+            command: 'node',
+            args: ['server.js'],
+          }, null, 2),
+          coreDefinitionComparisonKey: matchingCoreKey,
+          provenance: {
+            kind: 'universal',
+            sourcePath: '~/.skillindex/sandbox/.agents/mcp.json',
+            discoveredAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+        {
+          agentId: 'sandbox-claude',
+          agentLabel: 'Claude Code',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.claude.json',
+          transport: 'stdio',
+          command: 'node',
+          args: ['other-server.js'],
+          definitionText: JSON.stringify({
+            command: 'node',
+            args: ['other-server.js'],
+          }, null, 2),
+          coreDefinitionComparisonKey: divergentCoreKey,
+        },
+        {
+          agentId: 'sandbox-factory',
+          agentLabel: 'Factory',
+          scope: 'sandbox',
+          configPath: '~/.skillindex/sandbox/.factory/mcp.json',
+          transport: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          definitionText: JSON.stringify({
+            command: 'node',
+            args: ['server.js'],
+            disabled: false,
+          }, null, 2),
+          coreDefinitionComparisonKey: matchingCoreKey,
+          nativeDefinition: { disabled: false },
+          agentLocalKey: 'factory',
+        },
+      ],
+    };
+
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'definition-mismatch',
+      selectedVariantPath: '~/.skillindex/sandbox/.claude.json',
+    }, agentIndex, sourceIndex);
+    const installedRows = model.locations.find((section) => section.id === 'installed-paths')?.rows ?? [];
+
+    expect(installedRows).toEqual(arrayContaining([
+      objectContaining({
+        label: 'Claude Code',
+        statusLabel: 'Definition Mismatch',
+        tone: 'warning',
+      }),
+      objectContaining({
+        label: 'Factory',
+        statusLabel: undefined,
+        tone: 'healthy',
+      }),
+    ]));
+  });
+
   it('builds a multi-problem inspector with definition mismatch selection', () => {
     const mcp = findRepresentativeMcp('diagnostic-rich-mcp');
 
