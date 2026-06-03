@@ -266,11 +266,16 @@ export function DetailInspectorPanel({
                     const isSelected = variant.path === model.selectedVariantPath;
                     const isCanonical = variant.path === activeProblem.baselineVariant?.path;
                     const isCanonicalComparison = isCanonical && !isSelected && activeProblem.selectedVariant?.path !== activeProblem.baselineVariant?.path;
+                    const variantPrimaryLabel = entityKind === 'mcp' ? variant.label : formatPath(variant.path, 62);
+                    const variantSecondaryLabel = entityKind === 'mcp' ? variant.secondaryLabel : null;
+                    const ariaLabel = entityKind === 'mcp'
+                      ? `${variant.label} ${variant.secondaryLabel} ${variant.path}`
+                      : `${variant.label} ${variant.path}`;
 
                     return (
                       <div key={variant.id} role="listitem">
                         <button
-                          aria-label={`${variant.label} ${variant.path}`}
+                          aria-label={ariaLabel}
                           aria-pressed={isSelected}
                           className={[
                             'detail-inspector-panel__variant-card',
@@ -283,7 +288,14 @@ export function DetailInspectorPanel({
                           onClick={() => onVariantSelect?.(variant.path)}
                         >
                           <>
-                            <span className="detail-inspector-panel__variant-path">{formatPath(variant.path, 62)}</span>
+                            {entityKind === 'mcp' ? (
+                              <span className="detail-inspector-panel__variant-copy">
+                                <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
+                                {variantSecondaryLabel ? <span>{variantSecondaryLabel}</span> : null}
+                              </span>
+                            ) : (
+                              <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
+                            )}
                             {isCanonical ? (
                               <span className="detail-inspector-panel__variant-badges">
                                 <span

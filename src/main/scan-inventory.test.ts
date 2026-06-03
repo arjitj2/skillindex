@@ -505,7 +505,7 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
-  it('folds agent-specific native field drift into definition mismatch', async () => {
+  it('treats agent-specific native field drift as agreement when core fields match', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-native-mismatch-'));
     const paths = resolveSkillIndexPaths({
       env: {
@@ -543,8 +543,8 @@ describe('representative-agent scan foundation', () => {
     });
 
     expect(inventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')).toMatchObject({
-      status: 'needs-attention',
-      issueReasons: ['definition-mismatch'],
+      status: 'healthy',
+      issueReasons: [],
       locations: arrayContaining([
         objectContaining({
           agentId: 'sandbox-factory',
@@ -557,14 +557,15 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
-  it('includes universal agentLocal drift in MCP dismissal signatures', async () => {
+  it('ignores universal agentLocal drift in MCP dismissal signatures', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-agent-local-signature-'));
     const env = {
       SKILL_INDEX_DATA_DIR: root,
-      SKILL_INDEX_AGENT_SUBSET: 'factory',
+      SKILL_INDEX_AGENT_SUBSET: 'codex,factory',
     };
     const paths = resolveSkillIndexPaths({ env });
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
     const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
     const writeUniversalConfig = async (timeoutMs: number) => {
       await writeFile(agentsConfigPath, `${JSON.stringify({
@@ -583,7 +584,9 @@ describe('representative-agent scan foundation', () => {
     };
 
     await mkdir(path.dirname(agentsConfigPath), { recursive: true });
+    await mkdir(path.dirname(codexConfigPath), { recursive: true });
     await mkdir(path.dirname(factoryConfigPath), { recursive: true });
+    await writeFile(codexConfigPath, 'model = "gpt-5"\n', 'utf8');
     await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
     await writeUniversalConfig(1_000);
     await writeFile(factoryConfigPath, `${JSON.stringify({
@@ -614,10 +617,12 @@ describe('representative-agent scan foundation', () => {
     const secondSignature = secondInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.signature;
 
     expect(firstInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.issueReasons)
-      .toContain('definition-mismatch');
+      .toEqual(['missing-from-agents']);
+    expect(secondInventory.mcps?.find((mcp) => mcp.name === 'nativeMismatch')?.issueReasons)
+      .toEqual(['missing-from-agents']);
     expect(firstSignature).toBeTruthy();
     expect(secondSignature).toBeTruthy();
-    expect(secondSignature).not.toBe(firstSignature);
+    expect(secondSignature).toBe(firstSignature);
   });
 
   it('compares MCP definitions using portable launch, cwd, and auth fields only', async () => {

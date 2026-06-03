@@ -411,6 +411,13 @@ describe('DetailInspectorPanel', () => {
       />,
     );
 
+    const problemVariantList = screen.getByRole('list', { name: 'Detected Definitions' });
+    expect(within(problemVariantList).getByText('Augment, Codex, Claude Code')).toBeInTheDocument();
+    expect(within(problemVariantList).getByText('3 agents')).toBeInTheDocument();
+    expect(within(problemVariantList).getByText('Factory')).toBeInTheDocument();
+    expect(within(problemVariantList).getByText('1 agent')).toBeInTheDocument();
+    expect(within(problemVariantList).queryByText('~/.skillindex/sandbox/.augment/settings.json')).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('tab', { name: 'Definition' }));
 
     const variantList = screen.getByRole('list', { name: 'Detected Definitions' });

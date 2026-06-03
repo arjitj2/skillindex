@@ -2995,7 +2995,9 @@ function groupMcpVariants(locations: McpLocationRecord[]): McpVariantGroup[] {
 
   for (const location of locations) {
     const definitionText = normalizeDefinitionText(location.definitionText ?? buildMcpDefinitionText(location));
-    const key = location.definitionComparisonKey ?? (definitionText || `${location.command ?? ''}:${location.args.join('\0')}`);
+    const key = location.coreDefinitionComparisonKey
+      ?? location.definitionComparisonKey
+      ?? (definitionText || `${location.command ?? ''}:${location.args.join('\0')}`);
     const existing = groups.get(key) ?? [];
     existing.push(location);
     groups.set(key, existing);
