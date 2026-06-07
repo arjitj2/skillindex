@@ -89,7 +89,7 @@ function OnboardingRail() {
         <div className="onboarding-brand-name">Skill Index</div>
       </div>
 
-      <h2>Organize and standardize your knowledge across agents.</h2>
+      <h2>Keep your AI setup aligned across every agent.</h2>
       <p className="onboarding-rail-sub">
         Skill Index keeps your skills and MCPs in sync across every coding agent on your machine - Claude, Codex, and whatever comes next.
       </p>

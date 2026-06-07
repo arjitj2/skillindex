@@ -6,7 +6,7 @@
 
 https://github.com/user-attachments/assets/730265b3-46ce-46f9-9150-0e0057e2f00c
 
-Organize and standardize your knowledge across agents, 100% locally.
+Keep your AI setup aligned across every agent, 100% locally.
 
 Skill Index is a local macOS app to standardize the skills, MCP servers, and plugin capabilities you use across AI agents. Each of your 40+ agents should be able to draw from the same body of knowledge instead of slowly drifting into separate setups.
 
