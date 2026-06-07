@@ -37,9 +37,9 @@ export function AgentsWorkspaceView({
       title: 'INSTALLED',
       metaLabel: (
         <div className="agent-section-columns" aria-hidden="true">
-          <span className="agent-section-column-label">Skills source</span>
-          <span className="agent-section-column-label">MCP / config</span>
-          <span className="agent-section-column-label">Subagents</span>
+          <span className="agent-section-column-label">Primary Skills Directory</span>
+          <span className="agent-section-column-label">Primary MCP Definition</span>
+          <span className="agent-section-column-label">Primary Subagents Directory</span>
         </div>
       ),
       rows: installedAgents,
@@ -50,9 +50,9 @@ export function AgentsWorkspaceView({
       title: 'NOT INSTALLED',
       metaLabel: (
         <div className="agent-section-columns" aria-hidden="true">
-          <span className="agent-section-column-label">Skills source</span>
-          <span className="agent-section-column-label">MCP / config</span>
-          <span className="agent-section-column-label">Subagents</span>
+          <span className="agent-section-column-label">Primary Skills Directory</span>
+          <span className="agent-section-column-label">Primary MCP Definition</span>
+          <span className="agent-section-column-label">Primary Subagents Directory</span>
         </div>
       ),
       rows: missingAgents,

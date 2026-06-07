@@ -20,6 +20,7 @@ export const PLUGIN_SUBAGENT_TOOLTIP = 'This subagent was installed via one or m
 
 const PLUGIN_TOOLTIP_MARGIN = 12;
 const PLUGIN_TOOLTIP_FALLBACK_WIDTH = 360;
+const AGENT_LOCATION_TOOLTIP_FALLBACK_WIDTH = 560;
 
 type PluginTooltipPosition = {
   arrowLeft: number;
@@ -494,13 +495,9 @@ export function AgentStatusRow({
   agent: AgentRecord;
 }) {
   const isUnavailable = agent.installState !== 'installed';
-  const skillsPath = getAgentSkillsDisplayPath(agent);
-  const skillsTitle = getAgentSkillsTitle(agent);
-  const isAccountManagedSkills = agent.skillsLocation.reason === 'account-managed';
-  const mcpConfigPath = getAgentConfigDisplayPath(agent);
-  const mcpConfigTitle = getAgentConfigTitle(agent);
-  const subagentsPath = getAgentSubagentsDisplayPath(agent);
-  const subagentsTitle = getAgentSubagentsTitle(agent);
+  const skillsLocation = getAgentSkillsDisplayLocation(agent);
+  const mcpConfigLocation = getAgentConfigDisplayLocation(agent);
+  const subagentsLocation = getAgentSubagentsDisplayLocation(agent);
 
   return (
     <div className="agent-status-row">
@@ -511,37 +508,155 @@ export function AgentStatusRow({
         </div>
       </div>
       <div className="agent-location-column">
-        <code
-          className={`agent-location-path${isAccountManagedSkills ? ' agent-location-path--account-managed' : ''}`}
-          title={skillsTitle}
-        >
-          {skillsPath}
-        </code>
+        <AgentLocationValue location={skillsLocation} />
       </div>
       <div className="agent-location-column">
-        <code className="agent-location-path" title={mcpConfigTitle}>{mcpConfigPath}</code>
+        <AgentLocationValue location={mcpConfigLocation} />
       </div>
       <div className="agent-location-column">
-        <code className="agent-location-path" title={subagentsTitle}>{subagentsPath}</code>
+        <AgentLocationValue location={subagentsLocation} />
       </div>
     </div>
   );
 }
 
-function getAgentSkillsDisplayPath(agent: AgentRecord): string {
-  if (agent.skillsLocation.reason === 'account-managed') {
-    return 'Cloud account managed';
+type AgentLocationDisplay = {
+  kind: 'path' | 'note';
+  label: string;
+  title: string;
+};
+
+function AgentLocationValue({ location }: { location: AgentLocationDisplay }) {
+  const tooltipId = useId();
+  const anchorRef = useRef<HTMLElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const [position, setPosition] = useState<PluginTooltipPosition | null>(null);
+  const className = location.kind === 'note'
+    ? 'agent-location-path agent-location-note'
+    : 'agent-location-path';
+
+  useLayoutEffect(() => {
+    if (!isTooltipOpen) {
+      setPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const anchor = anchorRef.current;
+      const tooltipElement = tooltipRef.current;
+      if (!anchor || !tooltipElement) {
+        return;
+      }
+
+      const anchorRect = anchor.getBoundingClientRect();
+      const tooltipWidth = tooltipElement.offsetWidth || AGENT_LOCATION_TOOLTIP_FALLBACK_WIDTH;
+      const tooltipHeight = tooltipElement.offsetHeight;
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const anchorCenter = anchorRect.left + anchorRect.width / 2;
+      const minLeft = PLUGIN_TOOLTIP_MARGIN;
+      const maxLeft = Math.max(minLeft, viewportWidth - tooltipWidth - PLUGIN_TOOLTIP_MARGIN);
+      const left = Math.min(Math.max(anchorCenter - tooltipWidth / 2, minLeft), maxLeft);
+      const aboveTop = anchorRect.top - tooltipHeight - 8;
+      const bottomTop = anchorRect.bottom + 8;
+      const canFitAbove = aboveTop >= PLUGIN_TOOLTIP_MARGIN;
+      const canFitBelow = bottomTop + tooltipHeight + PLUGIN_TOOLTIP_MARGIN <= viewportHeight;
+      const shouldPlaceAbove = canFitAbove || !canFitBelow;
+      const top = shouldPlaceAbove ? Math.max(PLUGIN_TOOLTIP_MARGIN, aboveTop) : bottomTop;
+
+      setPosition({
+        arrowLeft: Math.min(Math.max(anchorCenter - left, 10), Math.max(10, tooltipWidth - 10)),
+        left,
+        placement: shouldPlaceAbove ? 'top' : 'bottom',
+        top,
+      });
+    };
+
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isTooltipOpen]);
+
+  const tooltipStyle = {
+    '--plugin-tooltip-arrow-left': position ? `${position.arrowLeft}px` : '50%',
+    left: position?.left ?? 0,
+    top: position?.top ?? 0,
+    visibility: position ? 'visible' : 'hidden',
+  } as CSSProperties;
+
+  const sharedProps = {
+    'aria-describedby': isTooltipOpen ? tooltipId : undefined,
+    className,
+    ref: anchorRef,
+    tabIndex: 0,
+    onBlur: () => setIsTooltipOpen(false),
+    onFocus: () => setIsTooltipOpen(true),
+    onMouseEnter: () => setIsTooltipOpen(true),
+    onMouseLeave: () => setIsTooltipOpen(false),
+  };
+  const tooltip = isTooltipOpen
+    ? createPortal(
+        <div
+          className="plugin-tooltip agent-location-tooltip"
+          data-placement={position?.placement ?? 'bottom'}
+          id={tooltipId}
+          ref={tooltipRef}
+          role="tooltip"
+          style={tooltipStyle}
+        >
+          {location.title}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  if (location.kind === 'note') {
+    return (
+      <>
+        <span {...sharedProps}>
+          {location.label}
+        </span>
+        {tooltip}
+      </>
+    );
   }
 
-  return agent.defaultGlobalSkillsDir;
+  return (
+    <>
+      <code {...sharedProps}>
+        {location.label}
+      </code>
+      {tooltip}
+    </>
+  );
 }
 
-function getAgentSkillsTitle(agent: AgentRecord): string {
+function getAgentSkillsDisplayLocation(agent: AgentRecord): AgentLocationDisplay {
   if (agent.skillsLocation.reason === 'account-managed') {
-    return "Skills are managed through this agent's cloud account; Skill Index cannot scan or install local skill files for it.";
+    return {
+      kind: 'note',
+      label: 'Cloud account managed',
+      title: "Skills are managed through this agent's cloud account; Skill Index cannot scan or install local skill files for it.",
+    };
   }
 
-  return agent.defaultGlobalSkillsDir;
+  if (agent.skillsLocation.path) {
+    return {
+      kind: 'path',
+      label: agent.skillsLocation.displayPath ?? agent.skillsLocation.path,
+      title: agent.skillsLocation.path,
+    };
+  }
+
+  return noKnownSupportLocation();
 }
 
 function AgentAvatar({
@@ -604,54 +719,76 @@ function isRenderableAgentIconFormat(format: string): boolean {
     || format === 'avif';
 }
 
-function getAgentConfigDisplayPath(agent: AgentRecord): string {
+function getAgentConfigDisplayLocation(agent: AgentRecord): AgentLocationDisplay {
   if (agent.mcpConfigLocation.displayPath) {
-    return agent.mcpConfigLocation.displayPath;
+    return {
+      kind: 'path',
+      label: agent.mcpConfigLocation.displayPath,
+      title: agent.mcpConfigLocation.path ?? agent.mcpConfigLocation.displayPath,
+    };
   }
 
   if (agent.mcpConfigLocation.path) {
-    return agent.mcpConfigLocation.path;
+    return {
+      kind: 'path',
+      label: agent.mcpConfigLocation.path,
+      title: agent.mcpConfigLocation.path,
+    };
   }
 
   if (agent.configLocation?.displayPath) {
-    return agent.configLocation.displayPath;
+    return {
+      kind: 'path',
+      label: agent.configLocation.displayPath,
+      title: agent.configLocation.path ?? agent.configLocation.displayPath,
+    };
   }
 
   if (agent.configLocation?.path) {
-    return agent.configLocation.path;
+    return {
+      kind: 'path',
+      label: agent.configLocation.path,
+      title: agent.configLocation.path,
+    };
   }
 
-  return '-';
+  return noKnownSupportLocation();
 }
 
-function getAgentConfigTitle(agent: AgentRecord): string {
-  return agent.mcpConfigLocation.path
-    ?? agent.configLocation?.path
-    ?? getAgentConfigDisplayPath(agent);
-}
-
-function getAgentSubagentsDisplayPath(agent: AgentRecord): string {
+function getAgentSubagentsDisplayLocation(agent: AgentRecord): AgentLocationDisplay {
   if (agent.subagentsLocation?.displayPath) {
-    return agent.subagentsLocation.displayPath;
+    return {
+      kind: 'path',
+      label: agent.subagentsLocation.displayPath,
+      title: agent.subagentsLocation.path ?? agent.subagentsLocation.displayPath,
+    };
   }
 
   if (agent.subagentsLocation?.path) {
-    return agent.subagentsLocation.path;
+    return {
+      kind: 'path',
+      label: agent.subagentsLocation.path,
+      title: agent.subagentsLocation.path,
+    };
   }
 
   if (agent.subagentsLocation?.reason === 'account-managed') {
-    return 'Cloud account managed';
+    return {
+      kind: 'note',
+      label: 'Cloud account managed',
+      title: "Subagents are managed through this agent's cloud account; Skill Index cannot scan or install local subagent files for it.",
+    };
   }
 
-  return '-';
+  return noKnownSupportLocation();
 }
 
-function getAgentSubagentsTitle(agent: AgentRecord): string {
-  if (agent.subagentsLocation?.reason === 'account-managed') {
-    return "Subagents are managed through this agent's cloud account; Skill Index cannot scan or install local subagent files for it.";
-  }
-
-  return agent.subagentsLocation?.path ?? getAgentSubagentsDisplayPath(agent);
+function noKnownSupportLocation(): AgentLocationDisplay {
+  return {
+    kind: 'note',
+    label: 'No known support',
+    title: 'No known support',
+  };
 }
 
 export function EmptyStatePanel({ message }: { message: string }) {
