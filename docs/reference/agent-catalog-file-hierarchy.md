@@ -54,6 +54,31 @@ For example, Codex has:
 That lets the app show the canonical shared skills directory while still
 resolving `~/.codex/skills` correctly in live and sandbox scans.
 
+### Compatibility Directories
+
+`compatibleGlobalSkillsDirs` adds to the list of global directories Skill Index
+will scan when those directories exist. It does not make skills found there
+canonical. Compatibility directories are readable inventory inputs, not
+Universal sources.
+
+A real skill package that exists only in a compatibility directory is reported
+as missing Universal, not healthy. Once the skill has a Universal package, the
+healthy state expects compatible copies to be symlinks to Universal.
+
+Resolution can manage writable compatibility directories that already contain
+affected skills. For example, resolving a skill found only in `~/.claude/skills`
+can copy the selected package into `~/.agents/skills` and replace the Claude copy
+with a symlink back to Universal.
+
+Adding a new skill does not proactively write to every compatibility directory.
+New skills are written to Universal first, then linked into installed agents'
+primary skill locations. Compatibility directories primarily make existing
+agent-readable skills visible to inventory and repair.
+
+`compatibleProjectSkillsDirs` documents project-level compatibility paths, but
+the current skill inventory scan creates sources from global compatibility
+directories only.
+
 ## MCP Metadata
 
 MCP catalog metadata has two separate concerns:
