@@ -75,7 +75,7 @@ describe('agent catalog skill directory facts', () => {
       defaultProjectSkillsDir: '.agents/skills',
       defaultGlobalSkillsDir: '~/.agents/skills',
       nativeGlobalSkillsDir: '~/.agents/skills',
-      compatibleGlobalSkillsDirs: ['~/.agents/skills'],
+      compatibleGlobalSkillsDirs: arrayContaining(['~/.agents/skills', '~/.claude/skills']),
       compatibleProjectSkillsDirs: ['.claude/skills'],
       subagentGlobalDirRelativeParts: ['.dbt', 'wizard', 'agents'],
       subagentProjectDir: '.dbt/wizard/agents',

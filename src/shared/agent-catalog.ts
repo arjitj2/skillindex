@@ -735,6 +735,9 @@ export const AGENT_CATALOG = [
     aliases: ['wizard'],
     defaultProjectSkillsDir: '.agents/skills',
     defaultGlobalSkillsDir: CANONICAL_USER_SKILLS_DISPLAY_PATH,
+    compatibleGlobalSkillsDirs: [
+      '~/.claude/skills',
+    ],
     compatibleProjectSkillsDirs: ['.claude/skills'],
     resolveLiveSkillsDir: resolveHomePath('.agents', 'skills'),
     detectInstalled: detectHomeInstall('.dbt', 'wizard'),

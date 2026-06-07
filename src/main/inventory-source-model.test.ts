@@ -196,10 +196,15 @@ describe('buildRegisteredInventorySources', () => {
 
     expect(sources.map((source) => source.id)).toEqual([
       'sandbox-agents',
+      'sandbox-claude',
       'live-agents',
+      'live-claude',
       'sandbox-plugin-pack',
     ]);
-    expect(sources.some((source) => source.skillsDir.includes('/.claude/skills'))).toBe(false);
+    expect(sources.find((source) => source.id === 'sandbox-claude')).toMatchObject({
+      skillsDir: '/tmp/skillindex-data/sandbox/.claude/skills',
+      compatibleAgentFamilies: ['dbt-wizard'],
+    });
 
     const agents = await buildInventoryAgents({
       paths,
