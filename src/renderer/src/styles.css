@@ -2044,9 +2044,22 @@ body {
   color: var(--text-primary);
 }
 
-.agent-location-path--account-managed {
+.agent-location-path:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid color-mix(in srgb, var(--action) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.agent-location-note {
   color: var(--text-muted);
   font-style: italic;
+}
+
+.agent-location-tooltip {
+  max-width: min(560px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-weight: 500;
 }
 
 .not-installed-agent-row {

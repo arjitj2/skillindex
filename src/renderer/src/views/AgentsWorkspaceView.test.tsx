@@ -65,6 +65,7 @@ describe('AgentsWorkspaceView', () => {
       installState: 'not-installed',
       defaultHomeDir: '~/.adal',
       defaultGlobalSkillsDir: '~/.config/agents/skills',
+      skillsLocation: createAvailableLocation('~/.config/agents/skills'),
       mcpConfigLocation: {
         state: 'available',
         exists: false,
@@ -95,8 +96,9 @@ describe('AgentsWorkspaceView', () => {
     expect(screen.getByRole('button', { name: 'All2' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Installed1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not installed1' })).toBeInTheDocument();
-    expect(screen.getAllByText('Skills source')).toHaveLength(2);
-    expect(screen.getAllByText('MCP / config')).toHaveLength(2);
+    expect(screen.getAllByText('Primary Skills Directory')).toHaveLength(2);
+    expect(screen.getAllByText('Primary MCP Definition')).toHaveLength(2);
+    expect(screen.getAllByText('Primary Subagents Directory')).toHaveLength(2);
     expect(screen.queryByText('Installed agents on this machine.')).not.toBeInTheDocument();
     expect(screen.queryByText('Detected in the registry but not on this machine.')).not.toBeInTheDocument();
 
@@ -104,8 +106,8 @@ describe('AgentsWorkspaceView', () => {
     expect(missingRow).not.toBeNull();
     expect(within(missingRow as HTMLElement).getByText('~/.config/agents/skills')).toBeInTheDocument();
     expect(within(missingRow as HTMLElement).getByText('~/.config/agents/mcp.json')).toBeInTheDocument();
-    expect(within(missingRow as HTMLElement).queryByText('Skills source')).not.toBeInTheDocument();
-    expect(within(missingRow as HTMLElement).queryByText('MCP / config')).not.toBeInTheDocument();
+    expect(within(missingRow as HTMLElement).queryByText('Primary Skills Directory')).not.toBeInTheDocument();
+    expect(within(missingRow as HTMLElement).queryByText('Primary MCP Definition')).not.toBeInTheDocument();
     expect(within(missingRow as HTMLElement).queryByText('Not installed')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Not installed1' }));
@@ -146,14 +148,77 @@ describe('AgentsWorkspaceView', () => {
 
     const installedRow = container.querySelector('.agent-status-row');
     expect(installedRow).not.toBeNull();
-    expect(within(installedRow as HTMLElement).getByText('Cloud account managed')).toHaveClass(
-      'agent-location-path--account-managed',
-    );
+    const accountManagedNote = within(installedRow as HTMLElement).getByText('Cloud account managed');
+    expect(accountManagedNote).toHaveClass('agent-location-note');
     expect(within(installedRow as HTMLElement).queryByText('No local skills folder to install into')).not.toBeInTheDocument();
-    expect(within(installedRow as HTMLElement).getByTitle(
+    fireEvent.mouseEnter(accountManagedNote);
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
       "Skills are managed through this agent's cloud account; Skill Index cannot scan or install local skill files for it.",
-    )).toBeInTheDocument();
+    );
+    fireEvent.mouseLeave(accountManagedNote);
     expect(within(installedRow as HTMLElement).queryByText('claude.ai Customize > Skills')).not.toBeInTheDocument();
+  });
+
+  it('shows resolved sandbox skills paths and exposes full paths in hover tooltips', () => {
+    const installedAgent = createAgent({
+      defaultGlobalSkillsDir: '~/.agents/skills',
+      skillsLocation: {
+        state: 'available',
+        exists: true,
+        path: '/tmp/skillindex-data/sandbox/.agents/skills',
+        displayPath: '/tmp/skillindex-data/sandbox/.agents/skills',
+      },
+      mcpConfigLocation: {
+        state: 'available',
+        exists: true,
+        path: '/tmp/skillindex-data/sandbox/.codex/config.toml',
+        displayPath: '/tmp/skillindex-data/sandbox/.codex/config.toml',
+      },
+      subagentsLocation: {
+        state: 'available',
+        exists: true,
+        path: '/tmp/skillindex-data/sandbox/.agents/agents',
+        displayPath: '/tmp/skillindex-data/sandbox/.agents/agents',
+      },
+    });
+
+    const { container } = renderAgentsView([installedAgent]);
+
+    const installedRow = container.querySelector('.agent-status-row');
+    expect(installedRow).not.toBeNull();
+    const skillsPath = within(installedRow as HTMLElement).getByText('/tmp/skillindex-data/sandbox/.agents/skills');
+    fireEvent.mouseEnter(skillsPath);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('/tmp/skillindex-data/sandbox/.agents/skills');
+    fireEvent.mouseLeave(skillsPath);
+    expect(within(installedRow as HTMLElement).queryByText('~/.agents/skills')).not.toBeInTheDocument();
+  });
+
+  it('italicizes non-path location notes and uses no known support instead of a dash', () => {
+    const installedAgent = createAgent({
+      mcpConfigLocation: {
+        state: 'unavailable',
+        exists: false,
+        reason: 'not-supported',
+      },
+      configLocation: {
+        state: 'unavailable',
+        exists: false,
+        reason: 'not-supported',
+      },
+      subagentsLocation: {
+        state: 'unavailable',
+        exists: false,
+        reason: 'account-managed',
+      },
+    });
+
+    const { container } = renderAgentsView([installedAgent]);
+
+    const installedRow = container.querySelector('.agent-status-row');
+    expect(installedRow).not.toBeNull();
+    expect(within(installedRow as HTMLElement).getByText('No known support')).toHaveClass('agent-location-note');
+    expect(within(installedRow as HTMLElement).getByText('Cloud account managed')).toHaveClass('agent-location-note');
+    expect(within(installedRow as HTMLElement).queryByText('-')).not.toBeInTheDocument();
   });
 
   it('renders a real icon image when the agent provides a usable image asset', () => {

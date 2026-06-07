@@ -1594,8 +1594,9 @@ describe('App shell inventory views', () => {
 
     expect(within(list).getByText('INSTALLED')).toBeInTheDocument();
     expect(within(list).getByText('NOT INSTALLED')).toBeInTheDocument();
-    expect(within(list).getAllByText('Skills source')).toHaveLength(2);
-    expect(within(list).getAllByText('MCP / config')).toHaveLength(2);
+    expect(within(list).getAllByText('Primary Skills Directory')).toHaveLength(2);
+    expect(within(list).getAllByText('Primary MCP Definition')).toHaveLength(2);
+    expect(within(list).getAllByText('Primary Subagents Directory')).toHaveLength(2);
     expect(within(list).getByText('Codex')).toBeInTheDocument();
     expect(within(list).getByText('Claude Code')).toBeInTheDocument();
     expect(within(list).getByText('Claude Desktop')).toBeInTheDocument();
@@ -1603,13 +1604,13 @@ describe('App shell inventory views', () => {
     expect(within(list).getByText('Factory')).toBeInTheDocument();
     expect(within(list).getByText('OpenCode')).toBeInTheDocument();
     expect(within(list).getByText('Windsurf')).toBeInTheDocument();
-    expect(within(getAgentRow('Codex')).getByText('~/.agents/skills')).toBeInTheDocument();
-    expect(within(getAgentRow('Claude Code')).getByText('~/.claude/skills')).toBeInTheDocument();
+    expect(within(getAgentRow('Codex')).getByText('~/.skillindex/sandbox/.agents/skills')).toBeInTheDocument();
+    expect(within(getAgentRow('Claude Code')).getByText('~/.skillindex/sandbox/.claude/skills')).toBeInTheDocument();
     expect(within(getAgentRow('Claude Desktop')).getByText('Cloud account managed')).toBeInTheDocument();
     expect(within(getAgentRow('Claude Desktop')).queryByText('No local skills folder to install into')).not.toBeInTheDocument();
     expect(within(getAgentRow('Claude Desktop')).getByText('~/.skillindex/sandbox/Library/Application Support/Claude/claude_desktop_config.json')).toBeInTheDocument();
-    expect(within(getAgentRow('OpenCode')).getByText('~/.agents/skills')).toBeInTheDocument();
-    expect(within(getAgentRow('Windsurf')).getByText('~/.codeium/windsurf/skills')).toBeInTheDocument();
+    expect(within(getAgentRow('OpenCode')).getByText('~/.skillindex/sandbox/.agents/skills')).toBeInTheDocument();
+    expect(within(getAgentRow('Windsurf')).getByText('~/.skillindex/sandbox/.codeium/windsurf/skills')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Not installed/i }));
     expect(getAgentDataRows()).toHaveLength(AGENT_CATALOG.length - 4);
