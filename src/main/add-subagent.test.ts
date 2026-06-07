@@ -20,6 +20,7 @@ describe('addSubagent', () => {
     await Promise.all([
       mkdir(path.join(paths.sandboxRoot, '.claude'), { recursive: true }),
       mkdir(path.join(paths.sandboxRoot, '.codex'), { recursive: true }),
+      mkdir(path.join(paths.sandboxRoot, '.dbt', 'wizard'), { recursive: true }),
       mkdir(path.join(paths.sandboxRoot, '.factory'), { recursive: true }),
     ]);
 
@@ -38,13 +39,16 @@ describe('addSubagent', () => {
     const canonicalPath = path.join(paths.sandboxRoot, '.agents', 'agents', 'reviewer.md');
     const claudePath = path.join(paths.sandboxRoot, '.claude', 'agents', 'reviewer.md');
     const codexPath = path.join(paths.sandboxRoot, '.codex', 'agents', 'reviewer.toml');
+    const dbtWizardPath = path.join(paths.sandboxRoot, '.dbt', 'wizard', 'agents', 'reviewer.toml');
     const factoryPath = path.join(paths.sandboxRoot, '.factory', 'droids', 'reviewer.md');
 
     await expect(readFile(canonicalPath, 'utf8')).resolves.toContain('description: "Reviews implementation changes."');
     await expect(readlink(claudePath)).resolves.toBe(canonicalPath);
     await expect(readlink(factoryPath)).resolves.toBe(canonicalPath);
     await expect(readFile(codexPath, 'utf8')).resolves.toContain('developer_instructions = "Review the diff and call out correctness risks."');
+    await expect(readFile(dbtWizardPath, 'utf8')).resolves.toContain('developer_instructions = "Review the diff and call out correctness risks."');
     expect((await lstat(codexPath)).isFile()).toBe(true);
+    expect((await lstat(dbtWizardPath)).isFile()).toBe(true);
     expect(snapshot.subagents?.some((subagent) => subagent.name === 'reviewer')).toBe(true);
   });
 

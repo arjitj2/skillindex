@@ -69,6 +69,25 @@ describe('agent catalog skill directory facts', () => {
       mcpParserKind: 'jsonc-mcpServers',
       mcpWriteDialect: 'json-url',
     });
+    expect(getAgentCatalogEntry('dbt-wizard')).toMatchObject({
+      label: 'dbt Wizard',
+      aliases: ['wizard'],
+      defaultProjectSkillsDir: '.agents/skills',
+      defaultGlobalSkillsDir: '~/.agents/skills',
+      nativeGlobalSkillsDir: '~/.agents/skills',
+      compatibleGlobalSkillsDirs: arrayContaining(['~/.agents/skills', '~/.claude/skills']),
+      compatibleProjectSkillsDirs: ['.claude/skills'],
+      subagentGlobalDirRelativeParts: ['.dbt', 'wizard', 'agents'],
+      subagentProjectDir: '.dbt/wizard/agents',
+      subagentConfigKind: 'directory',
+      subagentParserKind: 'codex-toml',
+      subagentWriteDialect: 'codex-toml',
+      mcpConfigRelativeParts: ['.dbt', 'wizard', 'config.toml'],
+      mcpConfigKind: 'agent-config',
+      mcpParserKind: 'toml',
+      mcpWriteDialect: 'toml-codex',
+      mcpSupportedTransports: ['stdio', 'streamable-http'],
+    });
     expect(getAgentCatalogEntry('gemini-cli')).toMatchObject({
       mcpParserKind: 'json-mcpServers',
       mcpWriteDialect: 'json-http-url',

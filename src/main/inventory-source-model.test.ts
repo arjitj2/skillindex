@@ -176,6 +176,92 @@ describe('buildRegisteredInventorySources', () => {
     expect(sources.find((source) => source.id === 'sandbox-agents')?.ignoredSkillSubpaths).toBeUndefined();
   });
 
+  it('models dbt Wizard shared skills, custom agents, and MCP config paths', async () => {
+    const paths = resolveSkillIndexPaths({
+      homeDir: '/Users/tester',
+      env: {
+        SKILL_INDEX_DATA_DIR: '/tmp/skillindex-data',
+      },
+    });
+
+    const sources = buildRegisteredInventorySources({
+      paths,
+      homeDir: '/Users/tester',
+      includeSandboxSources: true,
+      includeLiveSources: true,
+      env: {
+        SKILL_INDEX_AGENT_SUBSET: 'wizard',
+      },
+    });
+
+    expect(sources.map((source) => source.id)).toEqual([
+      'sandbox-agents',
+      'sandbox-claude',
+      'live-agents',
+      'live-claude',
+      'sandbox-plugin-pack',
+    ]);
+    expect(sources.find((source) => source.id === 'sandbox-claude')).toMatchObject({
+      skillsDir: '/tmp/skillindex-data/sandbox/.claude/skills',
+      compatibleAgentFamilies: ['dbt-wizard'],
+    });
+
+    const agents = await buildInventoryAgents({
+      paths,
+      homeDir: '/Users/tester',
+      includeSandboxSources: true,
+      includeLiveSources: true,
+      env: {
+        SKILL_INDEX_AGENT_SUBSET: 'wizard',
+      },
+    });
+
+    expect(agents.map((agent) => agent.id)).toEqual(['sandbox-dbt-wizard', 'live-dbt-wizard']);
+    expect(agents.find((agent) => agent.id === 'sandbox-dbt-wizard')).toMatchObject({
+      label: 'dbt Wizard',
+      installState: 'not-installed',
+      defaultProjectSkillsDir: '.agents/skills',
+      defaultGlobalSkillsDir: '~/.agents/skills',
+      defaultHomeDir: '~/.agents',
+      skillsLocation: {
+        state: 'available',
+        path: '/tmp/skillindex-data/sandbox/.agents/skills',
+        exists: false,
+      },
+      subagentsLocation: {
+        state: 'available',
+        path: '/tmp/skillindex-data/sandbox/.dbt/wizard/agents',
+        exists: false,
+      },
+      mcpConfigLocation: {
+        state: 'available',
+        path: '/tmp/skillindex-data/sandbox/.dbt/wizard/config.toml',
+        exists: false,
+      },
+      configLocation: {
+        state: 'available',
+        path: '/tmp/skillindex-data/sandbox/.dbt/wizard/config.toml',
+        exists: false,
+      },
+      executableLocation: {
+        state: 'available',
+        path: '/tmp/skillindex-data/sandbox/bin/wizard',
+        exists: false,
+      },
+    });
+    expect(agents.find((agent) => agent.id === 'live-dbt-wizard')).toMatchObject({
+      skillsLocation: {
+        path: '/Users/tester/.agents/skills',
+      },
+      subagentsLocation: {
+        path: '/Users/tester/.dbt/wizard/agents',
+      },
+      mcpConfigLocation: {
+        path: '/Users/tester/.dbt/wizard/config.toml',
+      },
+    });
+  });
+
   it('exposes supported agents with install state plus skills and MCP config locations', async () => {
     const paths = resolveSkillIndexPaths({
       homeDir: '/Users/tester',
