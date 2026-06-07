@@ -343,7 +343,7 @@ describe('App shell inventory views', () => {
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: /^How it fits together$/i, level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/Organize and standardize your knowledge across agents/i)).toBeInTheDocument();
+    expect(screen.getByText(/Keep your AI setup aligned across every agent/i)).toBeInTheDocument();
     expect(screen.getByText('~/.agents/skills')).toBeInTheDocument();
 
     await waitFor(() => {
