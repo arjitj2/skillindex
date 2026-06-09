@@ -925,7 +925,7 @@ async function readCacheSkillDriftRecords(cacheFile: string): Promise<Map<string
 
     skills.set(skill.name, {
       name: skill.name,
-      structuralState: typeof skill.structuralState === 'string' ? skill.structuralState as CacheSkillDriftRecord['structuralState'] : undefined,
+      structuralState: typeof skill.structuralState === 'string' ? skill.structuralState : undefined,
       driftPresentation: isSkillDriftPresentation(skill.driftPresentation) ? skill.driftPresentation : undefined,
       issueReasons: getStringArray(skill.issueReasons),
       driftSignature: typeof skill.driftSignature === 'string' ? skill.driftSignature : undefined,

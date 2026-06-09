@@ -214,7 +214,7 @@ describe('settings state custom scan paths', () => {
       env,
       includeSandboxSources: true,
       includeLiveSources: false,
-    } as Parameters<typeof addCustomScanPath>[1])).resolves.toEqual({
+    })).resolves.toEqual({
       customScanPaths: [customSkillsDir],
       onboardingCompletedAt: null,
       preferredCanonicalSourcePath: null,
@@ -225,7 +225,7 @@ describe('settings state custom scan paths', () => {
       env,
       includeSandboxSources: true,
       includeLiveSources: false,
-    } as Parameters<typeof readSettingsState>[0])).resolves.toEqual({
+    })).resolves.toEqual({
       customScanPaths: [customSkillsDir],
       onboardingCompletedAt: null,
       preferredCanonicalSourcePath: null,

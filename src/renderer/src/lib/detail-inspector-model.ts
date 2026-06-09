@@ -690,7 +690,7 @@ function buildSkillVariantProblem(
     changedFiles: diffInventory.changedFiles.map((file): InspectorChangedFileModel => ({
       path: file.relativePath,
       absolutePath: resolveSkillPackageDiffPath(file.relativePath, file, selectedVariant, baselineVariant),
-      status: file.status as InspectorChangedFileModel['status'],
+      status: file.status,
       displayKind: getInspectorChangedFileDisplayKind(file),
       hasInlineDiff: Array.isArray(file.lines) && file.lines.length > 0,
       diffLines: file.lines ?? [],
