@@ -22,7 +22,7 @@ describe('DetailInspectorPanel', () => {
       configurable: true,
       value: {
         openPathInEditor: openPathInEditorMock,
-      } as Pick<SkillIndexDesktopApi, 'openPathInEditor'> as SkillIndexDesktopApi,
+      },
       writable: true,
     });
   });

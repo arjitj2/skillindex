@@ -147,7 +147,7 @@ function createAutoUpdaterListenerRegistry() {
 
   return {
     get<Event extends AutoUpdaterEvent>(event: Event): AutoUpdaterEventMap[Event] | undefined {
-      return listeners[event] as AutoUpdaterEventMap[Event] | undefined;
+      return listeners[event];
     },
     set<Event extends AutoUpdaterEvent>(event: Event, listener: AutoUpdaterEventMap[Event]): void {
       listeners[event] = listener;

@@ -293,7 +293,7 @@ async function readPluginManifest(manifestPath: string): Promise<PluginManifest>
   try {
     const raw = await readFile(manifestPath, 'utf8');
     const parsed = JSON.parse(sanitizeJsonc(raw)) as unknown;
-    return isRecord(parsed) ? parsed as PluginManifest : {};
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -437,7 +437,7 @@ async function readMarketplaceEntries(marketplacePath: string): Promise<PluginMa
       return [];
     }
 
-    return parsed.plugins.filter(isRecord) as PluginMarketplaceEntry[];
+    return parsed.plugins.filter(isRecord);
   } catch {
     return [];
   }

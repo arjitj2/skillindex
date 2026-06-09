@@ -120,7 +120,7 @@ describe('AgentsWorkspaceView', () => {
       mcpConfigLocation: {
         ...createAvailableLocation('/Users/tester/.claude.json'),
         displayPath: '~/.claude.json',
-      } as AgentLocationRecord,
+      },
     });
 
     const { container } = renderAgentsView([installedAgent]);
