@@ -326,7 +326,7 @@ export function buildSkillInspectorModel(
       key,
       label: formatSkillIssueReason(key),
       detail: getSkillProblemDetail(skill, key),
-      summary: getSkillProblemSummary(skill, key),
+      summary: getSkillProblemSummary(skill, key, sourceIndex),
       isActive: key === activeProblem.key,
     })),
     problemSections: buildProblemSections(problemKeys),
@@ -458,7 +458,7 @@ function buildSkillProblemModel(
         title: formatSkillIssueReason(problemKey),
         listTitle: 'Matching Copies',
         items: skill.detailDiagnostics.duplicateCandidates
-          .filter((candidate) => candidate.fileType === 'real-file' && !candidate.canonical)
+          .filter((candidate) => isActionableIdenticalSkillDuplicateCandidate(candidate, sourceIndex))
           .sort(compareNewestCandidate)
           .map((candidate) => ({
             id: candidate.path,
@@ -612,7 +612,17 @@ function isWritableNonPluginLocation(
   sourceIndex: Map<string, SkillScanSource>,
 ): boolean {
   const source = sourceIndex.get(location.sourceId);
-  return source?.writable === true && source.kind !== 'plugin';
+  return location.provenance?.kind !== 'plugin'
+    && (location.mutability === 'writable' || (source?.writable === true && source.kind !== 'plugin'));
+}
+
+function isActionableIdenticalSkillDuplicateCandidate(
+  candidate: SkillDuplicateCandidate,
+  sourceIndex: Map<string, SkillScanSource>,
+): boolean {
+  return candidate.fileType === 'real-file'
+    && !candidate.canonical
+    && isWritableNonPluginLocation(candidate, sourceIndex);
 }
 
 function formatUseAsUniversalSummary({
@@ -1188,7 +1198,11 @@ function getSkillProblemKeys(skill: SkillRecord): SkillIssueReason[] {
   return keys;
 }
 
-function getSkillProblemSummary(skill: SkillRecord, key: SkillIssueReason): string {
+function getSkillProblemSummary(
+  skill: SkillRecord,
+  key: SkillIssueReason,
+  sourceIndex: Map<string, SkillScanSource>,
+): string {
   switch (key) {
     case 'diverged-copies': {
       const groupedCount = groupSkillVariants(skill.detailDiagnostics.duplicateCandidates).length;
@@ -1198,7 +1212,8 @@ function getSkillProblemSummary(skill: SkillRecord, key: SkillIssueReason): stri
     case 'missing-canonical':
       return '1 issue';
     case 'identical-copies': {
-      const count = skill.detailDiagnostics.duplicateCandidates.filter((candidate) => candidate.fileType === 'real-file' && !candidate.canonical).length;
+      const count = skill.detailDiagnostics.duplicateCandidates
+        .filter((candidate) => isActionableIdenticalSkillDuplicateCandidate(candidate, sourceIndex)).length;
       return `${count} cop${count === 1 ? 'y' : 'ies'}`;
     }
     case 'missing-symlinks': {

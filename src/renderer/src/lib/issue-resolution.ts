@@ -49,6 +49,7 @@ const SUBAGENT_RESOLVABLE_ISSUES = new Set([
   'wrong-symlink-target',
 ] as const);
 const SKILL_UNIVERSAL_TARGET_REQUIRED_REASON = 'Choose a Universal version first. Symlink repairs need a Universal target.';
+const SKILL_NO_WRITABLE_IDENTICAL_COPIES_REASON = 'There are no writable copies to convert.';
 
 export function getSkillResolveActionState(
   skill: SkillRecord,
@@ -84,6 +85,13 @@ export function getSkillResolveActionState(
   if (requiresVariantSelection && !selectedVariantPath) {
     return {
       disabledReason: getSkillMissingUniversalTargetReason(activeProblem.key, hasUniversalRealFile),
+      request: null,
+    };
+  }
+
+  if (activeProblem.key === 'identical-copies' && !hasWritableIdenticalSkillCopyTarget(skill, sourceIndex)) {
+    return {
+      disabledReason: SKILL_NO_WRITABLE_IDENTICAL_COPIES_REASON,
       request: null,
     };
   }
@@ -354,6 +362,19 @@ function hasSubagentLocalExtras(location: { localExtrasKeys?: string[] }): boole
 
 function hasCanonicalRealFile(skill: SkillRecord): boolean {
   return skill.locations.some((location) => location.canonical && location.fileType === 'real-file');
+}
+
+function hasWritableIdenticalSkillCopyTarget(
+  skill: SkillRecord,
+  sourceIndex: Map<string, SkillScanSource>,
+): boolean {
+  return skill.locations.some((location) => {
+    const source = sourceIndex.get(location.sourceId);
+    return location.fileType === 'real-file'
+      && !location.canonical
+      && location.provenance?.kind !== 'plugin'
+      && (location.mutability === 'writable' || (source?.writable === true && source.kind !== 'plugin'));
+  });
 }
 
 function getSkillMissingUniversalTargetReason(
