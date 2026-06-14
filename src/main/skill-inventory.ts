@@ -1839,12 +1839,19 @@ function getSkillIssueReasons({
       getSkillComparisonContentHash(location, usePluginMirrorComparison)));
     if (contentHashes.size > 1) {
       reasons.add('diverged-copies');
-    } else if (!usePluginMirrorComparison) {
+    } else if (!usePluginMirrorComparison && realFileLocations.some(isActionableIdenticalSkillCopyTarget)) {
       reasons.add('identical-copies');
     }
   }
 
   return [...reasons].sort(compareSkillIssueReasons);
+}
+
+function isActionableIdenticalSkillCopyTarget(location: SkillLocationRecord): boolean {
+  return location.fileType === 'real-file'
+    && !location.canonical
+    && location.mutability === 'writable'
+    && location.provenance?.kind !== 'plugin';
 }
 
 function isCrossHostPluginMirror(locations: SkillLocationRecord[]): boolean {

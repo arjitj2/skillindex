@@ -1991,6 +1991,7 @@ async function writeSandboxClaudePluginState(sandboxRoot: string): Promise<void>
       enabledPlugins: {
         'sandbox-plugin-pack': true,
         'example-workflow-kit@sandbox-gallery': true,
+        'version-shadow-kit@sandbox-gallery': true,
         'alloy-kit@sandbox-gallery': true,
         'data-lens@sandbox-gallery': false,
       },
@@ -2019,6 +2020,8 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
   const dataLensRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'data-lens', '0.8.0');
   const relayHubRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'relay-hub', '3.2.0');
   const alloyKitRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'alloy-kit', '1.1.0');
+  const versionShadowOldRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'version-shadow-kit', '1.0.0');
+  const versionShadowNewRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'version-shadow-kit', '1.1.0');
   const signalMapServerPath = path.join(signalToolsRoot, 'servers', 'signal-map.js');
   const relayHubServerPath = path.join(relayHubRoot, 'servers', 'relay-hub.js');
   const alloyPlannerServerPath = path.join(alloyKitRoot, 'servers', 'alloy-planner.js');
@@ -2136,6 +2139,12 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
     title: 'Alloy planner',
     bodyLines: ['Plan a composite workflow across every plugin asset type.'],
   });
+  const cacheShadowSkill = buildSkillMarkdown({
+    skillName: 'cache-shadow',
+    description: 'Identical skill content cached in two plugin versions.',
+    title: 'Cache shadow',
+    bodyLines: ['Two read-only plugin cache versions should not create copy-conversion work.'],
+  });
 
   await Promise.all([
     writePluginManifest(path.join(codexRoot, '.codex-plugin', 'plugin.json'), 'example-workflow-kit'),
@@ -2205,6 +2214,10 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
     }),
     writeFileWithParents(alloyPlannerServerPath, buildSandboxMcpServerScript('alloy-planner')),
     writePluginHooks(path.join(alloyKitRoot, 'hooks', 'hooks.json'), ['Notification', 'Stop']),
+    writePluginManifest(path.join(versionShadowOldRoot, '.claude-plugin', 'plugin.json'), 'version-shadow-kit', '1.0.0'),
+    writePluginManifest(path.join(versionShadowNewRoot, '.claude-plugin', 'plugin.json'), 'version-shadow-kit', '1.1.0'),
+    writeFileWithParents(path.join(versionShadowOldRoot, 'skills', 'cache-shadow', 'SKILL.md'), cacheShadowSkill),
+    writeFileWithParents(path.join(versionShadowNewRoot, 'skills', 'cache-shadow', 'SKILL.md'), cacheShadowSkill),
   ]);
 }
 

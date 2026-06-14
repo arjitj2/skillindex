@@ -711,6 +711,56 @@ describe('resolveInventoryIssue', () => {
     expect(resolvedSkill?.issueReasons).toEqual(['missing-symlinks']);
   });
 
+  it('rejects stale identical skill copy repairs for plugin cache copies with no writable targets', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-identical-no-targets-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: dataDir,
+      },
+      homeDir,
+    });
+    const firstPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const secondPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+    const pluginSkillContent = [
+      '---',
+      'name: foo',
+      'description: Plugin foo.',
+      '---',
+      '',
+      '# Foo',
+      'Plugin content shared by two cached versions.',
+      '',
+    ].join('\n');
+
+    for (const [pluginRoot, version] of [[firstPluginRoot, '1.0.0'], [secondPluginRoot, '1.1.0']] as const) {
+      await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+      await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
+        name: 'tools',
+        version,
+      }, null, 2), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills', 'foo', 'SKILL.md'), pluginSkillContent);
+    }
+    await mkdir(path.join(homeDir, '.agents', 'skills'), { recursive: true });
+    await mkdir(path.join(homeDir, '.factory'), { recursive: true });
+    await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
+
+    await expect(resolveInventoryIssue(
+      {
+        entity: 'skill',
+        issue: 'identical-copies',
+        skillName: 'tools:foo',
+      },
+      {
+        paths,
+        homeDir,
+        includeLiveSources: true,
+        includeSandboxSources: false,
+      },
+    )).rejects.toThrow('Skill "tools:foo" no longer has Identical Copies.');
+  });
+
   it('repairs identical skill copies without repairing broken existing symlinks', async () => {
     const paths = await createPaths('skillindex-resolve-');
     await seedRepresentativeFixtures({ paths });
