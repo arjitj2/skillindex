@@ -335,8 +335,12 @@ async function resolveSkillIssueIfCurrent(
         .filter((location) =>
           location.fileType === 'real-file'
           && location.path !== canonicalPath
-          && location.provenance?.kind !== 'plugin')
+          && location.provenance?.kind !== 'plugin'
+          && location.mutability === 'writable')
         .map((location) => location.path);
+      if (duplicatePaths.length === 0) {
+        throw new Error(`Skill "${request.skillName}" has no writable copies to convert.`);
+      }
       await Promise.all(dedupeNormalizedPaths(duplicatePaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
       await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
       return;

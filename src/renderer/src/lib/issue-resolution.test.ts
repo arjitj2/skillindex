@@ -109,6 +109,109 @@ describe('issue resolution request builder', () => {
     expect(getAutoResolvableSkillRequests(snapshot, pluginSourceIndex)).toEqual([]);
   });
 
+  it('does not build an identical-copy repair request when only read-only plugin copies match', () => {
+    const firstPath = '/Users/tester/.claude/plugins/cache/official/tools/1.0.0/skills/foo';
+    const secondPath = '/Users/tester/.claude/plugins/cache/official/tools/1.1.0/skills/foo';
+    const buildPluginLocation = (
+      locationPath: string,
+      sourceId: string,
+      version: string,
+      canonical: boolean,
+    ): SkillRecord['locations'][number] => ({
+      path: locationPath,
+      sourceId,
+      sourceLabel: `Claude Plugin tools ${version}`,
+      sourceScope: 'live',
+      fileType: 'real-file',
+      installKind: 'directory',
+      modifiedAt: '2026-01-08T00:00:00.000Z',
+      canonical,
+      resolvedPath: locationPath,
+      contentHash: 'plugin-foo',
+      provenance: {
+        kind: 'plugin',
+        sourcePath: locationPath,
+        discoveredAt: '2026-01-08T00:00:00.000Z',
+        plugin: {
+          host: 'claude',
+          pluginId: 'tools@official',
+          version,
+        },
+      },
+      mutability: 'read-only-managed',
+    });
+    const firstLocation = buildPluginLocation(firstPath, 'live-plugin-tools-v1', '1.0.0', true);
+    const secondLocation = buildPluginLocation(secondPath, 'live-plugin-tools-v2', '1.1.0', false);
+    const skill: SkillRecord = {
+      name: 'tools:foo',
+      structuralState: 'identical-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['identical-copies'],
+      locations: [firstLocation, secondLocation],
+      detailDiagnostics: {
+        duplicateCandidates: [firstLocation, secondLocation].map((location) => ({
+          ...location,
+          installSource: {
+            sourceId: location.sourceId,
+            label: location.sourceLabel,
+            kind: 'plugin',
+            scope: 'live',
+            writable: false,
+            canonical: true,
+          },
+        })),
+        installSources: [
+          {
+            sourceId: 'live-plugin-tools-v1',
+            label: 'Claude Plugin tools 1.0.0',
+            kind: 'plugin',
+            scope: 'live',
+            writable: false,
+            canonical: true,
+          },
+          {
+            sourceId: 'live-plugin-tools-v2',
+            label: 'Claude Plugin tools 1.1.0',
+            kind: 'plugin',
+            scope: 'live',
+            writable: false,
+            canonical: true,
+          },
+        ],
+        missingInstallSources: [],
+        definitionIssues: [],
+      },
+    };
+    const pluginSourceIndex = new Map(sourceIndex);
+    const dirname = (locationPath: string) => locationPath.slice(0, locationPath.lastIndexOf('/'));
+    for (const source of skill.detailDiagnostics.installSources) {
+      pluginSourceIndex.set(source.sourceId, {
+        id: source.sourceId,
+        label: source.label,
+        canonical: true,
+        kind: 'plugin',
+        writable: false,
+        scope: 'live',
+        skillsDir: dirname(source.sourceId === 'live-plugin-tools-v1' ? firstPath : secondPath),
+        compatibleAgentFamilies: ['claude'],
+      });
+    }
+    const model = buildSkillInspectorModel(skill, pluginSourceIndex, {
+      selectedProblemKey: 'identical-copies',
+      selectedVariantPath: null,
+    }, agentIndex);
+
+    if (model.activeProblem.kind !== 'structural-repair') {
+      throw new Error('Expected identical copies to build a structural repair model.');
+    }
+    expect(model.activeProblem.items).toEqual([]);
+    expect(getSkillResolveActionState(skill, model, pluginSourceIndex)).toEqual({
+      disabledReason: 'There are no writable copies to convert.',
+      request: null,
+    });
+  });
+
   it('keeps wrong symlink target repairs out of Home auto-resolve batches', () => {
     const skill: SkillRecord = {
       name: 'wrong-link-skill',

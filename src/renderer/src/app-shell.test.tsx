@@ -1159,18 +1159,18 @@ describe('App shell inventory views', () => {
     });
 
     await openSkills();
-    fireEvent.click(getSkillRow('identical-drift-skill'));
+    fireEvent.click(getSkillRow('diverged-drift-skill'));
 
-    expect(await screen.findByRole('button', { name: /^Convert Copies to Symlinks$/i })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: /^Use as Universal$/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /^Add Skill$/i })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Convert Copies to Symlinks$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Use as Universal$/i }));
 
     await waitFor(() => {
       expect(makeCanonicalMock).toHaveBeenCalledWith({
         entity: 'skill',
-        issue: 'identical-copies',
-        skillName: 'identical-drift-skill',
+        issue: 'diverged-copies',
+        skillName: 'diverged-drift-skill',
         selectedVariantPath: '/Users/arjitjaiswal/.skillindex/sandbox/.agents',
       });
     });
@@ -2060,6 +2060,7 @@ describe('App shell inventory views', () => {
     fireEvent.click(getSkillRow('healthy-skill'));
 
     expect(await screen.findByRole('heading', { name: 'healthy-skill', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Locations/i }));
     expect(screen.getAllByText('/tmp/skillindex/custom-scan/healthy-skill.md').length).toBeGreaterThan(0);
 
     await openSettings();

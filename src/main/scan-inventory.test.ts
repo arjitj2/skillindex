@@ -743,7 +743,7 @@ describe('representative-agent scan foundation', () => {
 
     expect(seeded.fixtureSet).toBe('representative-agent-scan-foundation');
     expect(seeded.ignoredPaths).toHaveLength(2);
-    expect(inventory.skills).toHaveLength(88);
+    expect(inventory.skills).toHaveLength(89);
     expect(inventory.skills.map((skill) => skill.name)).toEqual(expect.arrayContaining([
       'broken-symlink-skill',
       'double-broken-symlink-skill',
@@ -787,6 +787,7 @@ describe('representative-agent scan foundation', () => {
       'data-lens:data-sketch',
       'alloy-kit:alloy-planner',
       'alloy-kit:release-notes',
+      'version-shadow-kit:cache-shadow',
       'single-source-skill',
       'wrong-symlink-target-skill',
       'representative-healthy-skill-37',
@@ -853,6 +854,13 @@ describe('representative-agent scan foundation', () => {
         bundledMcps: arrayContaining([objectContaining({ name: 'alloyPlanner' })]),
         unsupportedHooksCount: 2,
       }),
+      objectContaining({
+        host: 'claude',
+        pluginId: 'version-shadow-kit@sandbox-gallery',
+        bundledSkills: arrayContaining([objectContaining({ name: 'cache-shadow' })]),
+        bundledMcps: [],
+        unsupportedHooksCount: 0,
+      }),
     ]));
     expect((inventory.plugins ?? []).filter((plugin) => plugin.pluginName === 'example-workflow-kit')
       .map((plugin) => plugin.host).sort()).toEqual(['claude', 'codex']);
@@ -862,9 +870,24 @@ describe('representative-agent scan foundation', () => {
     expect(examplePluginSkill?.issueReasons).toEqual(['missing-symlinks']);
     expect(examplePluginSkill?.locations).toHaveLength(2);
     expect(examplePluginSkill?.locations.map((location) => location.provenance?.plugin?.host).sort()).toEqual(['claude', 'codex']);
-    expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-identical-skill')).toMatchObject({
+    const versionShadowSkill = inventory.skills.find((skill) => skill.name === 'version-shadow-kit:cache-shadow');
+    expect(versionShadowSkill).toMatchObject({
+      structuralState: 'missing-symlinks',
+      isDrifted: true,
+      issueReasons: ['missing-symlinks'],
+    });
+    expect(versionShadowSkill?.locations).toHaveLength(2);
+    expect(versionShadowSkill?.locations
+      .map((location) => location.provenance?.plugin?.version)
+      .sort()).toEqual(['1.0.0', '1.1.0']);
+    expect(versionShadowSkill?.detailDiagnostics.duplicateCandidates).toHaveLength(2);
+    expect(inventory.skills.find((skill) => skill.name === 'mixed-plugin-skill')).toMatchObject({
       structuralState: 'identical-drift',
-      issueReasons: arrayContaining(['identical-copies', 'missing-symlinks']),
+      issueReasons: arrayContaining(['identical-copies']),
+    });
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-identical-skill')).toMatchObject({
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-diverged-skill')).toMatchObject({
       structuralState: 'diverged-drift',
@@ -3550,6 +3573,67 @@ describe('representative-agent scan foundation', () => {
       isDrifted: true,
       issueReasons: ['missing-symlinks'],
     });
+    expect(skill?.detailDiagnostics.missingInstallSources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: 'live-agents', canonical: false, writable: true }),
+      expect.objectContaining({ sourceId: 'live-factory', kind: 'agent', writable: true }),
+    ]));
+  });
+
+  it('does not report identical copies for read-only plugin cache versions with matching content', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-cache-identical-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: dataDir,
+      },
+      homeDir,
+    });
+    const firstPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const secondPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+    const pluginSkillContent = [
+      '---',
+      'name: foo',
+      'description: Plugin foo.',
+      '---',
+      '',
+      '# Foo',
+      'Plugin content shared by two cached versions.',
+      '',
+    ].join('\n');
+
+    for (const [pluginRoot, version] of [[firstPluginRoot, '1.0.0'], [secondPluginRoot, '1.1.0']] as const) {
+      await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+      await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
+        name: 'tools',
+        version,
+      }, null, 2), 'utf8');
+      await writeSkillFile(
+        path.join(pluginRoot, 'skills'),
+        'foo',
+        pluginSkillContent,
+        version === '1.0.0' ? '2026-01-08T00:00:00.000Z' : '2026-01-08T00:01:00.000Z',
+      );
+    }
+    await mkdir(path.join(homeDir, '.agents', 'skills'), { recursive: true });
+    await mkdir(path.join(homeDir, '.factory'), { recursive: true });
+    await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
+
+    const inventory = await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    });
+
+    const skill = inventory.skills.find((entry) => entry.name === 'tools:foo');
+    expect(skill).toMatchObject({
+      structuralState: 'missing-symlinks',
+      isDrifted: true,
+      issueReasons: ['missing-symlinks'],
+    });
+    expect(skill?.issueReasons).not.toContain('identical-copies');
+    expect(skill?.detailDiagnostics.duplicateCandidates).toHaveLength(2);
     expect(skill?.detailDiagnostics.missingInstallSources).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceId: 'live-agents', canonical: false, writable: true }),
       expect.objectContaining({ sourceId: 'live-factory', kind: 'agent', writable: true }),
