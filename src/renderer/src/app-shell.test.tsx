@@ -580,7 +580,7 @@ describe('App shell inventory views', () => {
     expect(progressbar).toHaveAttribute('aria-valuenow', '24');
   });
 
-  it('relaunches automatically once a downloaded update is ready', async () => {
+  it('keeps downloaded updates manual for users who completed onboarding', async () => {
     readUpdateStatusMock.mockResolvedValue({
       downloadProgress: {
         percent: 100,
@@ -606,15 +606,24 @@ describe('App shell inventory views', () => {
       });
     });
 
-    await waitFor(() => {
-      expect(installUpdateMock).toHaveBeenCalledTimes(1);
-    });
-    expect(await screen.findByRole('dialog', { name: /Updating Skill Index/i })).toHaveTextContent(
-      /Relaunching Skill Index/i,
-    );
+    await screen.findByRole('button', { name: /Restart to install Skill Index 0\.2\.0/i });
+    expect(installUpdateMock).not.toHaveBeenCalled();
   });
 
-  it('relaunches automatically when an update is already ready', async () => {
+  it('keeps already-ready updates manual for users who completed onboarding', async () => {
+    readUpdateStatusMock.mockResolvedValue({
+      phase: 'ready',
+      version: '0.2.0',
+      lastCheckedAt: '2026-05-17T00:00:00.000Z',
+    });
+    render(<App />);
+
+    await screen.findByRole('button', { name: /Restart to install Skill Index 0\.2\.0/i });
+    expect(installUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('relaunches automatically when an update is ready before onboarding has completed', async () => {
+    readSettingsMock.mockResolvedValue(createSettingsState([], null, null));
     readUpdateStatusMock.mockResolvedValue({
       phase: 'ready',
       version: '0.2.0',
