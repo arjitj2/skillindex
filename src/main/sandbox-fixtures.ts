@@ -1730,6 +1730,19 @@ async function writeSandboxSubagentFixtures(sandboxRoot: string, agents: AgentRe
       'Reviews implementation changes across supported agents.',
       ['Inspect diffs, note risks, and keep recommendations grounded in repository behavior.'],
     ),
+    writeFileWithParents(
+      canonicalPath('folded-description-subagent'),
+      [
+        '---',
+        'name: folded-description-subagent',
+        'description: >-',
+        '  Code review for a single feature during mission',
+        '  validation. Used only within missions.',
+        '---',
+        'Use this fixture to verify folded descriptions render in list rows.',
+        '',
+      ].join('\n'),
+    ),
     writeMarkdown(
       canonicalPath('missing-from-agents-subagent'),
       'missing-from-agents-subagent',
