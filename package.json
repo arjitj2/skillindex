@@ -1,6 +1,6 @@
 {
   "name": "skillindex",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local macOS app for keeping your AI setup portable, inspectable, and aligned across agents.",
   "author": "Arjit Jaiswal",
   "license": "Apache-2.0",
