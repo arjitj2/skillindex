@@ -18,6 +18,7 @@ import type {
 import type { SkillIndexPaths } from '@shared/skill-index-paths';
 
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
+import { getLeadingWhitespace, parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
 import {
   getRequiredMarkdownSubagentFields,
   getSubagentFileNameForFormat,
@@ -832,8 +833,10 @@ function parseFrontMatter(raw: string): {
     return { body: normalizedContent, fields: {}, malformed: true };
   }
 
+  const frontMatterLines = lines.slice(1, closingIndex);
   const fields: Record<string, unknown> = {};
-  for (const line of lines.slice(1, closingIndex)) {
+  for (let index = 0; index < frontMatterLines.length; index += 1) {
+    const line = frontMatterLines[index] ?? '';
     const match = /^([A-Za-z][A-Za-z0-9_.-]*):(?:\s*(.*))?$/u.exec(line);
     if (!match) {
       continue;
@@ -842,6 +845,14 @@ function parseFrontMatter(raw: string): {
     const key = match[1];
     const rawValue = match[2] ?? '';
     if (key) {
+      const blockScalarHeader = parseYamlBlockScalarHeader(rawValue);
+      if (blockScalarHeader) {
+        const parsed = readYamlBlockScalar(frontMatterLines, index, blockScalarHeader.fold);
+        fields[key] = parsed.value;
+        index = parsed.endIndex;
+        continue;
+      }
+
       fields[key] = parseYamlScalar(rawValue);
     }
   }
@@ -871,8 +882,9 @@ function parseFlatYaml(raw: string): Record<string, unknown> {
     const key = match[1];
     if (key) {
       const rawValue = match[2] ?? '';
-      if (rawValue.trim() === '|' || rawValue.trim() === '>') {
-        const parsed = readYamlBlockScalar(lines, index, rawValue.trim() === '>');
+      const blockScalarHeader = parseYamlBlockScalarHeader(rawValue);
+      if (blockScalarHeader) {
+        const parsed = readYamlBlockScalar(lines, index, blockScalarHeader.fold);
         values[key] = parsed.value;
         index = parsed.endIndex;
         continue;
@@ -892,30 +904,6 @@ function parseFlatYaml(raw: string): Record<string, unknown> {
   }
 
   return values;
-}
-
-function readYamlBlockScalar(
-  lines: string[],
-  startIndex: number,
-  fold: boolean,
-): { value: string; endIndex: number } {
-  const chunks: string[] = [];
-  let endIndex = startIndex;
-  for (let index = startIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
-    if (line.trim().length > 0 && getLeadingWhitespace(line).length === 0) {
-      break;
-    }
-
-    chunks.push(line);
-    endIndex = index;
-  }
-
-  const normalized = trimYamlIndentedBlock(chunks);
-  return {
-    value: fold ? normalized.replace(/\n+/gu, ' ').trim() : normalized,
-    endIndex,
-  };
 }
 
 function readYamlIndentedList(
@@ -946,23 +934,6 @@ function readYamlIndentedList(
   }
 
   return values.length > 0 ? { value: values, endIndex } : null;
-}
-
-function trimYamlIndentedBlock(lines: string[]): string {
-  const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
-  const indent = nonEmptyLines.reduce(
-    (current, line) => Math.min(current, getLeadingWhitespace(line).length),
-    Number.POSITIVE_INFINITY,
-  );
-  const trimLength = Number.isFinite(indent) ? indent : 0;
-  return lines
-    .map((line) => line.slice(trimLength))
-    .join('\n')
-    .replace(/\n+$/u, '');
-}
-
-function getLeadingWhitespace(line: string): string {
-  return /^\s*/u.exec(line)?.[0] ?? '';
 }
 
 function parseFlatToml(raw: string): Record<string, unknown> {

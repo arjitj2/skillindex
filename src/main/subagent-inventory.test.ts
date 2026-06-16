@@ -100,6 +100,29 @@ describe('subagent inventory', () => {
     ]);
   });
 
+  it('reads folded Markdown frontmatter descriptions for subagent rows', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const canonicalPath = path.join(homeDir, '.agents', 'agents', 'scrutiny-feature-reviewer.md');
+
+    await writeRawFile(canonicalPath, [
+      '---',
+      'name: scrutiny-feature-reviewer',
+      'description: >-',
+      '  Code review for a single feature during mission',
+      '  validation. Used only within missions.',
+      '---',
+      'Review the implementation carefully.',
+      '',
+    ].join('\n'));
+
+    const inventory = await scanInventory(scanOptions);
+    const reviewer = inventory.subagents?.find((subagent) => subagent.name === 'scrutiny-feature-reviewer');
+
+    expect(reviewer?.description).toBe('Code review for a single feature during mission validation. Used only within missions.');
+    expect(reviewer?.locations[0]?.description).toBe('Code review for a single feature during mission validation. Used only within missions.');
+    expect(reviewer?.locations[0]?.invalidDetails).toBeUndefined();
+  });
+
   it('repairs subagent drift by symlinking Markdown agents and rendering Codex TOML', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const canonicalPath = path.join(homeDir, '.agents', 'agents', 'planner.md');
@@ -642,6 +665,9 @@ describe('subagent inventory', () => {
     });
     expect(byName.get('missing-universal-claude-subagent')?.issueReasons).toEqual(['missing-universal']);
     expect(byName.get('missing-universal-codex-subagent')?.issueReasons).toEqual(['missing-universal']);
+    expect(byName.get('folded-description-subagent')).toMatchObject({
+      description: 'Code review for a single feature during mission validation. Used only within missions.',
+    });
     expect(byName.get('identical-copies-subagent')?.issueReasons).toEqual(['identical-copies']);
     expect(byName.get('definition-mismatch-subagent')?.issueReasons).toEqual(['definition-mismatch']);
     expect(byName.get('broken-symlink-subagent')?.issueReasons).toEqual(expect.arrayContaining(['broken-symlink']));

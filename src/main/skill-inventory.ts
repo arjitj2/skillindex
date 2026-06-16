@@ -63,6 +63,7 @@ import {
   reconcileCachedMcps,
 } from '@main/mcp-inventory';
 import { applyDismissedSubagentState, countSubagents } from '@main/subagent-inventory';
+import { parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
 
 interface IndexedSkillLocation extends SkillLocationRecord {
   entrypointContent?: string;
@@ -1453,8 +1454,10 @@ function analyzeFrontMatter(content?: string): { parsed: ParsedSkillFrontMatter 
     return { parsed: null, malformed: true };
   }
 
+  const frontMatterLines = lines.slice(1, closingIndex);
   const fields: ParsedSkillFrontMatter = {};
-  for (const line of lines.slice(1, closingIndex)) {
+  for (let index = 0; index < frontMatterLines.length; index += 1) {
+    const line = frontMatterLines[index] ?? '';
     const match = line.match(/^([A-Za-z][A-Za-z0-9-]*):(?:\s*(.*))?$/);
     if (!match) {
       continue;
@@ -1462,6 +1465,14 @@ function analyzeFrontMatter(content?: string): { parsed: ParsedSkillFrontMatter 
 
     const [, rawKey, rawValue = ''] = match;
     if (rawKey === 'name' || rawKey === 'description') {
+      const blockScalarHeader = parseYamlBlockScalarHeader(rawValue);
+      if (blockScalarHeader) {
+        const parsed = readYamlBlockScalar(frontMatterLines, index, blockScalarHeader.fold);
+        fields[rawKey] = parsed.value;
+        index = parsed.endIndex;
+        continue;
+      }
+
       fields[rawKey] = normalizeFrontMatterValue(rawValue);
     }
   }

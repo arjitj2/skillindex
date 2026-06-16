@@ -3199,6 +3199,43 @@ describe('representative-agent scan foundation', () => {
     expect(inventory.skills.find((skill) => skill.name === 'quoted-description-skill')?.description).toBe('Quoted canonical description.');
   });
 
+  it('prefers a folded canonical frontmatter description when building skill rows', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-scan-'));
+    const paths = resolveSkillIndexPaths({
+      env: {
+        SKILL_INDEX_DATA_DIR: root,
+      },
+    });
+
+    await writeSkillFile(
+      paths.sandboxAgentsSkillsDir,
+      'folded-description-skill',
+      [
+        '---',
+        'name: folded-description-skill',
+        'description: >-',
+        '  Build, profile, debug, and refine iOS apps',
+        '  with SwiftUI and Xcode workflows.',
+        '---',
+        '',
+        '# Folded description skill',
+        'Canonical content.',
+        '',
+      ].join('\n'),
+      '2026-01-08T00:00:00.000Z',
+    );
+
+    const inventory = await scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+
+    expect(inventory.skills.find((skill) => skill.name === 'folded-description-skill')?.description).toBe(
+      'Build, profile, debug, and refine iOS apps with SwiftUI and Xcode workflows.',
+    );
+  });
+
   it('uses the frontmatter name as the skill display name and backfills it from legacy cached snapshots', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-scan-'));
     const paths = resolveSkillIndexPaths({
