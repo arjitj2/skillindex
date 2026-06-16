@@ -1518,12 +1518,17 @@ export default function App() {
   }, [desktopApi, showErrorToast]);
 
   useEffect(() => {
-    if (autoUpdateStatus.phase !== 'ready' || didRequestUpdateInstallRef.current) {
+    if (
+      !hasLoadedStartupState
+      || settingsState.onboardingCompletedAt !== null
+      || autoUpdateStatus.phase !== 'ready'
+      || didRequestUpdateInstallRef.current
+    ) {
       return;
     }
 
     void handleInstallUpdate();
-  }, [autoUpdateStatus.phase, handleInstallUpdate]);
+  }, [autoUpdateStatus.phase, handleInstallUpdate, hasLoadedStartupState, settingsState.onboardingCompletedAt]);
 
   useEffect(() => {
     if (autoUpdateStatus.phase === 'downloading' || autoUpdateStatus.phase === 'ready') {
