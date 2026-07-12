@@ -8,5 +8,10 @@ overrides:
   vite>esbuild: 0.28.1
 
 allowBuilds:
+  electron: true
   electron-winstaller: false
   esbuild: true
+
+onlyBuiltDependencies:
+  - electron
+  - esbuild
