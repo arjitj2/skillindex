@@ -58,5 +58,19 @@
   "engines": {
     "node": "^20.19.0 || ^22.13.0 || >=24",
     "pnpm": ">=10.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "body-parser": "2.3.0",
+      "fast-uri": "3.1.2",
+      "hono": "4.12.25",
+      "ip-address": "10.2.0",
+      "js-yaml": "4.3.0",
+      "postcss": "8.5.14",
+      "tar": "7.5.20",
+      "tmp": "0.2.7",
+      "electron-vite>esbuild": "0.28.1",
+      "vite>esbuild": "0.28.1"
+    }
   }
 }
