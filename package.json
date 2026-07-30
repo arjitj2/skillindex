@@ -44,6 +44,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "electron": "^43.1.1",
     "electron-builder": "^26.15.3",
+    "electron-builder-squirrel-windows": "26.15.3",
     "electron-vite": "^4.0.0",
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
