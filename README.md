@@ -95,7 +95,7 @@ Windows and Linux support are planned, but the current release path is macOS.
 
 Requirements:
 
-- Node `^20.19.0 || ^22.13.0 || >=24`
+- Node `^22.13.0 || >=24`
 - pnpm `>=10`
 - macOS for the desktop app and packaged builds
 
