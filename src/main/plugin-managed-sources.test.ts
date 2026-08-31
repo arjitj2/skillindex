@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -112,12 +112,26 @@ describe('plugin managed sources', () => {
     expect(isPluginManagedTarget('/cache/tools/skills', [{ kind: 'agent', skillsDir: '/cache/tools/skills' }])).toBe(false);
   });
 
-  it('rejects a plugin-managed target at the symlink creation boundary', () => {
+  it('rejects a plugin-managed target at the symlink creation boundary', async () => {
     const sources = [{ kind: 'plugin' as const, skillsDir: '/cache/tools/skills' }];
 
-    expect(() => assertSkillSymlinkTargetIsUniversal('/cache/tools/skills/foo', sources))
-      .toThrow(/must target a writable Universal skill package/i);
-    expect(() => assertSkillSymlinkTargetIsUniversal('/home/.agents/skills/foo', sources)).not.toThrow();
+    await expect(assertSkillSymlinkTargetIsUniversal('/cache/tools/skills/foo', sources))
+      .rejects.toThrow(/must target a writable Universal skill package/i);
+    await expect(assertSkillSymlinkTargetIsUniversal('/home/.agents/skills/foo', sources)).resolves.toBeUndefined();
+  });
+
+  it('rejects a Universal path whose existing parent symlinks into a plugin cache', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-managed-target-'));
+    const pluginSkills = path.join(root, 'plugin-cache', 'skills');
+    const universalSkills = path.join(root, '.agents', 'skills');
+    await mkdir(pluginSkills, { recursive: true });
+    await mkdir(path.dirname(universalSkills), { recursive: true });
+    await symlink(pluginSkills, universalSkills);
+
+    await expect(assertSkillSymlinkTargetIsUniversal(path.join(universalSkills, 'foo'), [{
+      kind: 'plugin',
+      skillsDir: pluginSkills,
+    }])).rejects.toThrow(/must target a writable Universal skill package/i);
   });
 
   it('annotates only the greatest comparable version when no candidate is enabled', () => {

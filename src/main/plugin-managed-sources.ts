@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -45,13 +46,53 @@ export function isPluginManagedTarget(
   });
 }
 
-export function assertSkillSymlinkTargetIsUniversal(
+export async function assertSkillSymlinkTargetIsUniversal(
   targetPath: string,
   sources: Array<Pick<SkillScanSource, 'kind' | 'skillsDir'>>,
-): void {
+): Promise<void> {
   if (isPluginManagedTarget(targetPath, sources)) {
     throw new Error('Skill symlinks must target a writable Universal skill package, not a plugin-managed cache path.');
   }
+
+  const resolvedTarget = await resolvePathThroughNearestExistingParent(targetPath);
+  const pluginRoots = await Promise.all(sources
+    .filter((source) => source.kind === 'plugin')
+    .map(async (source) => ({
+      lexical: path.normalize(source.skillsDir),
+      resolved: await resolvePathThroughNearestExistingParent(source.skillsDir),
+    })));
+  if (pluginRoots.some((root) =>
+    isPathContainedBy(root.lexical, resolvedTarget)
+    || isPathContainedBy(root.resolved, resolvedTarget))) {
+    throw new Error('Skill symlinks must target a writable Universal skill package, not a plugin-managed cache path.');
+  }
+}
+
+async function resolvePathThroughNearestExistingParent(targetPath: string): Promise<string> {
+  const normalizedTarget = path.normalize(targetPath);
+  let candidate = normalizedTarget;
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      const resolved = await realpath(candidate);
+      return path.join(resolved, ...missingSegments.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return normalizedTarget;
+      }
+    }
+
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return normalizedTarget;
+    missingSegments.push(path.basename(candidate));
+    candidate = parent;
+  }
+}
+
+function isPathContainedBy(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === ''
+    || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 export function buildPluginManagedSourceCandidate({

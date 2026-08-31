@@ -94,6 +94,7 @@ export async function makeSkillCanonical(
   const canonicalSource = resolveCanonicalSkillSource(beforeSnapshot, mutationScope, undefined, paths);
   const universalTargetPath = canonicalPath;
   const persistedUniversalLocation = createCanonicalDecisionLocation(selectedSource, canonicalPath, canonicalSource);
+  await assertSkillSymlinkTargetIsUniversal(universalTargetPath, beforeSnapshot.sources);
   const shouldLinkMissingAgentInstalls = options.linkMissingAgentInstalls !== false;
   const writableLinkedSkillsDirs = new Set(
     !shouldLinkMissingAgentInstalls
@@ -110,6 +111,7 @@ export async function makeSkillCanonical(
   await materializeCanonicalFile({
     canonicalPath,
     selectedSource,
+    sources: beforeSnapshot.sources,
   });
   await persistSkillUniversalDecisionForSelection(skill, persistedUniversalLocation, {
     ...options,
@@ -185,14 +187,17 @@ function pickSelectedSource({
 async function materializeCanonicalFile({
   canonicalPath,
   selectedSource,
+  sources,
 }: {
   canonicalPath: string;
   selectedSource: SkillLocationRecord;
+  sources: SkillInventorySnapshot['sources'];
 }) {
   if (selectedSource.path === canonicalPath && selectedSource.fileType === 'real-file') {
     return;
   }
 
+  await assertSkillSymlinkTargetIsUniversal(canonicalPath, sources);
   await mkdir(path.dirname(canonicalPath), { recursive: true });
   await rm(canonicalPath, { recursive: true, force: true });
   await cp(selectedSource.path, canonicalPath, {
@@ -207,7 +212,7 @@ async function replaceWithCanonicalSymlink(
   canonicalPath: string,
   snapshot: SkillInventorySnapshot,
 ): Promise<void> {
-  assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
+  await assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
   await mkdir(path.dirname(locationPath), { recursive: true });
   await rm(locationPath, { recursive: true, force: true });
   await symlink(canonicalPath, locationPath);

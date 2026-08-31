@@ -1218,6 +1218,53 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
+  it('does not repair a broken link when the Universal directory is symlinked into a plugin cache', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-target-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '2.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const deletedPluginPath = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0', 'skills', 'foo');
+    const brokenPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '2.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo v2\n');
+    await mkdir(path.join(homeDir, '.agents'), { recursive: true });
+    await symlink(path.join(pluginRoot, 'skills'), path.join(homeDir, '.agents', 'skills'));
+    await mkdir(path.dirname(brokenPath), { recursive: true });
+    await symlink(deletedPluginPath, brokenPath);
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+    const beforeLink = await readlink(brokenPath);
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'broken-symlink',
+      skillName: 'tools:foo',
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/must target a writable Universal skill package/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(brokenPath)).toBe(beforeLink);
+  });
+
   it('preserves unrelated dismissed plugin drift while resolving a broken plugin symlink', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-preserve-dismissal-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
@@ -1982,7 +2029,7 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
-  it('repairs stale plugin cache symlinks to the active plugin root', async () => {
+  it('repairs a deleted plugin-cache symlink by copying a live candidate into Universal without mutating that cache', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-cache-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -2012,15 +2059,8 @@ describe('resolveInventoryIssue', () => {
       '# Foo',
       '',
     ].join('\n'));
-    await writeSkillFile(path.join(oldSkillPath, 'SKILL.md'), [
-      '---',
-      'name: foo',
-      'description: Plugin foo v1.',
-      '---',
-      '',
-      '# Foo',
-      '',
-    ].join('\n'));
+    await expect(lstat(oldSkillPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const beforeLivePlugin = await readFile(path.join(newSkillPath, 'SKILL.md'), 'utf8');
     await mkdir(path.dirname(agentsPath), { recursive: true });
     await symlink(oldSkillPath, agentsPath);
     await mkdir(path.dirname(claudePath), { recursive: true });
@@ -2051,7 +2091,7 @@ describe('resolveInventoryIssue', () => {
     const resolvedSnapshot = await resolveInventoryIssue(
       {
         entity: 'skill',
-        issue: 'wrong-symlink-target',
+        issue: 'broken-symlink',
         skillName: 'tools:foo',
       },
       {
@@ -2063,10 +2103,10 @@ describe('resolveInventoryIssue', () => {
     );
 
     expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo v2.');
+    expect(await readFile(path.join(newSkillPath, 'SKILL.md'), 'utf8')).toBe(beforeLivePlugin);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
+      structuralState: 'missing-symlinks',
+      issueReasons: ['wrong-symlink-target'],
     });
   });
 

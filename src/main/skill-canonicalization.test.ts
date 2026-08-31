@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { makeSkillCanonical } from '@main/skill-canonicalization';
+import { applyCapabilityAction } from '@main/capability-actions';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import { resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
@@ -522,6 +523,50 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(pluginPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
     expect(await readFile(path.join(nextPluginPath, 'SKILL.md'))).toEqual(beforeNextPluginSkill);
     expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
+  });
+
+  it('refuses a Universal directory symlinked into a plugin cache without mutating packages or state', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-target-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await mkdir(path.join(homeDir, '.agents'), { recursive: true });
+    await symlink(path.join(pluginRoot, 'skills'), path.join(homeDir, '.agents', 'skills'));
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName: 'tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/must target a writable Universal skill package/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(path.join(homeDir, '.agents', 'skills'))).toBe(path.join(pluginRoot, 'skills'));
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

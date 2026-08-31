@@ -1197,6 +1197,7 @@ async function ensureCanonicalSkillPackage(
   paths: SkillIndexPaths,
 ): Promise<CanonicalSkillPackage> {
   const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, selectedVariantPath, paths);
+  await assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
   const canonicalRealFile = skill.locations.find((location) =>
     location.path === canonicalPath && location.fileType === 'real-file');
   if (canonicalRealFile) {
@@ -1212,6 +1213,7 @@ async function ensureCanonicalSkillPackage(
     throw new Error('The selected skill version must be a real file before repairing links.');
   }
 
+  await assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
   await mkdir(path.dirname(canonicalPath), { recursive: true });
   await rm(canonicalPath, { recursive: true, force: true });
   await cp(selectedLocation.path, canonicalPath, {
@@ -1821,7 +1823,7 @@ async function replaceWritableWithCanonicalSymlink(
   snapshot: SkillInventorySnapshot,
 ): Promise<void> {
   assertSkillSymlinkTargetWritable(locationPath, snapshot);
-  assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
+  await assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
   await replaceWithCanonicalSymlink(locationPath, canonicalPath);
 }
 
