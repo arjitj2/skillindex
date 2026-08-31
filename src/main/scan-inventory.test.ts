@@ -3758,6 +3758,128 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
+  it('annotates comparable plugin versions within each host and marketplace group', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-evidence-groups-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const bundles = [
+      { host: 'codex', marketplace: 'curated', version: '9.0.0' },
+      { host: 'claude', marketplace: 'official', version: '1.0.0' },
+      { host: 'claude', marketplace: 'official', version: '1.1.0' },
+    ] as const;
+
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), [
+      '[plugins."tools@curated"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+    for (const bundle of bundles) {
+      const pluginRoot = path.join(homeDir, `.${bundle.host}`, 'plugins', 'cache', bundle.marketplace, 'tools', bundle.version);
+      await mkdir(path.join(pluginRoot, `.${bundle.host}-plugin`), { recursive: true });
+      await writeFile(path.join(pluginRoot, `.${bundle.host}-plugin`, 'plugin.json'), JSON.stringify({ name: 'tools', version: bundle.version }, null, 2), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+        '---',
+        'name: foo',
+        `description: Tools ${bundle.version}.`,
+        '---',
+        '',
+        '# Foo',
+        '',
+      ].join('\n'), '2026-01-08T00:00:00.000Z');
+    }
+
+    const candidates = (await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    })).skills.find((skill) => skill.name === 'tools:foo')?.managedSourceCandidates;
+
+    expect(candidates?.find((candidate) => candidate.plugin.host === 'codex')?.evidence).toBe('enabled-installation');
+    expect(candidates?.find((candidate) => candidate.plugin.host === 'claude' && candidate.plugin.version === '1.0.0')?.evidence)
+      .toBe('cached-unknown');
+    expect(candidates?.find((candidate) => candidate.plugin.host === 'claude' && candidate.plugin.version === '1.1.0')?.evidence)
+      .toBe('newer-comparable-version');
+  });
+
+  it('clears cached managed candidates after their plugin source disappears', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-cache-removal-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'foo');
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'foo', '1.0.0');
+
+    await writeSkillFile(path.dirname(universalPath), 'foo', '# Foo\n', '2026-01-08T00:00:00.000Z');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'foo', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', '# Plugin Foo\n', '2026-01-08T00:00:00.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    expect((await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'foo')?.managedSourceCandidates).toHaveLength(1);
+    await rm(pluginRoot, { recursive: true, force: true });
+
+    const cachedSkill = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'foo');
+    expect(cachedSkill?.locations.some((location) => location.canonicalRole === 'managed-source')).toBe(false);
+    expect(cachedSkill?.managedSourceCandidates).toBeUndefined();
+  });
+
+  it('drops legacy cached diffs that reference a managed plugin source', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-legacy-diff-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'foo', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'foo');
+
+    await writeSkillFile(path.dirname(universalPath), 'foo', '# Universal\n', '2026-01-08T00:00:00.000Z');
+    await writeSkillFile(path.dirname(factoryPath), 'foo', '# Factory\n', '2026-01-08T00:00:01.000Z');
+    await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'foo', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', '# Plugin\n', '2026-01-08T00:00:02.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    const snapshot = await scanInventory(scanOptions);
+    const legacySnapshot = structuredClone(snapshot);
+    const legacySkill = legacySnapshot.skills.find((skill) => skill.name === 'foo');
+    if (!legacySkill) throw new Error('Expected foo skill.');
+    legacySkill.diff = {
+      baselinePath: path.join(pluginRoot, 'skills', 'foo'),
+      selectedPath: factoryPath,
+      files: [],
+    };
+    await writeFile(paths.cacheFile, `${JSON.stringify(legacySnapshot)}\n`, 'utf8');
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), '[plugins."foo@official"]\nenabled = true\n', 'utf8');
+
+    expect((await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'foo')?.diff).toBeUndefined();
+  });
+
+  it('preserves plugin dependency warnings through fresh and cached inventory', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-warning-cache-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const configPath = path.join(homeDir, '.codex', 'config.toml');
+
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, 'model = "gpt-5"\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', `# Foo\n$CODEX_PLUGIN_ROOT/bin/tool\n${pluginRoot}/data.json\n`, '2026-01-08T00:00:00.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    const warningKinds = (await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'tools:foo')
+      ?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind);
+    expect(warningKinds).toEqual(['plugin-root-variable', 'plugin-contained-path']);
+
+    await writeFile(configPath, '[plugins."tools@official"]\nenabled = true\n', 'utf8');
+    const cachedWarningKinds = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'tools:foo')
+      ?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind);
+    expect(cachedWarningKinds).toEqual(['plugin-root-variable', 'plugin-contained-path']);
+  });
+
   it('keeps a differing same-slug plugin skill out of structural copy classification', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-self-named-plugin-'));
     const homeDir = path.join(root, 'home');

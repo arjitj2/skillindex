@@ -302,6 +302,7 @@ function classifySkillLocations(
 
       return location.resolvedPath !== undefined && canonicalTargets.has(location.resolvedPath);
     });
+  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
 
   if (isHealthy) {
     return {
@@ -314,7 +315,7 @@ function classifySkillLocations(
       issueReasons: [],
       locations: publicLocations,
       detailDiagnostics,
-      ...withManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths),
+      managedSourceCandidates,
     };
   }
 
@@ -328,7 +329,7 @@ function classifySkillLocations(
     issueReasons,
     locations: publicLocations,
     detailDiagnostics,
-    ...withManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths),
+    managedSourceCandidates,
     driftSignature: issueReasons.length > 0 ? createDriftSignature(name, structuralState, publicLocations, issueReasons) : undefined,
     diff: issueReasons.includes('diverged-copies') ? buildSkillDiff(issueLocations) : undefined,
   };
@@ -1239,11 +1240,11 @@ function buildSkillDetailDiagnostics(
   };
 }
 
-function withManagedSourceCandidates(
+function buildManagedSourceCandidates(
   locations: SkillLocationRecord[],
   sources: SkillScanSource[],
   canonicalPaths: string[],
-): Pick<SkillRecord, 'managedSourceCandidates'> {
+): SkillRecord['managedSourceCandidates'] {
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   const universalLocation = getOperationalLocations(locations).find((location) =>
     location.fileType === 'real-file' && matchesCachedCanonicalSkillPath(location, canonicalPaths));
@@ -1271,9 +1272,29 @@ function withManagedSourceCandidates(
     })];
   });
 
-  return candidates.length > 0
-    ? { managedSourceCandidates: annotateComparableVersionEvidence(candidates, (candidate) => candidate.plugin.version) }
-    : {};
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const annotatedCandidates = [...candidates];
+  const candidateIndexesByPlugin = new Map<string, number[]>();
+  for (const [index, candidate] of candidates.entries()) {
+    const key = `${candidate.plugin.host}\u0000${candidate.plugin.pluginId}`;
+    const indexes = candidateIndexesByPlugin.get(key) ?? [];
+    indexes.push(index);
+    candidateIndexesByPlugin.set(key, indexes);
+  }
+  for (const indexes of candidateIndexesByPlugin.values()) {
+    const annotatedGroup = annotateComparableVersionEvidence(
+      indexes.map((index) => candidates[index]),
+      (candidate) => candidate.plugin.version,
+    );
+    for (const [groupIndex, candidateIndex] of indexes.entries()) {
+      annotatedCandidates[candidateIndex] = annotatedGroup[groupIndex]!;
+    }
+  }
+
+  return annotatedCandidates;
 }
 
 function buildDuplicateCandidate(location: IndexedSkillLocation): SkillDuplicateCandidate {
@@ -2028,9 +2049,9 @@ function reconcileCachedSkill(
       ? { acceptedAlternates: universalDecisionContext?.decision.acceptedAlternates ?? [] }
       : {}),
   };
-  const managedSourceCandidates = withManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
+  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const diff = issueReasons.includes('diverged-copies')
-    ? pruneCachedSkillDiff(skill.diff, new Set(canonicalizedLocations.map((location) => location.path)))
+    ? pruneCachedSkillDiff(skill.diff, new Set(issueLocations.map((location) => location.path)))
     : undefined;
 
   if (isHealthyCachedSkill(canonicalizedLocations, canonicalPaths, missingInstallSources, issueReasons)) {
@@ -2043,7 +2064,7 @@ function reconcileCachedSkill(
       issueReasons: [],
       locations: canonicalizedLocations,
       detailDiagnostics,
-      ...managedSourceCandidates,
+      managedSourceCandidates,
       driftSignature: undefined,
       diff: undefined,
     };
@@ -2057,7 +2078,7 @@ function reconcileCachedSkill(
     issueReasons,
     locations: canonicalizedLocations,
     detailDiagnostics,
-    ...managedSourceCandidates,
+    managedSourceCandidates,
     driftSignature: issueReasons.length > 0
       ? createDriftSignature(skill.name, structuralState, canonicalizedLocations, issueReasons)
       : undefined,
