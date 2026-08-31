@@ -360,13 +360,20 @@ async function resolveSkillIssueIfCurrent(
     case 'broken-symlink': {
       const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
       const canonicalPath = canonicalPackage.path;
-      const brokenPaths = skill.locations
+      const repairPaths = (await Promise.all(skill.locations
         .filter((location) =>
           location.fileType === 'symlink'
-          && location.resolvedPath === undefined
           && path.normalize(location.path) !== path.normalize(canonicalPath))
+        .map(async (location) => ({
+          path: location.path,
+          broken: location.resolvedPath === undefined,
+          targetsPluginCache: location.resolvedPath
+            ? await isPluginManagedResolvedTarget(location.resolvedPath, snapshot)
+            : false,
+        }))))
+        .filter((location) => location.broken || location.targetsPluginCache)
         .map((location) => location.path);
-      await Promise.all(dedupeNormalizedPaths(brokenPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
+      await Promise.all(dedupeNormalizedPaths(repairPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
       await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
       return;
     }
@@ -384,6 +391,25 @@ async function resolveSkillIssueIfCurrent(
       await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
       return;
     }
+  }
+}
+
+async function isPluginManagedResolvedTarget(
+  targetPath: string,
+  snapshot: SkillInventorySnapshot,
+): Promise<boolean> {
+  if (isPluginManagedTarget(targetPath, snapshot.sources)) {
+    return true;
+  }
+
+  try {
+    await assertSkillSymlinkTargetIsUniversal(targetPath, snapshot.sources);
+    return false;
+  } catch (error) {
+    if ((error as Error).message.includes('plugin-managed cache path')) {
+      return true;
+    }
+    throw error;
   }
 }
 

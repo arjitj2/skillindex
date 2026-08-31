@@ -2093,6 +2093,7 @@ describe('resolveInventoryIssue', () => {
         entity: 'skill',
         issue: 'broken-symlink',
         skillName: 'tools:foo',
+        selectedVariantPath: newSkillPath,
       },
       {
         paths,
@@ -2104,10 +2105,49 @@ describe('resolveInventoryIssue', () => {
 
     expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo v2.');
     expect(await readFile(path.join(newSkillPath, 'SKILL.md'), 'utf8')).toBe(beforeLivePlugin);
-    expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'missing-symlinks',
-      issueReasons: ['wrong-symlink-target'],
+    await expect(lstat(agentsPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
+    for (const linkPath of [claudePath, factoryPath]) {
+      expect(await readlink(linkPath)).toBe(agentsPath);
+      expect(await realpath(linkPath)).toBe(await realpath(agentsPath));
+    }
+    expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')?.issueReasons)
+      .not.toContain('wrong-symlink-target');
+  });
+
+  it('rejects a broken deleted-cache link with no readable source without mutating links, config, or cache state', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-no-readable-source-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const deletedPluginPath = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0', 'skills', 'foo');
+    const brokenPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    await mkdir(path.dirname(brokenPath), { recursive: true });
+    await symlink(deletedPluginPath, brokenPath);
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
     });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforeLink = await readlink(brokenPath);
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'broken-symlink',
+      skillName: 'tools:foo',
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/no readable real-file definitions/i);
+
+    expect(await readlink(brokenPath)).toBe(beforeLink);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
   });
 
   it('creates missing live canonical packages in the preferred source when configured', async () => {
