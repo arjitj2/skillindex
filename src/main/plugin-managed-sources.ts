@@ -71,14 +71,18 @@ export function buildPluginManagedSourceCandidate({
   };
 }
 
-export function annotateComparableVersionEvidence<
-  T extends { version?: string; evidence: PluginSourceEvidence },
->(candidates: T[]): T[] {
+export function annotateComparableVersionEvidence<T extends { evidence: PluginSourceEvidence }>(
+  candidates: T[],
+  getVersion: (candidate: T) => string | undefined = (candidate) => {
+    const value = (candidate as { version?: unknown }).version;
+    return typeof value === 'string' ? value : undefined;
+  },
+): T[] {
   if (candidates.some((candidate) => candidate.evidence === 'enabled-installation')) return candidates;
 
   const parsed = candidates.map((candidate) => ({
     candidate,
-    version: parseComparableVersion(candidate.version),
+    version: parseComparableVersion(getVersion(candidate)),
   }));
   if (parsed.length < 2 || parsed.some((entry) => entry.version === null)) return candidates;
 

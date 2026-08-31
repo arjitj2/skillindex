@@ -3670,6 +3670,92 @@ describe('representative-agent scan foundation', () => {
     expect(skill?.issueReasons).not.toContain('identical-copies');
     expect(skill?.detailDiagnostics.duplicateCandidates).toEqual([]);
     expect(skill?.managedSourceCandidates).toHaveLength(2);
+    expect(skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')?.evidence)
+      .toBe('newer-comparable-version');
+  });
+
+  it('keeps differing plugin cache versions as noncanonical managed candidates', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-cache-differing-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const firstPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const secondPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+
+    for (const [pluginRoot, version, body] of [
+      [firstPluginRoot, '1.0.0', 'Version one content.'],
+      [secondPluginRoot, '1.1.0', 'Version two content.'],
+    ] as const) {
+      await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+      await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version }, null, 2), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+        '---',
+        'name: foo',
+        `description: Plugin foo ${version}.`,
+        '---',
+        '',
+        '# Foo',
+        body,
+        '',
+      ].join('\n'), '2026-01-08T00:00:00.000Z');
+    }
+
+    const skill = (await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    })).skills.find((entry) => entry.name === 'tools:foo');
+
+    expect(skill).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+      detailDiagnostics: { duplicateCandidates: [] },
+    });
+    expect(skill?.issueReasons).not.toEqual(expect.arrayContaining(['identical-copies', 'diverged-copies']));
+    expect(skill?.managedSourceCandidates).toHaveLength(2);
+    expect(skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')?.evidence)
+      .toBe('newer-comparable-version');
+  });
+
+  it('reconciles cached managed-source evidence when plugin enablement changes', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-enable-cache-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const configPath = path.join(homeDir, '.codex', 'config.toml');
+
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, 'model = "gpt-5"\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+      '---',
+      'name: foo',
+      'description: Plugin foo.',
+      '---',
+      '',
+      '# Foo',
+      '',
+    ].join('\n'), '2026-01-08T00:00:00.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    const initialSkill = (await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'tools:foo');
+    expect(initialSkill?.managedSourceCandidates?.[0]?.evidence).toBe('cached-unknown');
+
+    await writeFile(configPath, [
+      'model = "gpt-5"',
+      '',
+      '[plugins."tools@official"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+
+    const cachedSkill = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'tools:foo');
+    expect(cachedSkill?.locations[0]).toMatchObject({ canonical: false, canonicalRole: 'managed-source' });
+    expect(cachedSkill?.managedSourceCandidates?.[0]).toMatchObject({
+      evidence: 'enabled-installation',
+      plugin: { enabled: true },
+    });
   });
 
   it('keeps a differing same-slug plugin skill out of structural copy classification', async () => {

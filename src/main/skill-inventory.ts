@@ -1010,6 +1010,20 @@ function haveSameOptionalStringEntries(left: string[] | undefined, right: string
   return haveSameStringEntries(left ?? [], right ?? []);
 }
 
+function haveSamePluginSourceRef(left: SkillScanSource['plugin'], right: SkillScanSource['plugin']): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  return left.host === right.host
+    && left.pluginId === right.pluginId
+    && left.pluginName === right.pluginName
+    && left.version === right.version
+    && left.rootPath === right.rootPath
+    && left.manifestPath === right.manifestPath
+    && left.enabled === right.enabled;
+}
+
 function haveSameSkillScanSources(left: SkillScanSource[], right: SkillScanSource[]): boolean {
   return left.length === right.length
     && left.every((source, index) => {
@@ -1021,8 +1035,11 @@ function haveSameSkillScanSources(left: SkillScanSource[], right: SkillScanSourc
         && source.writable === other.writable
         && source.scope === other.scope
         && source.skillsDir === other.skillsDir
+        && source.preferredCanonical === other.preferredCanonical
         && haveSameOptionalStringEntries(source.compatibleAgentFamilies, other.compatibleAgentFamilies)
-        && haveSameOptionalStringEntries(source.ignoredSkillSubpaths, other.ignoredSkillSubpaths);
+        && haveSameOptionalStringEntries(source.ignoredSkillSubpaths, other.ignoredSkillSubpaths)
+        && haveSamePluginSourceRef(source.plugin, other.plugin)
+        && source.mcpConfigPath === other.mcpConfigPath;
     });
 }
 
@@ -1255,7 +1272,7 @@ function withManagedSourceCandidates(
   });
 
   return candidates.length > 0
-    ? { managedSourceCandidates: annotateComparableVersionEvidence(candidates) }
+    ? { managedSourceCandidates: annotateComparableVersionEvidence(candidates, (candidate) => candidate.plugin.version) }
     : {};
 }
 
