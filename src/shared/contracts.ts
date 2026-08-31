@@ -179,7 +179,7 @@ export interface PluginSourceRef {
   version?: string;
   rootPath: string;
   manifestPath?: string;
-  enabled?: boolean | 'unknown';
+  enabled: boolean | 'unknown';
 }
 
 export interface SkillProvenance {

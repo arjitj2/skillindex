@@ -231,6 +231,7 @@ describe('buildSkillInspectorModel', () => {
         version: '5.1.0',
         rootPath: '/tmp/skillindex/sandbox/.codex/plugins/cache/sandbox-curated/example-workflow-kit/5.1.0',
         manifestPath: '/tmp/skillindex/sandbox/.codex/plugins/cache/sandbox-curated/example-workflow-kit/5.1.0/.codex-plugin/plugin.json',
+        enabled: 'unknown',
       },
     };
     const claudeSource: SkillScanSource = {
@@ -248,6 +249,7 @@ describe('buildSkillInspectorModel', () => {
         version: '5.1.0',
         rootPath: '/tmp/skillindex/sandbox/.claude/plugins/cache/sandbox-gallery/example-workflow-kit/5.1.0',
         manifestPath: '/tmp/skillindex/sandbox/.claude/plugins/cache/sandbox-gallery/example-workflow-kit/5.1.0/.claude-plugin/plugin.json',
+        enabled: 'unknown',
       },
     };
     const contentHash = 'sha256-identical-plugin-skill';
@@ -3213,6 +3215,7 @@ function buildPluginSource(
       version: '1.0.0',
       rootPath,
       manifestPath: `${rootPath}/${host === 'codex' ? '.codex-plugin' : '.claude-plugin'}/plugin.json`,
+      enabled: 'unknown',
     },
   };
 }

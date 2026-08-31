@@ -43,14 +43,14 @@ export function buildPluginManagedSourceCandidate({
   path: string;
   plugin: PluginSourceRef;
   comparisonKey: string;
-  universalComparisonKey: string | null | undefined;
+  universalComparisonKey: string | null;
   dependencyWarnings: PluginDependencyWarning[];
 }): PluginManagedSourceCandidate {
   return {
     path: sourcePath,
     plugin,
     evidence: plugin.enabled === true ? 'enabled-installation' : 'cached-unknown',
-    relationship: universalComparisonKey === null || universalComparisonKey === undefined
+    relationship: universalComparisonKey === null
       ? 'universal-missing'
       : comparisonKey === universalComparisonKey
         ? 'matches-universal'

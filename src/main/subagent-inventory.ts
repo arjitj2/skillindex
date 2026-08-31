@@ -99,6 +99,7 @@ export function collectSubagentRecords({
       version: plugin.version,
       rootPath: plugin.rootPath,
       manifestPath: plugin.manifestPath,
+      enabled: plugin.enabled,
     };
     const owner: SubagentOwnerRecord = {
       agentId: createPluginSubagentOwnerId(plugin),

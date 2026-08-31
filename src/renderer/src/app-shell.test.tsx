@@ -3512,6 +3512,7 @@ function createPluginSource({
       version: '5.1.0',
       rootPath,
       manifestPath: `${rootPath}/${host === 'claude' ? '.claude-plugin' : '.codex-plugin'}/plugin.json`,
+      enabled: 'unknown',
     },
   };
 }

@@ -80,6 +80,7 @@ export const representativeInventorySnapshot: SkillInventorySnapshot = normalize
         version: '0.1.0',
         rootPath: '~/.skillindex/sandbox/plugins',
         manifestPath: '~/.skillindex/sandbox/plugins/.claude-plugin/plugin.json',
+        enabled: 'unknown',
       },
     },
   ],

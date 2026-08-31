@@ -560,6 +560,7 @@ function collectMcpOwners(agents: AgentRecord[], sources: SkillScanSource[], plu
       version: plugin.version,
       rootPath: plugin.rootPath,
       manifestPath: plugin.manifestPath,
+      enabled: plugin.enabled,
     };
     const configPaths = [...new Set(plugin.bundledMcps.map((mcp) => mcp.configPath))];
 

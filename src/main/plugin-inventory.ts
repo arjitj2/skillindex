@@ -128,6 +128,7 @@ export function buildPluginSkillScanSources(plugins: PluginRecord[]): SkillScanS
         version: plugin.version,
         rootPath: plugin.rootPath,
         manifestPath: plugin.manifestPath,
+        enabled: plugin.enabled,
       },
       mcpConfigPath: plugin.bundledMcps[0]?.configPath,
     })));
