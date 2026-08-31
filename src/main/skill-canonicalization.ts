@@ -188,8 +188,10 @@ export async function makeSkillCanonical(
       paths,
     });
   } catch (error) {
-    await linkTransaction?.rollback();
-    await materializedPackage.rollback();
+    const rollbackFailures: unknown[] = [];
+    try { await linkTransaction?.rollback(); } catch (rollbackError) { rollbackFailures.push(rollbackError); }
+    try { await materializedPackage.rollback(); } catch (rollbackError) { rollbackFailures.push(rollbackError); }
+    if (rollbackFailures.length > 0) throw new AggregateError([error, ...rollbackFailures], 'Skill canonicalization failed and rollback was incomplete.');
     throw error;
   }
   await linkTransaction.commit();

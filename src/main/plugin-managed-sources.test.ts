@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -191,6 +191,36 @@ describe('plugin managed sources', () => {
     await transaction.rollback();
     await expect(lstat(firstPath)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(lstat(secondPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects a writable link path that aliases the canonical package', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-link-alias-'));
+    const universalSkills = path.join(root, '.agents', 'skills');
+    const canonicalPath = path.join(universalSkills, 'foo');
+    const factorySkills = path.join(root, '.factory', 'skills');
+    await mkdir(canonicalPath, { recursive: true });
+    await writeFile(path.join(canonicalPath, 'SKILL.md'), '# Universal\n', 'utf8');
+    await mkdir(path.dirname(factorySkills), { recursive: true });
+    await symlink(universalSkills, factorySkills);
+    await expect(replaceSkillLinksTransaction([path.join(factorySkills, 'foo')], canonicalPath, []))
+      .rejects.toThrow(/must not overlap/i);
+    expect(await readFile(path.join(canonicalPath, 'SKILL.md'), 'utf8')).toBe('# Universal\n');
+  });
+
+  it('attempts every rollback restore and surfaces restore failures', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-link-restore-failure-'));
+    const canonicalPath = path.join(root, '.agents', 'skills', 'foo');
+    const firstPath = path.join(root, '.factory', 'skills', 'foo');
+    const secondPath = path.join(root, '.windsurf', 'skills', 'foo');
+    await Promise.all([
+      mkdir(canonicalPath, { recursive: true }),
+      mkdir(firstPath, { recursive: true }),
+      mkdir(secondPath, { recursive: true }),
+    ]);
+    await Promise.all([writeFile(path.join(canonicalPath, 'SKILL.md'), '# Canonical\n'), writeFile(path.join(firstPath, 'SKILL.md'), '# First\n'), writeFile(path.join(secondPath, 'SKILL.md'), '# Second\n')]);
+    const transaction = await replaceSkillLinksTransaction([firstPath, secondPath], canonicalPath, [], { failRestoreAt: 1 });
+    await expect(transaction.rollback()).rejects.toBeInstanceOf(AggregateError);
+    expect(await readFile(path.join(firstPath, 'SKILL.md'), 'utf8')).toBe('# First\n');
   });
 
   it('annotates only the greatest comparable version when no candidate is enabled', () => {

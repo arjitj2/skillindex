@@ -421,8 +421,10 @@ async function completeCanonicalSkillResolution(
     linkTransaction = await replaceWritableWithCanonicalSymlinks(locationPaths, canonicalPackage.path, snapshot, options);
     await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
   } catch (error) {
-    await linkTransaction?.rollback();
-    await canonicalPackage.rollback();
+    const rollbackFailures: unknown[] = [];
+    try { await linkTransaction?.rollback(); } catch (rollbackError) { rollbackFailures.push(rollbackError); }
+    try { await canonicalPackage.rollback(); } catch (rollbackError) { rollbackFailures.push(rollbackError); }
+    if (rollbackFailures.length > 0) throw new AggregateError([error, ...rollbackFailures], 'Skill issue resolution failed and rollback was incomplete.');
     throw error;
   }
   await linkTransaction.commit();

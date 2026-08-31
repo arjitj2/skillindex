@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { SkillScanSource } from '@shared/contracts';
-import { assertSkillSymlinkTargetIsUniversal } from '@main/plugin-managed-sources';
+import { assertSkillSourceAndDestinationDoNotOverlap, assertSkillSymlinkTargetIsUniversal } from '@main/plugin-managed-sources';
 
 export interface ReplaceSkillLinksOptions {
   failAt?: number;
+  failRestoreAt?: number;
   validateDestination?(locationPath: string): Promise<void>;
 }
 
@@ -30,6 +31,7 @@ export async function replaceSkillLinksTransaction(
   try {
     for (const [index, locationPath] of locationPaths.entries()) {
       await assertSkillSymlinkTargetIsUniversal(canonicalPath, sources);
+      await assertSkillSourceAndDestinationDoNotOverlap(path.dirname(locationPath), path.dirname(canonicalPath));
       await options.validateDestination?.(locationPath);
       await mkdir(path.dirname(locationPath), { recursive: true });
       const backupPath = path.join(path.dirname(locationPath), `.${path.basename(locationPath)}.backup-${randomUUID()}`);
@@ -46,7 +48,7 @@ export async function replaceSkillLinksTransaction(
       await symlink(canonicalPath, locationPath);
     }
   } catch (error) {
-    await restoreBackups(backups);
+    await restoreBackups(backups, options.failRestoreAt);
     throw error;
   }
 
@@ -56,15 +58,20 @@ export async function replaceSkillLinksTransaction(
         ? [rm(entry.backupPath, { recursive: true, force: true }).catch(() => undefined)]
         : []));
     },
-    rollback: async () => restoreBackups(backups),
+    rollback: async () => restoreBackups(backups, options.failRestoreAt),
   };
 }
 
-async function restoreBackups(backups: BackupEntry[]): Promise<void> {
-  for (const entry of backups.slice().reverse()) {
-    await rm(entry.locationPath, { recursive: true, force: true }).catch(() => undefined);
-    if (entry.backupPath) {
-      await rename(entry.backupPath, entry.locationPath).catch(() => undefined);
+async function restoreBackups(backups: BackupEntry[], failRestoreAt?: number): Promise<void> {
+  const failures: unknown[] = [];
+  for (const [index, entry] of backups.slice().reverse().entries()) {
+    try {
+      if (failRestoreAt === index + 1) throw new Error(`Injected skill link restore failure at ${index + 1}.`);
+      await rm(entry.locationPath, { recursive: true, force: true });
+      if (entry.backupPath) await rename(entry.backupPath, entry.locationPath);
+    } catch (error) {
+      failures.push(error);
     }
   }
+  if (failures.length > 0) throw new AggregateError(failures, 'Unable to restore every skill link mutation.');
 }
