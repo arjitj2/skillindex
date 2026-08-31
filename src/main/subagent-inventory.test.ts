@@ -619,10 +619,14 @@ describe('subagent inventory', () => {
     expect(cachedEnabled?.missingLocations).toEqual(freshEnabled?.missingLocations);
 
     await rm(pluginPath);
-    const cachedRemoved = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
-    const freshRemoved = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
-    expect(cachedRemoved).toBeUndefined();
-    expect(freshRemoved).toBeUndefined();
+    const cachedRemoved = (await readCachedInventory(scanOptions))?.subagents ?? [];
+    const freshRemoved = (await scanInventory(scanOptions)).subagents ?? [];
+    expect(cachedRemoved.find((subagent) => subagent.name === 'alpha:reviewer')).toBeUndefined();
+    expect(cachedRemoved.find((subagent) => subagent.name === 'reviewer')).toMatchObject({
+      locations: [expect.objectContaining({ path: universalPath, canonical: true })],
+      managedSourceCandidates: undefined,
+    });
+    expect(cachedRemoved).toEqual(freshRemoved);
   });
 
   it('keeps plugin updates advisory when Universal matches one managed source', async () => {

@@ -193,49 +193,79 @@ export function reconcileCachedSubagents(
     createPluginSubagentOwnerId(plugin),
     new Set((plugin.bundledSubagents ?? []).map((subagent) => path.normalize(subagent.path))),
   ]));
+  const pluginSubagentAliases = buildPluginSubagentAliases(plugins);
+  const groupedLocations = new Map<string, SubagentLocationRecord[]>();
+  const pluginSourceByLocationPath = new Map<string, PluginSourceRef>();
 
-  return cachedSubagents
-    .map((subagent) => {
-      const pluginSourceByLocationPath = new Map<string, PluginSourceRef>();
-      const hadPluginLocation = subagent.locations.some((location) => location.agentId.startsWith('plugin:'));
-      const locations = subagent.locations.flatMap((location) => {
-        if (!location.agentId.startsWith('plugin:')) {
-          return [location];
-        }
-        const plugin = pluginByOwnerId.get(location.agentId);
-        const bundledPaths = pluginSubagentPathsByOwnerId.get(location.agentId);
-        const provenance = location.provenance?.plugin;
-        if (
-          !plugin
-          || !bundledPaths?.has(path.normalize(location.path))
-          || provenance?.host !== plugin.host
-          || provenance.pluginId !== plugin.pluginId
-          || provenance.version !== plugin.version
-        ) {
-          return [];
-        }
-        const source = createPluginSubagentSource(plugin);
-        pluginSourceByLocationPath.set(location.path, source);
-        return [{
+  for (const subagent of cachedSubagents) {
+    for (const location of subagent.locations) {
+      const plugin = location.agentId.startsWith('plugin:')
+        ? pluginByOwnerId.get(location.agentId)
+        : undefined;
+      const bundledPaths = plugin ? pluginSubagentPathsByOwnerId.get(location.agentId) : undefined;
+      const provenance = location.provenance?.plugin;
+      if (location.agentId.startsWith('plugin:') && (
+        !plugin
+        || !bundledPaths?.has(path.normalize(location.path))
+        || provenance?.host !== plugin.host
+        || provenance?.pluginId !== plugin.pluginId
+        || provenance?.version !== plugin.version
+      )) {
+        continue;
+      }
+
+      const reconciledLocation = plugin
+        ? {
           ...location,
           canonical: false,
           canonicalRole: 'managed-source' as const,
           mutability: 'read-only-managed' as const,
-        }];
-      });
-      if (locations.length === 0) {
-        return null;
+        }
+        : location;
+      if (plugin) {
+        pluginSourceByLocationPath.set(location.path, createPluginSubagentSource(plugin));
       }
-      if (hadPluginLocation
-        && !locations.some((location) => location.agentId.startsWith('plugin:'))
-        && subagent.name.includes(':')) {
-        return null;
-      }
+      const name = getCachedGroupedSubagentName(
+        reconciledLocation,
+        expectedOwners,
+        pluginSubagentAliases,
+        plugin ? createPluginSubagentSource(plugin) : undefined,
+      );
+      const locations = groupedLocations.get(name) ?? [];
+      locations.push(reconciledLocation);
+      groupedLocations.set(name, locations);
+    }
+  }
 
-      return classifySubagentLocations(subagent.name, locations, expectedOwners, pluginSourceByLocationPath);
-    })
-    .filter((subagent): subagent is SubagentRecord => subagent !== null)
+  return [...groupedLocations.entries()]
+    .map(([name, locations]) => classifySubagentLocations(name, locations, expectedOwners, pluginSourceByLocationPath))
     .sort(compareSubagents);
+}
+
+function getCachedGroupedSubagentName(
+  location: SubagentLocationRecord,
+  expectedOwners: SubagentOwnerRecord[],
+  pluginSubagentAliases: Map<string, string>,
+  plugin?: PluginSourceRef,
+): string {
+  const fallbackName = getSubagentNameFromPath(location.path);
+  const owner = findSubagentOwnerForLocation(location, expectedOwners) ?? {
+    agentId: location.agentId,
+    agentLabel: location.agentLabel,
+    scope: location.scope,
+    directoryPath: location.directoryPath,
+    format: location.format,
+    writable: false,
+    canonical: location.canonical,
+  };
+  const parsed = location.fileType === 'symlink'
+    ? { name: fallbackName }
+    : parseSubagentDefinitionText(location.definitionText ?? '', owner, fallbackName);
+  const baseName = location.fileType === 'symlink' ? fallbackName : parsed.name;
+  if (plugin) {
+    return `${plugin.pluginName}:${baseName}`;
+  }
+  return pluginSubagentAliases.get(getPluginSubagentAliasKey(location.scope, location.path, parsed.name)) ?? baseName;
 }
 
 function collectSubagentOwners({
