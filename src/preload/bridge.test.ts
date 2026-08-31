@@ -374,4 +374,26 @@ describe('createSkillIndexDesktopApi', () => {
     });
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.ping);
   });
+
+  it('restores a complete main-process trace from an IPC failure response', async () => {
+    const trace = [
+      'Error: Failed to parse Skill Index config.',
+      '    at scanInventory (src/main/scan-inventory.ts:42:7)',
+      '    at refreshInventory (src/main/inventory-runtime.ts:318:11)',
+    ].join('\n');
+    const invoke = vi.fn().mockResolvedValue({
+      __skillIndexIpcError: true,
+      message: 'Failed to parse Skill Index config.',
+      trace,
+    });
+    const api = createSkillIndexDesktopApi(invoke, vi.fn(() => () => undefined));
+
+    const error = await api.rescanInventory().catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: 'Failed to parse Skill Index config.',
+      stack: trace,
+    });
+  });
 });

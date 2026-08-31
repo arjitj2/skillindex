@@ -18,6 +18,7 @@ import {
   type ResolveIssueRequest,
   type InventorySourceMode,
 } from '@shared/contracts';
+import { serializeIpcError } from '@shared/ipc-error';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
 import { getAutoUpdateStatus, installReadyAutoUpdate, requestAutoUpdateCheck } from '@main/auto-update';
 import { getAppShellState } from '@main/app-shell';
@@ -107,20 +108,20 @@ export function registerIpcHandlers(): void {
     hasRegisteredAuditBroadcast = true;
   }
 
-  ipcMain.handle(IPC_CHANNELS.getShellState, () => getAppShellState());
-  ipcMain.handle(IPC_CHANNELS.readUpdateStatus, () => getAutoUpdateStatus());
-  ipcMain.handle(IPC_CHANNELS.checkForUpdates, () => requestAutoUpdateCheck());
-  ipcMain.handle(IPC_CHANNELS.installUpdate, () => installReadyAutoUpdate());
-  ipcMain.handle(IPC_CHANNELS.openPathInEditor, async (_event, filePath: string) => {
+  registerIpcHandler(IPC_CHANNELS.getShellState, () => getAppShellState());
+  registerIpcHandler(IPC_CHANNELS.readUpdateStatus, () => getAutoUpdateStatus());
+  registerIpcHandler(IPC_CHANNELS.checkForUpdates, () => requestAutoUpdateCheck());
+  registerIpcHandler(IPC_CHANNELS.installUpdate, () => installReadyAutoUpdate());
+  registerIpcHandler(IPC_CHANNELS.openPathInEditor, async (_event, filePath: string) => {
     const errorMessage = await shell.openPath(resolveOpenPath(filePath));
     if (errorMessage) {
       throw new Error(errorMessage);
     }
   });
-  ipcMain.handle(IPC_CHANNELS.revealPathInFinder, (_event, filePath: string) => {
+  registerIpcHandler(IPC_CHANNELS.revealPathInFinder, (_event, filePath: string) => {
     shell.showItemInFolder(resolveOpenPath(filePath));
   });
-  ipcMain.handle(IPC_CHANNELS.chooseDirectory, async (_event, request?: ChooseDirectoryRequest) => {
+  registerIpcHandler(IPC_CHANNELS.chooseDirectory, async (_event, request?: ChooseDirectoryRequest) => {
     const result = await dialog.showOpenDialog({
       title: request?.title ?? 'Choose directory',
       properties: ['openDirectory', 'createDirectory'],
@@ -131,61 +132,61 @@ export function registerIpcHandlers(): void {
   ipcMain.on(IPC_CHANNELS.readInitialInventoryBootstrap, (event) => {
     event.returnValue = readCachedInventorySync(resolveInventoryScanOptions());
   });
-  ipcMain.handle(IPC_CHANNELS.readSettings, () => readSettingsState(resolveInventoryScanOptions()));
-  ipcMain.handle(IPC_CHANNELS.readCachedInventory, () =>
+  registerIpcHandler(IPC_CHANNELS.readSettings, () => readSettingsState(resolveInventoryScanOptions()));
+  registerIpcHandler(IPC_CHANNELS.readCachedInventory, () =>
     inventoryRuntime.readCachedInventory(resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.scanInventory, () =>
+  registerIpcHandler(IPC_CHANNELS.scanInventory, () =>
     inventoryRuntime.scanInventory(resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.rescanInventory, (_event, request?: RescanInventoryRequest) =>
+  registerIpcHandler(IPC_CHANNELS.rescanInventory, (_event, request?: RescanInventoryRequest) =>
     triggerInventoryRescan(request),
   );
-  ipcMain.handle(IPC_CHANNELS.testMcpConnectivity, () =>
+  registerIpcHandler(IPC_CHANNELS.testMcpConnectivity, () =>
     inventoryRuntime.testMcpConnectivity(resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.cancelMcpConnectivityTest, () => {
+  registerIpcHandler(IPC_CHANNELS.cancelMcpConnectivityTest, () => {
     inventoryRuntime.cancelMcpConnectivityTest();
   });
-  ipcMain.handle(
+  registerIpcHandler(
     IPC_CHANNELS.addSkill,
     (_event, request: AddSkillRequest) =>
       inventoryRuntime.addSkill(request, resolveInventoryScanOptions()),
   );
-  ipcMain.handle(
+  registerIpcHandler(
     IPC_CHANNELS.addMcpServer,
     (_event, request: AddMcpServerRequest) =>
       inventoryRuntime.addMcpServer(request, resolveInventoryScanOptions()),
   );
-  ipcMain.handle(
+  registerIpcHandler(
     IPC_CHANNELS.addSubagent,
     (_event, request: AddSubagentRequest) =>
       inventoryRuntime.addSubagent(request, resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.resolveIssue, (_event, request: ResolveIssueRequest) =>
+  registerIpcHandler(IPC_CHANNELS.resolveIssue, (_event, request: ResolveIssueRequest) =>
     inventoryRuntime.resolveIssue(request),
   );
-  ipcMain.handle(IPC_CHANNELS.applyCapabilityAction, (_event, request: CapabilityActionRequest) =>
+  registerIpcHandler(IPC_CHANNELS.applyCapabilityAction, (_event, request: CapabilityActionRequest) =>
     inventoryRuntime.applyCapabilityAction(request, resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.dismissDrift, (_event, request: DismissDriftRequest) =>
+  registerIpcHandler(IPC_CHANNELS.dismissDrift, (_event, request: DismissDriftRequest) =>
     inventoryRuntime.dismissDrift(request),
   );
-  ipcMain.handle(IPC_CHANNELS.removeInventoryItem, (_event, request: RemoveInventoryItemRequest) =>
+  registerIpcHandler(IPC_CHANNELS.removeInventoryItem, (_event, request: RemoveInventoryItemRequest) =>
     inventoryRuntime.removeInventoryItem(request, resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.readAuditLog, (_event, options?: { limit?: number }) =>
+  registerIpcHandler(IPC_CHANNELS.readAuditLog, (_event, options?: { limit?: number }) =>
     inventoryRuntime.readAuditLog(options, resolveInventoryScanOptions()),
   );
-  ipcMain.handle(IPC_CHANNELS.undoAuditOperation, async (_event, operationId: string) => ({
+  registerIpcHandler(IPC_CHANNELS.undoAuditOperation, async (_event, operationId: string) => ({
     ...await inventoryRuntime.undoAuditOperation(operationId),
     settingsState: await readSettingsState(resolveInventoryScanOptions()),
   }));
-  ipcMain.handle(IPC_CHANNELS.releaseStartupObservation, () => {
+  registerIpcHandler(IPC_CHANNELS.releaseStartupObservation, () => {
     inventoryRuntime.releaseStartupObservation();
   });
   if (isDevToolsEnabled()) {
-    ipcMain.handle(IPC_CHANNELS.seedRepresentativeFixtures, async () => {
+    registerIpcHandler(IPC_CHANNELS.seedRepresentativeFixtures, async () => {
       const { seedRepresentativeFixtures } = await import('@main/sandbox-fixtures');
       const paths = resolveSandboxSkillIndexPaths();
       const result = await runAuditedIpcOperation({
@@ -199,30 +200,43 @@ export function registerIpcHandlers(): void {
       }, () => seedRepresentativeFixtures({ env: process.env }), paths);
       return result;
     });
-    ipcMain.handle(IPC_CHANNELS.setInventoryMode, (_event, mode: InventorySourceMode) => setInventoryMode(mode));
+    registerIpcHandler(IPC_CHANNELS.setInventoryMode, (_event, mode: InventorySourceMode) => setInventoryMode(mode));
   }
-  ipcMain.handle(IPC_CHANNELS.addCustomScanPath, (_event, scanPath: string) =>
+  registerIpcHandler(IPC_CHANNELS.addCustomScanPath, (_event, scanPath: string) =>
     runAuditedSettingsOperation('Added custom scan path', (scanOptions) => addCustomScanPath(scanPath, scanOptions)),
   );
-  ipcMain.handle(IPC_CHANNELS.removeCustomScanPath, (_event, scanPath: string) =>
+  registerIpcHandler(IPC_CHANNELS.removeCustomScanPath, (_event, scanPath: string) =>
     runAuditedSettingsOperation('Removed custom scan path', (scanOptions) => removeCustomScanPath(scanPath, scanOptions)),
   );
-  ipcMain.handle(IPC_CHANNELS.setPreferredCanonicalSourcePath, (_event, scanPath: string) =>
+  registerIpcHandler(IPC_CHANNELS.setPreferredCanonicalSourcePath, (_event, scanPath: string) =>
     runAuditedSettingsOperation('Set preferred Universal source', (scanOptions) => setPreferredCanonicalSourcePath(scanPath, scanOptions)),
   );
-  ipcMain.handle(IPC_CHANNELS.clearPreferredCanonicalSourcePath, () =>
+  registerIpcHandler(IPC_CHANNELS.clearPreferredCanonicalSourcePath, () =>
     runAuditedSettingsOperation('Cleared preferred Universal source', (scanOptions) => clearPreferredCanonicalSourcePath(scanOptions)),
   );
-  ipcMain.handle(IPC_CHANNELS.setDevSidebarInventorySourceSwitcherVisible, (_event, visible: boolean) =>
+  registerIpcHandler(IPC_CHANNELS.setDevSidebarInventorySourceSwitcherVisible, (_event, visible: boolean) =>
     runAuditedGlobalSettingsOperation(
       visible ? 'Show sidebar inventory source switcher' : 'Hide sidebar inventory source switcher',
       (scanOptions) => setDevSidebarInventorySourceSwitcherVisible(visible, scanOptions),
     ),
   );
-  ipcMain.handle(IPC_CHANNELS.completeOnboarding, (_event, request: CompleteOnboardingRequest = {}) =>
+  registerIpcHandler(IPC_CHANNELS.completeOnboarding, (_event, request: CompleteOnboardingRequest = {}) =>
     runAuditedSettingsOperation('Completed onboarding', (scanOptions) => completeOnboarding(request, scanOptions)),
   );
-  ipcMain.handle(IPC_CHANNELS.ping, () => 'pong');
+  registerIpcHandler(IPC_CHANNELS.ping, () => 'pong');
+}
+
+function registerIpcHandler<TArgs extends unknown[], TResult>(
+  channel: string,
+  handler: (event: Electron.IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>,
+): void {
+  ipcMain.handle(channel, async (event, ...args: TArgs) => {
+    try {
+      return await handler(event, ...args);
+    } catch (error) {
+      return serializeIpcError(error);
+    }
+  });
 }
 
 async function runAuditedSettingsOperation<T>(title: string, run: (scanOptions: ReturnType<typeof resolveInventoryScanOptions>) => Promise<T>): Promise<T> {

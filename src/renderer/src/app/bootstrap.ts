@@ -1,4 +1,5 @@
 import { type SkillInventorySnapshot, type SkillIndexDesktopApi, type SkillIndexDevApi } from '@shared/contracts';
+import { unwrapIpcResponse } from '@shared/ipc-error';
 import {
   getBrowserPreviewDesktopApi,
   getBrowserPreviewDevApi,
@@ -9,10 +10,11 @@ export { createInitialSettingsState } from './browser-preview-adapter';
 
 const cachedInventorySnapshotPromises = new WeakMap<SkillIndexDesktopApi, Map<string, Promise<SkillInventorySnapshot | null>>>();
 const inventorySnapshotPromises = new WeakMap<SkillIndexDesktopApi, Map<string, Promise<SkillInventorySnapshot>>>();
+const diagnosticApiByBridge = new WeakMap<object, object>();
 
 export function getDesktopApi(): SkillIndexDesktopApi {
   if (typeof window !== 'undefined' && window.skillIndex) {
-    return window.skillIndex;
+    return withIpcErrorUnwrapping(window.skillIndex);
   }
 
   return getBrowserPreviewDesktopApi();
@@ -20,7 +22,7 @@ export function getDesktopApi(): SkillIndexDesktopApi {
 
 export function getDevApi(): SkillIndexDevApi | null {
   if (typeof window !== 'undefined' && window.skillIndexDev) {
-    return window.skillIndexDev;
+    return withIpcErrorUnwrapping(window.skillIndexDev);
   }
 
   if (typeof window === 'undefined' || !window.skillIndex) {
@@ -28,6 +30,35 @@ export function getDevApi(): SkillIndexDevApi | null {
   }
 
   return null;
+}
+
+function withIpcErrorUnwrapping<T extends object>(api: T): T {
+  const existingApi = diagnosticApiByBridge.get(api);
+  if (existingApi) {
+    return existingApi as T;
+  }
+
+  const diagnosticApi: Record<PropertyKey, unknown> = {};
+  for (const property of Reflect.ownKeys(api)) {
+    const value: unknown = Reflect.get(api, property);
+    diagnosticApi[property] = typeof value === 'function'
+      ? (...args: unknown[]) => {
+          const result: unknown = Reflect.apply(value, api, args);
+          return isPromiseLike(result)
+            ? result.then((response) => unwrapIpcResponse(response))
+            : result;
+        }
+      : value;
+  }
+  diagnosticApiByBridge.set(api, diagnosticApi);
+  return diagnosticApi as T;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && 'then' in value
+    && typeof value.then === 'function';
 }
 
 export function getInitialInventorySnapshot(): SkillInventorySnapshot | null {
