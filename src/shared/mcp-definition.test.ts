@@ -4,6 +4,7 @@ import {
   buildPortableMcpDefinition,
   getMcpDefinitionArgs,
   normalizeMcpDefinitionForComparison,
+  normalizeMcpDefinitionForParser,
   splitMcpDefinitionForComparison,
 } from './mcp-definition';
 
@@ -70,21 +71,38 @@ describe('MCP definition normalization', () => {
     });
   });
 
-  it('normalizes OpenCode bearer environment headers to the portable auth field', () => {
-    expect(normalizeMcpDefinitionForComparison({
+  it('normalizes environment-backed headers to portable remote auth fields', () => {
+    const definition = {
       type: 'remote',
       url: 'https://api.githubcopilot.com/mcp/',
       headers: {
         Authorization: 'Bearer {env:GITHUB_PAT_TOKEN}',
+        'X-Api-Key': '{env:GITHUB_API_KEY}',
         'X-Client': 'skill-index',
       },
-    })).toEqual({
+    };
+
+    expect(normalizeMcpDefinitionForComparison(
+      normalizeMcpDefinitionForParser(definition, 'jsonc-opencode-mcp'),
+    )).toEqual({
       transport: 'http',
       url: 'https://api.githubcopilot.com/mcp/',
       headers: {
         'X-Client': 'skill-index',
       },
+      env_http_headers: {
+        'X-Api-Key': 'GITHUB_API_KEY',
+      },
       bearer_token_env_var: 'GITHUB_PAT_TOKEN',
+    });
+    expect(normalizeMcpDefinitionForComparison(definition)).toEqual({
+      transport: 'http',
+      url: 'https://api.githubcopilot.com/mcp/',
+      headers: {
+        Authorization: 'Bearer {env:GITHUB_PAT_TOKEN}',
+        'X-Api-Key': '{env:GITHUB_API_KEY}',
+        'X-Client': 'skill-index',
+      },
     });
   });
 

@@ -28,6 +28,7 @@ import {
   getMcpDefinitionRemoteUrl,
   isMcpDefinitionObject,
   isMcpServerDefinitions,
+  normalizeMcpDefinitionForParser,
   splitMcpDefinitionForComparison,
 } from '@shared/mcp-definition';
 import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
@@ -745,6 +746,7 @@ function getNestedMcpDefinitionsField(parsed: McpDefinitionObject, pathSegments:
 function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpOwnerRecord): ParsedMcpEntry {
   const invalidDetails: string[] = [];
   const normalizedDefinition: McpDefinitionObject = isMcpDefinitionObject(definition) ? definition : {};
+  const comparableDefinition = normalizeMcpDefinitionForParser(normalizedDefinition, owner.parserKind);
   const definitionText = stableStringify(normalizedDefinition, true);
 
   if (!isMcpDefinitionObject(definition)) {
@@ -755,7 +757,7 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
   invalidDetails.push(...connection.invalidDetails);
 
   const args = getMcpDefinitionArgs(normalizedDefinition);
-  const splitDefinition = splitMcpDefinitionForComparison(normalizedDefinition, connection);
+  const splitDefinition = splitMcpDefinitionForComparison(comparableDefinition, connection);
   const coreComparisonKey = stableStringify(splitDefinition.core);
   const nativeComparisonKey = stableStringify(splitDefinition.native);
 
@@ -770,6 +772,7 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
       scope: owner.scope,
       configPath: owner.configPath as string,
       configName: name,
+      parserKind: owner.parserKind,
       transport: connection.transport,
       command: connection.command,
       url: connection.url,

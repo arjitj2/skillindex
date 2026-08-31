@@ -368,7 +368,7 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
-  it('round-trips portable bearer token environment variables through OpenCode headers', async () => {
+  it('round-trips portable environment-backed HTTP headers through OpenCode headers', async () => {
     const paths = await createPaths('skillindex-resolve-mcp-opencode-bearer-');
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const opencodeConfigPath = path.join(paths.sandboxRoot, '.config', 'opencode', 'opencode.json');
@@ -379,6 +379,13 @@ describe('resolveInventoryIssue', () => {
           github: {
             type: 'http',
             url: 'https://api.githubcopilot.com/mcp/',
+            headers: {
+              'X-Client': 'skill-index',
+            },
+            env_http_headers: {
+              'X-Api-Key': 'GITHUB_API_KEY',
+              'X-Organization': 'GITHUB_ORG',
+            },
             bearer_token_env_var: 'GITHUB_PAT_TOKEN',
           },
         },
@@ -394,6 +401,15 @@ describe('resolveInventoryIssue', () => {
       }, null, 2)}\n`),
     ]);
 
+    const resolutionOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: {
+        SKILL_INDEX_AGENT_SUBSET: 'opencode',
+      },
+    };
+
     const resolvedSnapshot = await resolveInventoryIssue(
       {
         entity: 'mcp',
@@ -401,14 +417,7 @@ describe('resolveInventoryIssue', () => {
         mcpName: 'github',
         selectedVariantPath: agentsConfigPath,
       },
-      {
-        paths,
-        includeSandboxSources: true,
-        includeLiveSources: false,
-        env: {
-          SKILL_INDEX_AGENT_SUBSET: 'opencode',
-        },
-      },
+      resolutionOptions,
     );
 
     const opencodeConfig = await readFileJson(opencodeConfigPath) as {
@@ -419,9 +428,42 @@ describe('resolveInventoryIssue', () => {
       url: 'https://api.githubcopilot.com/mcp/',
       headers: {
         Authorization: 'Bearer {env:GITHUB_PAT_TOKEN}',
+        'X-Api-Key': '{env:GITHUB_API_KEY}',
+        'X-Client': 'skill-index',
+        'X-Organization': '{env:GITHUB_ORG}',
       },
     });
     expect(resolvedSnapshot.mcps?.find((mcp) => mcp.name === 'github')).toMatchObject({
+      status: 'healthy',
+      issueReasons: [],
+    });
+
+    await writeSkillFile(agentsConfigPath, `${JSON.stringify({ servers: {} }, null, 2)}\n`);
+    const recreatedSnapshot = await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'github',
+        selectedVariantPath: opencodeConfigPath,
+      },
+      resolutionOptions,
+    );
+    const universalConfig = await readFileJson(agentsConfigPath) as {
+      servers?: Record<string, Record<string, unknown>>;
+    };
+    expect(universalConfig.servers?.github).toEqual({
+      type: 'http',
+      url: 'https://api.githubcopilot.com/mcp/',
+      headers: {
+        'X-Client': 'skill-index',
+      },
+      env_http_headers: {
+        'X-Api-Key': 'GITHUB_API_KEY',
+        'X-Organization': 'GITHUB_ORG',
+      },
+      bearer_token_env_var: 'GITHUB_PAT_TOKEN',
+    });
+    expect(recreatedSnapshot.mcps?.find((mcp) => mcp.name === 'github')).toMatchObject({
       status: 'healthy',
       issueReasons: [],
     });

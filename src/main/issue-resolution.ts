@@ -26,6 +26,7 @@ import {
   getMcpDefinitionArgs,
   isMcpDefinitionObject,
   isMcpServerDefinitions,
+  normalizeMcpDefinitionForParser,
   splitMcpDefinitionForComparison,
 } from '@shared/mcp-definition';
 import {
@@ -1420,11 +1421,12 @@ function parseSelectedMcpDefinition(location: McpLocationRecord): SelectedMcpDef
     throw new Error('The selected MCP definition must use a supported object structure.');
   }
 
-  const splitDefinition = splitMcpDefinitionForComparison(parsed, location);
+  const normalizedDefinition = normalizeMcpDefinitionForParser(parsed, location.parserKind);
+  const splitDefinition = splitMcpDefinitionForComparison(normalizedDefinition, location);
   return {
     agentLocal: splitDefinition.agentLocal,
     agentLocalKey: location.agentLocalKey,
-    core: buildPortableMcpDefinition(parsed, location),
+    core: buildPortableMcpDefinition(normalizedDefinition, location),
     native: splitDefinition.native,
   };
 }
@@ -2053,15 +2055,23 @@ function toOpenCodeMcpDefinition(definition: McpDefinitionValue): McpDefinitionO
     if (url) {
       remoteDefinition.url = url;
     }
-    if (isMcpDefinitionObject(normalizedDefinition.headers)) {
-      remoteDefinition.headers = normalizedDefinition.headers;
+    const headers: McpDefinitionObject = isMcpDefinitionObject(normalizedDefinition.headers)
+      ? { ...normalizedDefinition.headers }
+      : {};
+    if (isMcpDefinitionObject(normalizedDefinition.env_http_headers)) {
+      for (const [header, rawEnvironmentVariable] of Object.entries(normalizedDefinition.env_http_headers)) {
+        const environmentVariable = getNonEmptyString(rawEnvironmentVariable);
+        if (environmentVariable) {
+          headers[header] = `{env:${environmentVariable}}`;
+        }
+      }
     }
     const bearerTokenEnvVar = getNonEmptyString(normalizedDefinition.bearer_token_env_var);
     if (bearerTokenEnvVar) {
-      remoteDefinition.headers = {
-        ...(isMcpDefinitionObject(remoteDefinition.headers) ? remoteDefinition.headers : {}),
-        Authorization: `Bearer {env:${bearerTokenEnvVar}}`,
-      };
+      headers.Authorization = `Bearer {env:${bearerTokenEnvVar}}`;
+    }
+    if (Object.keys(headers).length > 0) {
+      remoteDefinition.headers = headers;
     }
     copyOptionalOpenCodeFields(normalizedDefinition, remoteDefinition, ['enabled', 'oauth', 'timeout']);
     return remoteDefinition;

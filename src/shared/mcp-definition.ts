@@ -1,4 +1,5 @@
 import type {
+  AgentMcpParserKind,
   McpConfiguredTransportKind,
   McpDefinitionObject,
   McpDefinitionValue,
@@ -48,6 +49,50 @@ export function normalizeMcpDefinitionForComparison(
   connection?: McpDefinitionConnectionHint,
 ): McpServerDefinition {
   return buildComparableMcpDefinition(definition, connection);
+}
+
+export function normalizeMcpDefinitionForParser(
+  definition: McpDefinitionObject,
+  parserKind: AgentMcpParserKind | undefined,
+): McpDefinitionObject {
+  if (parserKind !== 'jsonc-opencode-mcp') {
+    return definition;
+  }
+
+  const headers = getMcpHeaders(definition);
+  if (!headers) {
+    return definition;
+  }
+
+  const explicitEnvironmentHeaders = isMcpDefinitionObject(definition.env_http_headers)
+    ? definition.env_http_headers
+    : undefined;
+  const explicitBearerTokenEnvVar = getNonEmptyString(definition.bearer_token_env_var);
+  const partitionedHeaders = partitionPortableMcpHeaders(
+    headers,
+    explicitEnvironmentHeaders,
+    explicitBearerTokenEnvVar,
+  );
+  const normalized: McpDefinitionObject = { ...definition };
+  const environmentHeaders = {
+    ...partitionedHeaders.environment,
+    ...explicitEnvironmentHeaders,
+  };
+
+  if (Object.keys(partitionedHeaders.literal).length > 0) {
+    normalized.headers = partitionedHeaders.literal;
+  } else {
+    delete normalized.headers;
+  }
+  delete normalized.http_headers;
+  if (Object.keys(environmentHeaders).length > 0) {
+    normalized.env_http_headers = environmentHeaders;
+  }
+  if (partitionedHeaders.bearerTokenEnvVar) {
+    normalized.bearer_token_env_var = partitionedHeaders.bearerTokenEnvVar;
+  }
+
+  return normalized;
 }
 
 export function splitMcpDefinitionForComparison(
@@ -149,26 +194,15 @@ function buildComparableMcpDefinition(
     }
 
     const headers = getMcpHeaders(definition);
-    const explicitBearerTokenEnvVar = getNonEmptyString(definition.bearer_token_env_var);
-    const detectedBearerHeader = headers ? getBearerTokenEnvironmentHeader(headers) : undefined;
-    const bearerHeader = detectedBearerHeader
-      && (!explicitBearerTokenEnvVar || explicitBearerTokenEnvVar === detectedBearerHeader.envVar)
-      ? detectedBearerHeader
-      : undefined;
     if (headers) {
-      const comparableHeaders = bearerHeader
-        ? Object.fromEntries(Object.entries(headers).filter(([key]) => key !== bearerHeader.key))
-        : headers;
-      if (Object.keys(comparableHeaders).length > 0) {
-        comparable.headers = comparableHeaders;
-      }
+      comparable.headers = headers;
     }
 
     if (isMcpDefinitionObject(definition.env_http_headers)) {
       comparable.env_http_headers = definition.env_http_headers;
     }
 
-    const bearerTokenEnvVar = explicitBearerTokenEnvVar ?? bearerHeader?.envVar;
+    const bearerTokenEnvVar = getNonEmptyString(definition.bearer_token_env_var);
     if (bearerTokenEnvVar) {
       comparable.bearer_token_env_var = bearerTokenEnvVar;
     }
@@ -325,19 +359,51 @@ function getMcpHeaders(definition: McpDefinitionObject): McpDefinitionObject | u
   return undefined;
 }
 
-function getBearerTokenEnvironmentHeader(
+function partitionPortableMcpHeaders(
   headers: McpDefinitionObject,
-): { key: string; envVar: string } | undefined {
+  explicitEnvironmentHeaders: McpDefinitionObject | undefined,
+  explicitBearerTokenEnvVar: string | undefined,
+): {
+  literal: McpDefinitionObject;
+  environment: McpDefinitionObject;
+  bearerTokenEnvVar?: string;
+} {
+  const literal: McpDefinitionObject = {};
+  const environment: McpDefinitionObject = {};
+  let bearerTokenEnvVar: string | undefined;
+
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== 'authorization' || typeof value !== 'string') {
+    if (typeof value !== 'string') {
+      literal[key] = value;
       continue;
     }
-    const match = /^Bearer\s+\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/i.exec(value.trim());
-    if (match) {
-      return { key, envVar: match[1] };
+
+    const bearerMatch = key.toLowerCase() === 'authorization'
+      ? /^Bearer\s+\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/i.exec(value.trim())
+      : null;
+    if (
+      bearerMatch
+      && !bearerTokenEnvVar
+      && (!explicitBearerTokenEnvVar || explicitBearerTokenEnvVar === bearerMatch[1])
+    ) {
+      bearerTokenEnvVar = bearerMatch[1];
+      continue;
     }
+
+    const environmentMatch = /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/i.exec(value.trim());
+    const explicitEnvironmentVariable = getNonEmptyString(explicitEnvironmentHeaders?.[key]);
+    if (
+      environmentMatch
+      && (!explicitEnvironmentVariable || explicitEnvironmentVariable === environmentMatch[1])
+    ) {
+      environment[key] = environmentMatch[1];
+      continue;
+    }
+
+    literal[key] = value;
   }
-  return undefined;
+
+  return { literal, environment, bearerTokenEnvVar };
 }
 
 export function isMcpDefinitionObject(value: unknown): value is McpDefinitionObject {
