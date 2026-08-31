@@ -258,9 +258,7 @@ function getCachedGroupedSubagentName(
     writable: false,
     canonical: location.canonical,
   };
-  const parsed = location.fileType === 'symlink'
-    ? { name: fallbackName }
-    : parseSubagentDefinitionText(location.definitionText ?? '', owner, fallbackName);
+  const parsed = parseSubagentDefinitionText(location.definitionText ?? '', owner, fallbackName);
   const baseName = location.fileType === 'symlink' ? fallbackName : parsed.name;
   if (plugin) {
     return `${plugin.pluginName}:${baseName}`;

@@ -629,6 +629,28 @@ describe('subagent inventory', () => {
     expect(cachedRemoved).toEqual(freshRemoved);
   });
 
+  it('keeps cached namespaced Markdown materializations grouped with their plugin source', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(universalPath, claudePath);
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+
+    const fresh = (await scanInventory(scanOptions)).subagents ?? [];
+    const cached = (await readCachedInventory(scanOptions))?.subagents ?? [];
+
+    expect(cached.find((subagent) => subagent.name === 'alpha:reviewer')?.locations)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ path: claudePath, fileType: 'symlink' })]));
+    expect(cached.find((subagent) => subagent.name === 'alpha-reviewer')).toBeUndefined();
+    expect(cached).toEqual(fresh);
+  });
+
   it('keeps plugin updates advisory when Universal matches one managed source', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const universalPath = path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md');
