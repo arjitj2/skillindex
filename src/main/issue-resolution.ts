@@ -1401,6 +1401,15 @@ function isAgentsMcpConfigPath(value: string): boolean {
 }
 
 function parseSelectedMcpDefinition(location: McpLocationRecord): SelectedMcpDefinition {
+  if (location.portableDefinition) {
+    return {
+      agentLocal: location.agentLocal ?? {},
+      agentLocalKey: location.agentLocalKey,
+      core: buildPortableMcpDefinition(location.portableDefinition, location),
+      native: location.nativeDefinition ?? {},
+    };
+  }
+
   if (!location.definitionText) {
     const fallbackDefinition = {
       ...(location.command ? { command: location.command } : {}),
@@ -2053,8 +2062,23 @@ function toOpenCodeMcpDefinition(definition: McpDefinitionValue): McpDefinitionO
     if (url) {
       remoteDefinition.url = url;
     }
-    if (isMcpDefinitionObject(normalizedDefinition.headers)) {
-      remoteDefinition.headers = normalizedDefinition.headers;
+    const headers: McpDefinitionObject = isMcpDefinitionObject(normalizedDefinition.headers)
+      ? { ...normalizedDefinition.headers }
+      : {};
+    if (isMcpDefinitionObject(normalizedDefinition.env_http_headers)) {
+      for (const [header, rawEnvironmentVariable] of Object.entries(normalizedDefinition.env_http_headers)) {
+        const environmentVariable = getNonEmptyString(rawEnvironmentVariable);
+        if (environmentVariable) {
+          headers[header] = `{env:${environmentVariable}}`;
+        }
+      }
+    }
+    const bearerTokenEnvVar = getNonEmptyString(normalizedDefinition.bearer_token_env_var);
+    if (bearerTokenEnvVar) {
+      headers.Authorization = `Bearer {env:${bearerTokenEnvVar}}`;
+    }
+    if (Object.keys(headers).length > 0) {
+      remoteDefinition.headers = headers;
     }
     copyOptionalOpenCodeFields(normalizedDefinition, remoteDefinition, ['enabled', 'oauth', 'timeout']);
     return remoteDefinition;
