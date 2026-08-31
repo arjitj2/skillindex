@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -297,7 +297,7 @@ describe('makeSkillCanonical', () => {
     );
   });
 
-  it('fails instead of inventing a live canonical directory when no canonical source is installed', async () => {
+  it('creates the default live Universal directory when resolving copies without an installed canonical source', async () => {
     const root = await createRoot('skillindex-canonicalize-live-missing-canonical-');
     const homeDir = path.join(root, 'home');
     const paths = resolveSkillIndexPaths({
@@ -336,20 +336,23 @@ describe('makeSkillCanonical', () => {
       writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n'),
     ]);
 
-    await expect(
-      makeSkillCanonical(
-        {
-          skillName,
-          selectedVariantPath: claudePath,
-        },
-        {
-          paths,
-          homeDir,
-          includeSandboxSources: false,
-          includeLiveSources: true,
-        },
-      ),
-    ).rejects.toThrow(`Unable to locate the canonical live skills directory for "${skillName}".`);
+    await makeSkillCanonical(
+      {
+        skillName,
+        selectedVariantPath: claudePath,
+      },
+      {
+        paths,
+        homeDir,
+        includeSandboxSources: false,
+        includeLiveSources: true,
+      },
+    );
+
+    const canonicalPath = path.join(homeDir, '.agents', 'skills', skillName);
+    expect(await readFile(path.join(canonicalPath, 'SKILL.md'), 'utf8')).toContain('Claude version wins.');
+    expect(await readlink(claudePath)).toBe(canonicalPath);
+    expect(await readlink(factoryPath)).toBe(canonicalPath);
   });
 
   it('creates the canonical package in the live shared directory and rewrites live installs into symlinks', async () => {
@@ -450,6 +453,75 @@ describe('makeSkillCanonical', () => {
       sourceId: 'sandbox-agents',
       path: canonicalPath,
     });
+  });
+
+  it('copies selected plugin packages into Universal, keeps cache versions unchanged, and retargets links through the stable Universal path', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({
+      env: { SKILL_INDEX_DATA_DIR: root },
+      homeDir,
+    });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const nextPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '2.0.0');
+    const nextPluginPath = path.join(nextPluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await mkdir(path.join(pluginPath, 'assets'), { recursive: true });
+    await writeFile(path.join(pluginPath, 'assets', 'payload.bin'), Buffer.from([0, 1, 2, 255]));
+    await mkdir(path.join(nextPluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(nextPluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '2.0.0' }), 'utf8');
+    await writeSkillFile(path.join(nextPluginPath, 'SKILL.md'), '# Plugin foo v2\n');
+    await mkdir(path.join(nextPluginPath, 'assets'), { recursive: true });
+    await writeFile(path.join(nextPluginPath, 'assets', 'payload.bin'), Buffer.from([255, 2, 1, 0]));
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), '# Factory foo\n');
+    await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
+    const beforePluginSkill = await readFile(path.join(pluginPath, 'SKILL.md'));
+    const beforePluginAsset = await readFile(path.join(pluginPath, 'assets', 'payload.bin'));
+    const beforeNextPluginSkill = await readFile(path.join(nextPluginPath, 'SKILL.md'));
+    const beforeNextPluginAsset = await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'));
+
+    const snapshot = await makeSkillCanonical({
+      skillName: 'tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'))).toEqual(beforePluginSkill);
+    expect(await readFile(path.join(universalPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
+    expect(await readlink(factoryPath)).toBe(universalPath);
+    expect(await realpath(factoryPath)).toBe(await realpath(universalPath));
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'))).toEqual(beforePluginSkill);
+    expect(await readFile(path.join(pluginPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
+    expect(snapshot.skills.find((skill) => skill.name === 'tools:foo')?.detailDiagnostics.universalDecision?.universal)
+      .toMatchObject({ kind: 'path', sourceId: 'live-agents', path: universalPath });
+
+    await makeSkillCanonical({
+      skillName: 'tools:foo',
+      selectedVariantPath: nextPluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'))).toEqual(beforeNextPluginSkill);
+    expect(await readFile(path.join(universalPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
+    expect(await readlink(factoryPath)).toBe(universalPath);
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'))).toEqual(beforePluginSkill);
+    expect(await readFile(path.join(pluginPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
+    expect(await readFile(path.join(nextPluginPath, 'SKILL.md'))).toEqual(beforeNextPluginSkill);
+    expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
   });
 });
 

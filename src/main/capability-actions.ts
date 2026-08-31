@@ -21,6 +21,7 @@ import {
 } from '@shared/skill-index-paths';
 
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
+import { makeSkillCanonical } from '@main/skill-canonicalization';
 import { resolveInventoryIssue } from '@main/issue-resolution';
 
 export interface CapabilityActionOptions extends ScanSkillInventoryOptions {
@@ -47,12 +48,23 @@ export async function applyCapabilityAction(
   });
 
   switch (request.action) {
-    case 'choose-universal-version':
+    case 'choose-universal-version': {
+      const selectedLocation = selectRepresentativeLocation(findSkill(snapshot, request.skillName), request.selectedVariantPath);
+      if (selectedLocation.provenance?.kind === 'plugin') {
+        return makeSkillCanonical({
+          skillName: request.skillName,
+          selectedVariantPath: selectedLocation.path,
+        }, {
+          ...options,
+          paths,
+        });
+      }
       await persistSkillUniversalDecision(request, snapshot, {
         ...options,
         paths,
       });
       break;
+    }
     default: {
       const unsupported = request as { action?: string };
       throw new Error(`Unsupported capability action: ${unsupported.action ?? 'unknown'}`);

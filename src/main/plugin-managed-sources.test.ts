@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertSkillSymlinkTargetIsUniversal,
   annotateComparableVersionEvidence,
   buildPluginManagedSourceCandidate,
   detectPluginDependencyWarnings,
@@ -109,6 +110,14 @@ describe('plugin managed sources', () => {
     expect(isPluginManagedTarget('/cache/other/skills/foo', sources)).toBe(false);
     expect(isPluginManagedTarget('/cache/tools/skills/../other', sources)).toBe(false);
     expect(isPluginManagedTarget('/cache/tools/skills', [{ kind: 'agent', skillsDir: '/cache/tools/skills' }])).toBe(false);
+  });
+
+  it('rejects a plugin-managed target at the symlink creation boundary', () => {
+    const sources = [{ kind: 'plugin' as const, skillsDir: '/cache/tools/skills' }];
+
+    expect(() => assertSkillSymlinkTargetIsUniversal('/cache/tools/skills/foo', sources))
+      .toThrow(/must target a writable Universal skill package/i);
+    expect(() => assertSkillSymlinkTargetIsUniversal('/home/.agents/skills/foo', sources)).not.toThrow();
   });
 
   it('annotates only the greatest comparable version when no candidate is enabled', () => {

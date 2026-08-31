@@ -788,24 +788,18 @@ describe('inventory runtime', () => {
     const agentsPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
     const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', skillName);
 
-    const afterDivergedResolution = await runtime.resolveIssue({
+    const afterDivergedResolution = await runtime.applyCapabilityAction({
       entity: 'skill',
-      issue: 'diverged-copies',
+      action: 'choose-universal-version',
       skillName,
       selectedVariantPath: agentsPath,
     });
     const afterDivergedSkill = afterDivergedResolution.skills.find((skill) => skill.name === skillName);
 
-    expect(afterDivergedSkill).toMatchObject({
-      issueReasons: ['missing-symlinks'],
-    });
+    expect(afterDivergedSkill).toMatchObject({ issueReasons: [] });
     expect(afterDivergedSkill?.detailDiagnostics.acceptedAlternates).toHaveLength(2);
 
-    const afterMissingResolution = await runtime.resolveIssue({
-      entity: 'skill',
-      issue: 'missing-symlinks',
-      skillName,
-    });
+    const afterMissingResolution = afterDivergedResolution;
     const afterMissingSkill = afterMissingResolution.skills.find((skill) => skill.name === skillName);
 
     expect(afterMissingSkill).toMatchObject({
@@ -974,17 +968,16 @@ describe('inventory runtime', () => {
     const skillName = 'example-workflow-kit:handoff-notes-with-static';
     const agentsPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
 
-    await runtime.resolveIssue({
+    await runtime.applyCapabilityAction({
       entity: 'skill',
-      issue: 'diverged-copies',
+      action: 'choose-universal-version',
       skillName,
       selectedVariantPath: agentsPath,
     });
 
     const [operation] = await runtime.readAuditLog();
     expect(operation).toMatchObject({
-      kind: 'resolve-skill-issue',
-      title: `Resolved Diverged Copies for ${skillName}`,
+      kind: 'capability-action',
     });
     expect(operation.actions.some((action) => action.path === paths.configFile && action.kind === 'update-app-config')).toBe(true);
   });

@@ -9,6 +9,7 @@ import {
 } from '@shared/skill-index-paths';
 
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
+import { assertSkillSymlinkTargetIsUniversal } from '@main/plugin-managed-sources';
 import { persistSkillUniversalDecisionForSelection } from '@main/skill-universal-decisions';
 
 export interface MakeSkillCanonicalRequest {
@@ -45,7 +46,11 @@ export async function makeSkillCanonical(
     throw new Error(`Skill "${skillName}" is no longer available to use as Universal.`);
   }
 
-  if (!skill.isDrifted) {
+  const requestedVariantPath = request.selectedSourcePath ?? request.selectedVariantPath;
+  const requestedPluginSource = requestedVariantPath
+    ? skill.locations.find((location) => location.path === requestedVariantPath)?.provenance?.kind === 'plugin'
+    : false;
+  if (!skill.isDrifted && !requestedPluginSource) {
     throw new Error('Use as Universal is only available for skills that need attention.');
   }
 
@@ -66,7 +71,7 @@ export async function makeSkillCanonical(
   assertAffectedSourcesWritableOrPlugin(sources);
 
   const mutationScope = resolveSkillMutationScope(skill, request);
-  const canonicalPath = resolveCanonicalSkillInstallPath(beforeSnapshot, skill.name, mutationScope);
+  const canonicalPath = resolveCanonicalSkillInstallPath(beforeSnapshot, skill.name, mutationScope, paths);
   const realFileCandidates = skill.locations
     .filter((location) => location.fileType === 'real-file')
     .sort(compareNewestRealFiles);
@@ -86,13 +91,9 @@ export async function makeSkillCanonical(
     request,
     structuralState: skill.structuralState,
   });
-  const canonicalSource = resolveCanonicalSkillSource(beforeSnapshot, mutationScope);
-  const universalTargetPath = selectedSource.provenance?.kind === 'plugin'
-    ? selectedSource.path
-    : canonicalPath;
-  const persistedUniversalLocation = selectedSource.provenance?.kind === 'plugin'
-    ? selectedSource
-    : createCanonicalDecisionLocation(selectedSource, canonicalPath, canonicalSource);
+  const canonicalSource = resolveCanonicalSkillSource(beforeSnapshot, mutationScope, undefined, paths);
+  const universalTargetPath = canonicalPath;
+  const persistedUniversalLocation = createCanonicalDecisionLocation(selectedSource, canonicalPath, canonicalSource);
   const shouldLinkMissingAgentInstalls = options.linkMissingAgentInstalls !== false;
   const writableLinkedSkillsDirs = new Set(
     !shouldLinkMissingAgentInstalls
@@ -135,7 +136,11 @@ export async function makeSkillCanonical(
   }
 
   await Promise.all(
-    [...symlinkTargets.values()].map((targetPath) => replaceWithCanonicalSymlink(targetPath, universalTargetPath)),
+    [...symlinkTargets.values()].map((targetPath) => replaceWithCanonicalSymlink(
+      targetPath,
+      universalTargetPath,
+      beforeSnapshot,
+    )),
   );
 
   return scanInventory({
@@ -184,10 +189,6 @@ async function materializeCanonicalFile({
   canonicalPath: string;
   selectedSource: SkillLocationRecord;
 }) {
-  if (selectedSource.provenance?.kind === 'plugin') {
-    return;
-  }
-
   if (selectedSource.path === canonicalPath && selectedSource.fileType === 'real-file') {
     return;
   }
@@ -201,7 +202,12 @@ async function materializeCanonicalFile({
   });
 }
 
-async function replaceWithCanonicalSymlink(locationPath: string, canonicalPath: string): Promise<void> {
+async function replaceWithCanonicalSymlink(
+  locationPath: string,
+  canonicalPath: string,
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
   await mkdir(path.dirname(locationPath), { recursive: true });
   await rm(locationPath, { recursive: true, force: true });
   await symlink(canonicalPath, locationPath);
@@ -237,14 +243,16 @@ function resolveCanonicalSkillInstallPath(
   snapshot: SkillInventorySnapshot,
   skillName: string,
   scope: SkillLocationRecord['sourceScope'],
+  paths: SkillIndexPaths,
 ): string {
-  return getSkillInstallPath(resolveCanonicalSkillSource(snapshot, scope, skillName).skillsDir, skillName);
+  return getSkillInstallPath(resolveCanonicalSkillSource(snapshot, scope, skillName, paths).skillsDir, skillName);
 }
 
 function resolveCanonicalSkillSource(
   snapshot: SkillInventorySnapshot,
   scope: SkillLocationRecord['sourceScope'],
   skillName?: string,
+  paths?: SkillIndexPaths,
 ): SkillInventorySnapshot['sources'][number] {
   const preferredCanonicalSource = snapshot.sources.find((source) =>
     source.preferredCanonical === true && source.scope === scope);
@@ -255,6 +263,23 @@ function resolveCanonicalSkillSource(
   const canonicalSource = snapshot.sources.find((source) => source.canonical && source.scope === scope);
   if (canonicalSource) {
     return canonicalSource;
+  }
+
+  if (paths && (scope === 'live' || scope === 'sandbox')) {
+    const skillsDir = scope === 'sandbox'
+      ? paths.sandboxCanonicalUserSkillsDir
+      : paths.liveCanonicalUserSkillsDir;
+    return {
+      id: `${scope}-agents`,
+      label: `${scope === 'sandbox' ? 'Sandbox' : 'Live'} .agents`,
+      canonical: true,
+      kind: 'canonical',
+      writable: true,
+      scope,
+      skillsDir,
+      preferredCanonical: false,
+      compatibleAgentFamilies: [],
+    };
   }
 
   throw new Error(skillName

@@ -45,6 +45,15 @@ export function isPluginManagedTarget(
   });
 }
 
+export function assertSkillSymlinkTargetIsUniversal(
+  targetPath: string,
+  sources: Array<Pick<SkillScanSource, 'kind' | 'skillsDir'>>,
+): void {
+  if (isPluginManagedTarget(targetPath, sources)) {
+    throw new Error('Skill symlinks must target a writable Universal skill package, not a plugin-managed cache path.');
+  }
+}
+
 export function buildPluginManagedSourceCandidate({
   path: sourcePath,
   plugin,

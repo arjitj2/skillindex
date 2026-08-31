@@ -46,6 +46,7 @@ import {
 
 import { sanitizeJsonc, sortRecordValue } from '@main/json-utils';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
+import { assertSkillSymlinkTargetIsUniversal, isPluginManagedTarget } from '@main/plugin-managed-sources';
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
@@ -329,7 +330,7 @@ async function resolveSkillIssueIfCurrent(
       return;
     }
     case 'identical-copies': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
       const canonicalPath = canonicalPackage.path;
       const duplicatePaths = skill.locations
         .filter((location) =>
@@ -346,7 +347,7 @@ async function resolveSkillIssueIfCurrent(
       return;
     }
     case 'missing-symlinks': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
       const canonicalPath = canonicalPackage.path;
       const missingPaths = (skill.detailDiagnostics.missingInstallSources ?? [])
         .map((source) => resolveMissingSkillInstallPath(skill.name, source.sourceId, snapshot))
@@ -357,23 +358,27 @@ async function resolveSkillIssueIfCurrent(
       return;
     }
     case 'broken-symlink': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
       const canonicalPath = canonicalPackage.path;
       const brokenPaths = skill.locations
-        .filter((location) => location.fileType === 'symlink' && location.resolvedPath === undefined)
+        .filter((location) =>
+          location.fileType === 'symlink'
+          && location.resolvedPath === undefined
+          && path.normalize(location.path) !== path.normalize(canonicalPath))
         .map((location) => location.path);
       await Promise.all(dedupeNormalizedPaths(brokenPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
       await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
       return;
     }
     case 'wrong-symlink-target': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
       const canonicalPath = canonicalPackage.path;
       const wrongTargetPaths = skill.locations
         .filter((location) =>
           location.fileType === 'symlink'
           && location.resolvedPath !== undefined
-          && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath))
+          && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath)
+          && path.normalize(location.path) !== path.normalize(canonicalPath))
         .map((location) => location.path);
       await Promise.all(dedupeNormalizedPaths(wrongTargetPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
       await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
@@ -1189,16 +1194,9 @@ async function ensureCanonicalSkillPackage(
   skill: SkillRecord,
   snapshot: SkillInventorySnapshot,
   selectedVariantPath: string | undefined,
+  paths: SkillIndexPaths,
 ): Promise<CanonicalSkillPackage> {
-  const pluginCanonicalLocation = resolvePluginCanonicalSkillLocation(skill, selectedVariantPath);
-  if (pluginCanonicalLocation) {
-    return {
-      path: pluginCanonicalLocation.path,
-      location: pluginCanonicalLocation,
-    };
-  }
-
-  const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, selectedVariantPath);
+  const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, selectedVariantPath, paths);
   const canonicalRealFile = skill.locations.find((location) =>
     location.path === canonicalPath && location.fileType === 'real-file');
   if (canonicalRealFile) {
@@ -1223,10 +1221,51 @@ async function ensureCanonicalSkillPackage(
   });
   return {
     path: canonicalPath,
-    location: {
-      ...selectedLocation,
-      path: canonicalPath,
-    },
+    location: createCanonicalSkillLocation(selectedLocation, canonicalPath, snapshot, paths),
+  };
+}
+
+function createCanonicalSkillLocation(
+  selectedLocation: SkillLocationRecord,
+  canonicalPath: string,
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+): SkillLocationRecord {
+  const source = snapshot.sources.find((candidate) =>
+    path.normalize(candidate.skillsDir) === path.normalize(path.dirname(canonicalPath))
+    && candidate.writable
+    && candidate.kind !== 'plugin');
+  const fallbackSource = selectedLocation.sourceScope === 'sandbox' || selectedLocation.sourceScope === 'live'
+    ? {
+      id: `${selectedLocation.sourceScope}-agents`,
+      label: `${selectedLocation.sourceScope === 'sandbox' ? 'Sandbox' : 'Live'} .agents`,
+      scope: selectedLocation.sourceScope,
+      skillsDir: selectedLocation.sourceScope === 'sandbox'
+        ? paths.sandboxCanonicalUserSkillsDir
+        : paths.liveCanonicalUserSkillsDir,
+    }
+    : null;
+  const universalSource = source ?? fallbackSource;
+  if (!universalSource || path.normalize(universalSource.skillsDir) !== path.normalize(path.dirname(canonicalPath))) {
+    throw new Error(`Unable to locate a writable Universal skills directory for "${canonicalPath}".`);
+  }
+
+  return {
+    ...selectedLocation,
+    path: canonicalPath,
+    entrypointPath: selectedLocation.installKind === 'directory'
+      ? path.join(canonicalPath, 'SKILL.md')
+      : canonicalPath,
+    sourceId: universalSource.id,
+    sourceLabel: universalSource.label,
+    sourceScope: universalSource.scope,
+    fileType: 'real-file',
+    canonical: true,
+    canonicalRole: 'canonical',
+    mutability: 'writable',
+    provenance: undefined,
+    resolvedPath: canonicalPath,
+    symlinkTarget: undefined,
   };
 }
 
@@ -1782,6 +1821,7 @@ async function replaceWritableWithCanonicalSymlink(
   snapshot: SkillInventorySnapshot,
 ): Promise<void> {
   assertSkillSymlinkTargetWritable(locationPath, snapshot);
+  assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
   await replaceWithCanonicalSymlink(locationPath, canonicalPath);
 }
 
@@ -1816,57 +1856,14 @@ function assertSkillSymlinkTargetWritable(locationPath: string, snapshot: SkillI
   }
 }
 
-function resolvePluginCanonicalSkillLocation(
-  skill: SkillRecord,
-  selectedVariantPath: string | undefined,
-): SkillLocationRecord | null {
-  if (selectedVariantPath) {
-    const selectedLocation = skill.locations.find((location) =>
-      location.path === selectedVariantPath
-      && location.fileType === 'real-file'
-      && location.provenance?.kind === 'plugin');
-    return selectedLocation ?? null;
-  }
-
-  const pluginCanonicalLocations = skill.locations
-    .filter((location) =>
-      location.fileType === 'real-file'
-      && location.provenance?.kind === 'plugin'
-      && location.canonical)
-    .sort((left, right) => left.path.localeCompare(right.path));
-  if (pluginCanonicalLocations.length === 0) {
-    return null;
-  }
-
-  const decision = skill.detailDiagnostics.universalDecision;
-  if (decision?.universal.kind === 'plugin') {
-    const universal = decision.universal;
-    const decisionMatches = pluginCanonicalLocations.filter((location) => {
-      const plugin = location.provenance?.plugin;
-      return plugin?.host === universal.host
-        && plugin.pluginId === universal.pluginId
-        && path.basename(location.path) === universal.pluginSkillName;
-    });
-    const decisionMatch = decisionMatches.find((location) =>
-      universal.pluginVersion === undefined
-      || location.provenance?.plugin?.version === universal.pluginVersion)
-      ?? decisionMatches[0];
-    if (decisionMatch) {
-      return decisionMatch;
-    }
-  }
-
-  const realFileGroups = groupSkillRealFiles(skill.locations.filter((location) => location.fileType === 'real-file'));
-  return realFileGroups.length === 1 ? pluginCanonicalLocations[0] : null;
-}
-
 function resolveCanonicalSkillPath(
   skill: SkillRecord,
   snapshot: SkillInventorySnapshot,
   selectedVariantPath: string | undefined,
+  paths: SkillIndexPaths,
 ): string {
   const canonicalScope = resolveSkillMutationScope(skill, selectedVariantPath);
-  const decisionCanonicalPath = resolveUserConfirmedPathDecisionSkillPath(skill);
+  const decisionCanonicalPath = resolveUserConfirmedPathDecisionSkillPath(skill, snapshot);
   if (decisionCanonicalPath) {
     return decisionCanonicalPath;
   }
@@ -1882,10 +1879,20 @@ function resolveCanonicalSkillPath(
     return path.join(canonicalSource.skillsDir, skill.name);
   }
 
+  if (canonicalScope === 'sandbox' || canonicalScope === 'live') {
+    return path.join(
+      canonicalScope === 'sandbox' ? paths.sandboxCanonicalUserSkillsDir : paths.liveCanonicalUserSkillsDir,
+      skill.name,
+    );
+  }
+
   throw new Error(`Unable to locate the canonical ${canonicalScope} skills directory for "${skill.name}".`);
 }
 
-function resolveUserConfirmedPathDecisionSkillPath(skill: SkillRecord): string | null {
+function resolveUserConfirmedPathDecisionSkillPath(
+  skill: SkillRecord,
+  snapshot: SkillInventorySnapshot,
+): string | null {
   const decision = skill.detailDiagnostics.universalDecision;
   if (
     decision?.state !== 'user-confirmed'
@@ -1895,7 +1902,9 @@ function resolveUserConfirmedPathDecisionSkillPath(skill: SkillRecord): string |
     return null;
   }
 
-  return decision.universal.path;
+  return isPluginManagedTarget(decision.universal.path, snapshot.sources)
+    ? null
+    : decision.universal.path;
 }
 
 function resolvePreferredCanonicalSkillPath(

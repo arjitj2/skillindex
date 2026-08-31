@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -1148,7 +1148,7 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
-  it('makes a plugin skill Universal by linking writable agents to the plugin root', async () => {
+  it('copies a plugin skill into Universal before linking writable agents', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -1182,7 +1182,7 @@ describe('resolveInventoryIssue', () => {
     const resolvedSnapshot = await resolveInventoryIssue(
       {
         entity: 'skill',
-        issue: 'missing-symlinks',
+        issue: 'missing-canonical',
         skillName: 'tools:foo',
       },
       {
@@ -1193,22 +1193,17 @@ describe('resolveInventoryIssue', () => {
       },
     );
 
-    expect(await readlink(agentsPath)).toBe(pluginSkillPath);
-    expect(await readlink(factoryPath)).toBe(pluginSkillPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo.');
+    await expect(readlink(factoryPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo.');
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
 
     const config = await readSkillIndexConfig(paths.configFile, { homeDir });
     const pluginDecision = (config.skillUniversalDecisions ?? []).find((decision) => decision.skillName === 'tools:foo');
-    expect(pluginDecision?.universal).toMatchObject({
-      kind: 'plugin',
-      pluginId: 'tools@official',
-      pluginSkillName: 'foo',
-    });
+    expect(pluginDecision?.universal).toMatchObject({ kind: 'path', sourceId: 'live-agents', path: agentsPath });
 
     await rm(path.join(pluginRoot, '.claude-plugin'), { recursive: true, force: true });
     const rescanWithoutPluginSource = await scanInventory({
@@ -1218,9 +1213,8 @@ describe('resolveInventoryIssue', () => {
       includeLiveSources: true,
     });
     expect(rescanWithoutPluginSource.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
   });
 
@@ -1280,7 +1274,7 @@ describe('resolveInventoryIssue', () => {
     };
     const initialSnapshot = await scanInventory(scanOptions);
     expect(initialSnapshot.skills.find((skill) => skill.name === dismissedSkillName)).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       driftPresentation: 'active',
     });
     expect(initialSnapshot.skills.find((skill) => skill.name === buildSkillName)?.issueReasons)
@@ -1299,7 +1293,7 @@ describe('resolveInventoryIssue', () => {
       scanOptions,
     );
 
-    expect(await readlink(brokenLinkPath)).toBe(buildSkillPath);
+    expect(await readFile(path.join(brokenLinkPath, 'SKILL.md'), 'utf8')).toContain('ETTrace performance.');
     expect(resolvedSnapshot.skills.find((skill) => skill.name === dismissedSkillName)?.driftPresentation).toBe('dismissed');
     const config = await readSkillIndexConfig(paths.configFile, { homeDir });
     expect(config.dismissedDriftSignatures).toContain(dismissedSignature);
@@ -1360,14 +1354,10 @@ describe('resolveInventoryIssue', () => {
       includeLiveSources: true,
     });
 
-    expect(await readlink(agentsPath)).toBe(pluginSkillPath);
-    expect(await readlink(factoryPath)).toBe(pluginSkillPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin version.');
+    expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(await readFile(path.join(manualSkillPath, 'SKILL.md'), 'utf8')).toBe(beforeManual);
-    expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
-    });
+    expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')?.issueReasons).not.toContain('missing-canonical');
   });
 
   it('repairs manual Universal links while leaving an alternate plugin skill untouched', async () => {
@@ -1432,9 +1422,8 @@ describe('resolveInventoryIssue', () => {
       driftPresentation: 'none',
     });
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
     });
   });
 
@@ -1569,23 +1558,20 @@ describe('resolveInventoryIssue', () => {
     ].join('\n'));
     await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
 
-    const afterDivergedResolution = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'diverged-copies',
-        skillName: 'tools:foo',
-        selectedVariantPath: agentsPath,
-      },
-      {
-        paths,
-        homeDir,
-        includeSandboxSources: false,
-        includeLiveSources: true,
-      },
-    );
+    const afterDivergedResolution = await applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName: 'tools:foo',
+      selectedVariantPath: agentsPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
     const afterDivergedSkill = afterDivergedResolution.skills.find((skill) => skill.name === 'tools:foo');
     expect(afterDivergedSkill).toMatchObject({
-      issueReasons: ['missing-symlinks'],
+      issueReasons: [],
       detailDiagnostics: {
         acceptedAlternates: [
           expect.objectContaining({
@@ -1598,19 +1584,7 @@ describe('resolveInventoryIssue', () => {
       },
     });
 
-    const resolvedSnapshot = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'tools:foo',
-      },
-      {
-        paths,
-        homeDir,
-        includeSandboxSources: false,
-        includeLiveSources: true,
-      },
-    );
+    const resolvedSnapshot = afterDivergedResolution;
 
     expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
@@ -1639,30 +1613,18 @@ describe('resolveInventoryIssue', () => {
     const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
     const windsurfPath = path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName);
 
-    const afterDivergedResolution = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'diverged-copies',
-        skillName,
-        selectedVariantPath: agentsPath,
-      },
-      {
-        paths,
-        includeSandboxSources: true,
-        includeLiveSources: false,
-      },
-    );
-    const afterDivergedSkill = afterDivergedResolution.skills.find((skill) => skill.name === skillName);
-    expect(afterDivergedSkill).toMatchObject({
-      issueReasons: ['missing-symlinks'],
+    const afterDivergedResolution = await applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName,
+      selectedVariantPath: agentsPath,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
     });
-    expect((afterDivergedSkill?.detailDiagnostics.missingInstallSources ?? [])
-      .map((source) => source.sourceId)
-      .sort()).toEqual([
-        'sandbox-claude',
-        'sandbox-factory',
-        'sandbox-windsurf',
-      ]);
+    const afterDivergedSkill = afterDivergedResolution.skills.find((skill) => skill.name === skillName);
+    expect(afterDivergedSkill?.issueReasons).not.toContain('missing-symlinks');
     expect((afterDivergedSkill?.detailDiagnostics.acceptedAlternates ?? [])
       .map((alternate) => `${alternate.kind}:${alternate.pluginId}:${alternate.reason}`)
       .sort()).toEqual([
@@ -1670,18 +1632,7 @@ describe('resolveInventoryIssue', () => {
         'plugin:example-workflow-kit@sandbox-gallery:kept-separate',
       ]);
 
-    const resolvedSnapshot = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName,
-      },
-      {
-        paths,
-        includeSandboxSources: true,
-        includeLiveSources: false,
-      },
-    );
+    const resolvedSnapshot = afterDivergedResolution;
 
     const resolvedSkill = resolvedSnapshot.skills.find((skill) => skill.name === skillName);
     expect(resolvedSkill).toMatchObject({
@@ -1710,31 +1661,16 @@ describe('resolveInventoryIssue', () => {
     const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
     const windsurfPath = path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName);
 
-    await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'diverged-copies',
-        skillName,
-        selectedVariantPath: agentsPath,
-      },
-      {
-        paths,
-        includeSandboxSources: true,
-        includeLiveSources: false,
-      },
-    );
-    const resolvedSnapshot = await resolveInventoryIssue(
-      {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName,
-      },
-      {
-        paths,
-        includeSandboxSources: true,
-        includeLiveSources: false,
-      },
-    );
+    const resolvedSnapshot = await applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName,
+      selectedVariantPath: agentsPath,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
     const resolvedSkill = resolvedSnapshot.skills.find((skill) => skill.name === skillName);
     const claudePluginPath = resolvedSkill?.locations.find((location) =>
       location.provenance?.kind === 'plugin'
@@ -1757,10 +1693,9 @@ describe('resolveInventoryIssue', () => {
 
     const switchedSkill = switchedSnapshot.skills.find((skill) => skill.name === skillName);
     expect(switchedSkill?.detailDiagnostics.universalDecision?.universal).toMatchObject({
-      kind: 'plugin',
-      host: 'claude',
-      pluginId: 'example-workflow-kit@sandbox-gallery',
-      pluginSkillName: 'handoff-notes-with-static',
+      kind: 'path',
+      sourceId: 'sandbox-agents',
+      path: agentsPath,
     });
     expect(switchedSkill?.issueReasons).not.toContain('wrong-symlink-target');
     expect(switchedSkill?.issueReasons).not.toContain('missing-symlinks');
@@ -1768,26 +1703,16 @@ describe('resolveInventoryIssue', () => {
     expect(switchedSkill?.issueReasons).not.toContain('diverged-copies');
     expect(switchedSkill?.issueReasons).not.toContain('identical-copies');
     expect(switchedSkill?.locations.find((location) => location.path === agentsPath)).toMatchObject({
-      fileType: 'symlink',
-      canonical: false,
+      fileType: 'real-file',
+      canonical: true,
     });
-    for (const linkPath of [agentsPath, claudePath, factoryPath, windsurfPath]) {
-      expect(await readlink(linkPath)).toBe(claudePluginPath);
+    for (const linkPath of [claudePath, factoryPath, windsurfPath]) {
+      expect(await readlink(linkPath)).toBe(agentsPath);
       const linkLocation = switchedSkill?.locations.find((location) => location.path === linkPath);
       expect(linkLocation).toMatchObject({
         fileType: 'symlink',
       });
-      expect(linkLocation?.resolvedPath).toMatch(new RegExp(`${escapeRegExp(path.join(
-        'sandbox',
-        '.claude',
-        'plugins',
-        'cache',
-        'sandbox-gallery',
-        'example-workflow-kit',
-        '5.1.0',
-        'skills',
-        'handoff-notes-with-static',
-      ))}$`));
+      expect(linkLocation?.resolvedPath).toBe(await realpath(agentsPath));
     }
   });
 
@@ -1859,20 +1784,13 @@ describe('resolveInventoryIssue', () => {
       },
     );
 
-    expect(await readlink(agentsPath)).toBe(pluginSkillPath);
-    expect(await readlink(factoryPath)).toBe(pluginSkillPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin version.');
+    expect(await readlink(factoryPath)).toBe(agentsPath);
     await expect(readlink(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
     const resolvedSkill = resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo');
-    expect(resolvedSkill).toMatchObject({
-      structuralState: 'missing-symlinks',
-      isDrifted: true,
-      driftPresentation: 'active',
-      issueReasons: ['missing-symlinks'],
-    });
+    expect(resolvedSkill?.issueReasons).not.toContain('missing-canonical');
     expect(resolvedSkill?.detailDiagnostics.universalDecision?.universal).toMatchObject({
-      kind: 'plugin',
-      pluginId: 'tools@official',
-      pluginSkillName: 'foo',
+      kind: 'path', sourceId: 'live-agents', path: agentsPath,
     });
     expect(resolvedSkill?.detailDiagnostics.universalDecision?.acceptedAlternates).toEqual([]);
   });
@@ -2044,8 +1962,8 @@ describe('resolveInventoryIssue', () => {
       includeLiveSources: true,
     });
 
-    expect(await readlink(agentsPath)).toBe(codexSkillPath);
-    expect(await readlink(factoryPath)).toBe(codexSkillPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Codex plugin version.');
+    expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(await readFile(path.join(claudeSkillPath, 'SKILL.md'), 'utf8')).toBe(beforeClaude);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
       structuralState: 'healthy',
@@ -2144,7 +2062,7 @@ describe('resolveInventoryIssue', () => {
       },
     );
 
-    expect(await readlink(agentsPath)).toBe(newSkillPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo v2.');
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
       structuralState: 'healthy',
       isDrifted: false,
@@ -3510,10 +3428,6 @@ async function writeStructuredJsonConfig(configPath: string, value: unknown): Pr
 
 async function readFileJson(configPath: string): Promise<unknown> {
   return JSON.parse(await readFile(configPath, 'utf8')) as unknown;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function writeSkillFile(filePath: string, content: string): Promise<void> {
