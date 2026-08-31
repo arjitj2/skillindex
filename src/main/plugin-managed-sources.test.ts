@@ -1,12 +1,13 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertSkillSourceAndDestinationDoNotOverlap,
   assertSkillSymlinkTargetIsUniversal,
   annotateComparableVersionEvidence,
   buildPluginManagedSourceCandidate,
@@ -15,6 +16,7 @@ import {
   isAgentSatisfiedByNativePlugin,
   isPluginManagedTarget,
 } from '@main/plugin-managed-sources';
+import { replaceSkillLinksTransaction } from '@main/skill-link-transaction';
 import { readSkillInventoryCache } from '@main/skill-inventory';
 import type { SkillInventorySnapshot } from '@shared/contracts';
 
@@ -132,6 +134,42 @@ describe('plugin managed sources', () => {
       kind: 'plugin',
       skillsDir: pluginSkills,
     }])).rejects.toThrow(/must target a writable Universal skill package/i);
+  });
+
+  it('rejects selected-source and Universal destination aliases before a package swap', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-source-destination-alias-'));
+    const realSkills = path.join(root, 'real-skills');
+    const sourcePath = path.join(realSkills, 'foo');
+    const aliasedUniversalSkills = path.join(root, '.agents', 'skills');
+    await mkdir(sourcePath, { recursive: true });
+    await writeFile(path.join(sourcePath, 'SKILL.md'), '# Foo\n', 'utf8');
+    await mkdir(path.dirname(aliasedUniversalSkills), { recursive: true });
+    await symlink(realSkills, aliasedUniversalSkills);
+
+    await expect(assertSkillSourceAndDestinationDoNotOverlap(
+      sourcePath,
+      path.join(aliasedUniversalSkills, 'foo'),
+    )).rejects.toThrow(/must not overlap/i);
+  });
+
+  it('enforces the plugin-target rejection immediately before a skill symlink is created', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-link-boundary-'));
+    const pluginSkills = path.join(root, 'plugin-cache', 'skills');
+    const pluginSkill = path.join(pluginSkills, 'foo');
+    const linkPath = path.join(root, '.factory', 'skills', 'foo');
+    await mkdir(pluginSkill, { recursive: true });
+    await writeFile(path.join(pluginSkill, 'SKILL.md'), '# Foo\n', 'utf8');
+
+    await expect(replaceSkillLinksTransaction([linkPath], pluginSkill, [{
+      id: 'plugin-test',
+      label: 'Plugin test',
+      canonical: false,
+      kind: 'plugin',
+      writable: false,
+      scope: 'live',
+      skillsDir: pluginSkills,
+    }])).rejects.toThrow(/must target a writable Universal skill package/i);
+    await expect(lstat(linkPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('annotates only the greatest comparable version when no candidate is enabled', () => {

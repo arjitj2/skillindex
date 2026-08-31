@@ -140,6 +140,17 @@ export function assertSafeSkillPackageName(skillName: string): void {
   }
 }
 
+export async function assertSkillSourceAndDestinationDoNotOverlap(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<void> {
+  const sourceResolved = await resolvePathThroughNearestExistingParent(sourcePath);
+  const destinationResolved = await resolvePathThroughNearestExistingParent(destinationPath);
+  if (isPathContainedBy(sourceResolved, destinationResolved) || isPathContainedBy(destinationResolved, sourceResolved)) {
+    throw new Error('Selected skill source must not overlap the Universal destination.');
+  }
+}
+
 async function assertPathDoesNotResolveIntoPlugin(targetPath: string, sources: SkillScanSource[]): Promise<void> {
   if (isPluginManagedTarget(targetPath, sources)) {
     throw new Error('Skill mutations cannot write into a plugin-managed cache path.');

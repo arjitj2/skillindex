@@ -49,6 +49,7 @@ import { sanitizeJsonc, sortRecordValue } from '@main/json-utils';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
 import {
   assertSafeSkillPackageName,
+  assertSkillSourceAndDestinationDoNotOverlap,
   assertSafeUniversalSkillMutation,
   assertSafeWritableSkillLinkMutation,
   isPluginManagedTargetThroughRealpath,
@@ -61,9 +62,12 @@ import {
   type PortableSubagentDefinition,
 } from '@main/subagent-inventory';
 import { persistSkillUniversalDecisionForSelection } from '@main/skill-universal-decisions';
+import { replaceSkillLinksTransaction } from '@main/skill-link-transaction';
 
 export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  /** Test-only deterministic failure point for skill link transactions. */
+  testFailSkillLinkAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -95,6 +99,8 @@ interface SelectedMcpDefinition {
 interface CanonicalSkillPackage {
   path: string;
   location: SkillLocationRecord;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
 }
 
 interface CanonicalSubagentPackage {
@@ -337,8 +343,7 @@ async function resolveSkillIssueIfCurrent(
       return;
     }
     case 'identical-copies': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const duplicatePaths = skill.locations
         .filter((location) =>
           location.fileType === 'real-file'
@@ -349,24 +354,24 @@ async function resolveSkillIssueIfCurrent(
       if (duplicatePaths.length === 0) {
         throw new Error(`Skill "${request.skillName}" has no writable copies to convert.`);
       }
-      await Promise.all(dedupeNormalizedPaths(duplicatePaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(duplicatePaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, duplicatePaths, snapshot, options);
       return;
     }
     case 'missing-symlinks': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const missingPaths = (skill.detailDiagnostics.missingInstallSources ?? [])
         .map((source) => resolveMissingSkillInstallPath(skill.name, source.sourceId, snapshot))
         .filter((locationPath): locationPath is string => Boolean(locationPath))
         .filter((locationPath) => path.normalize(locationPath) !== path.normalize(canonicalPath));
-      await Promise.all(dedupeNormalizedPaths(missingPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(missingPaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, missingPaths, snapshot, options);
       return;
     }
     case 'broken-symlink': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const repairPaths = (await Promise.all(skill.locations
         .filter((location) =>
           location.fileType === 'symlink'
@@ -380,13 +385,13 @@ async function resolveSkillIssueIfCurrent(
         }))))
         .filter((location) => location.broken || location.targetsPluginCache)
         .map((location) => location.path);
-      await Promise.all(dedupeNormalizedPaths(repairPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(repairPaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, repairPaths, snapshot, options);
       return;
     }
     case 'wrong-symlink-target': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const wrongTargetPaths = skill.locations
         .filter((location) =>
           location.fileType === 'symlink'
@@ -394,11 +399,42 @@ async function resolveSkillIssueIfCurrent(
           && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath)
           && path.normalize(location.path) !== path.normalize(canonicalPath))
         .map((location) => location.path);
-      await Promise.all(dedupeNormalizedPaths(wrongTargetPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(wrongTargetPaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, wrongTargetPaths, snapshot, options);
       return;
     }
   }
+}
+
+async function completeCanonicalSkillResolution(
+  skill: SkillRecord,
+  canonicalPackage: CanonicalSkillPackage,
+  locationPaths: string[],
+  snapshot: SkillInventorySnapshot,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  try {
+    await replaceWritableWithCanonicalSymlinks(locationPaths, canonicalPackage.path, snapshot, options);
+  } catch (error) {
+    await canonicalPackage.rollback();
+    throw error;
+  }
+  await canonicalPackage.commit();
+  await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+}
+
+async function assertWritableSkillLinkMutationPlan(
+  locationPaths: string[],
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  const uniquePaths = dedupeNormalizedPaths(locationPaths);
+  const writableRoots = (snapshot.agents ?? [])
+    .flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []);
+  await Promise.all(uniquePaths.map(async (locationPath) => {
+    assertSkillSymlinkTargetWritable(locationPath, snapshot);
+    await assertSafeWritableSkillLinkMutation(locationPath, snapshot.sources, writableRoots);
+  }));
 }
 
 async function isPluginManagedResolvedTarget(
@@ -1231,6 +1267,9 @@ async function ensureCanonicalSkillPackage(
     && source.writable
     && source.kind !== 'plugin')?.skillsDir
     ?? (selectedLocation.sourceScope === 'sandbox' ? paths.sandboxCanonicalUserSkillsDir : paths.liveCanonicalUserSkillsDir);
+  if (path.normalize(selectedLocation.path) !== path.normalize(canonicalPath)) {
+    await assertSkillSourceAndDestinationDoNotOverlap(selectedLocation.path, canonicalPath);
+  }
   await assertSafeUniversalSkillMutation({
     destinationPath: canonicalPath,
     universalRoot: canonicalRoot,
@@ -1244,6 +1283,8 @@ async function ensureCanonicalSkillPackage(
     return {
       path: canonicalPath,
       location: canonicalRealFile,
+      commit: () => Promise.resolve(),
+      rollback: () => Promise.resolve(),
     };
   }
 
@@ -1260,6 +1301,7 @@ async function ensureCanonicalSkillPackage(
   await mkdir(parentPath, { recursive: true });
   try {
     await cp(selectedLocation.path, stagePath, { recursive: true, dereference: true, force: true });
+    await readFile(path.join(stagePath, 'SKILL.md'), 'utf8');
     await rename(canonicalPath, backupPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;
     });
@@ -1269,7 +1311,6 @@ async function ensureCanonicalSkillPackage(
       await rename(backupPath, canonicalPath).catch(() => undefined);
       throw error;
     }
-    await rm(backupPath, { recursive: true, force: true });
   } catch (error) {
     await rm(stagePath, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -1277,6 +1318,15 @@ async function ensureCanonicalSkillPackage(
   return {
     path: canonicalPath,
     location: createCanonicalSkillLocation(selectedLocation, canonicalPath, snapshot, paths),
+    commit: async () => {
+      await rm(backupPath, { recursive: true, force: true });
+    },
+    rollback: async () => {
+      await rm(canonicalPath, { recursive: true, force: true });
+      await rename(backupPath, canonicalPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    },
   };
 }
 
@@ -1870,18 +1920,17 @@ async function replaceWithCanonicalSymlink(locationPath: string, canonicalPath: 
   await symlink(canonicalPath, locationPath);
 }
 
-async function replaceWritableWithCanonicalSymlink(
-  locationPath: string,
+async function replaceWritableWithCanonicalSymlinks(
+  locationPaths: string[],
   canonicalPath: string,
   snapshot: SkillInventorySnapshot,
+  options: Pick<ResolveIssueOptions, 'testFailSkillLinkAt'>,
 ): Promise<void> {
-  assertSkillSymlinkTargetWritable(locationPath, snapshot);
-  await assertSafeWritableSkillLinkMutation(
-    locationPath,
-    snapshot.sources,
-    (snapshot.agents ?? []).flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []),
-  );
-  await replaceWithCanonicalSymlink(locationPath, canonicalPath);
+  const uniquePaths = dedupeNormalizedPaths(locationPaths);
+  await assertWritableSkillLinkMutationPlan(uniquePaths, snapshot);
+  await replaceSkillLinksTransaction(uniquePaths, canonicalPath, snapshot.sources, {
+    failAt: options.testFailSkillLinkAt,
+  });
 }
 
 function assertSkillSymlinkTargetWritable(locationPath: string, snapshot: SkillInventorySnapshot): void {

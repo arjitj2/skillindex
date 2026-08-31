@@ -535,6 +535,64 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
   });
 
+  it('rolls back the Universal package and every earlier link when a later link transaction fails', async () => {
+    const root = await createRoot('skillindex-canonicalize-link-rollback-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const canonicalPath = path.join(paths.sandboxAgentsSkillsDir, 'diverged-drift-skill');
+    const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', 'diverged-drift-skill');
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', 'diverged-drift-skill');
+
+    await seedRepresentativeFixtures({ paths });
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), '# Factory diverged skill\n');
+    const beforeCanonical = await snapshotPath(canonicalPath);
+    const beforeClaude = await snapshotPath(claudePath);
+    const beforeFactory = await snapshotPath(factoryPath);
+
+    await expect(makeSkillCanonical({
+      skillName: 'diverged-drift-skill',
+      selectedVariantPath: claudePath,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      testFailSkillLinkAt: 2,
+      writeCache: false,
+    })).rejects.toThrow(/Injected skill link replacement failure at 2/i);
+
+    await expect(snapshotPath(canonicalPath)).resolves.toEqual(beforeCanonical);
+    await expect(snapshotPath(claudePath)).resolves.toEqual(beforeClaude);
+    await expect(snapshotPath(factoryPath)).resolves.toEqual(beforeFactory);
+  });
+
+  it('does not duplicate a plugin-selected skill into its enabled native Claude skills directory', async () => {
+    const root = await createRoot('skillindex-canonicalize-native-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'tools@official': true } }));
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+
+    await makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: pluginPath }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readlink(factoryPath)).toBe(universalPath);
+    await expect(lstat(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+  });
+
   it('refuses a Universal directory symlinked into a plugin cache without mutating packages or state', async () => {
     const root = await createRoot('skillindex-canonicalize-plugin-target-');
     const homeDir = await createRoot('skillindex-live-home-');
@@ -576,6 +634,46 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
     expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
     expect(await readlink(path.join(homeDir, '.agents', 'skills'))).toBe(path.join(pluginRoot, 'skills'));
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a writable agent skills directory aliased into a plugin cache before staging Universal', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-agent-alias-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const factorySkillsDir = path.join(homeDir, '.factory', 'skills');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await symlink(path.join(pluginRoot, 'skills'), factorySkillsDir);
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: pluginPath }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/plugin-managed cache path/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(factorySkillsDir)).toBe(path.join(pluginRoot, 'skills'));
     await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

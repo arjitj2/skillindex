@@ -663,6 +663,34 @@ describe('resolveInventoryIssue', () => {
     expect(resolvedSkill?.issueReasons).not.toContain('missing-symlinks');
   });
 
+  it('rolls back earlier issue-resolution link changes when a later skill link replacement fails', async () => {
+    const paths = await createPaths('skillindex-resolve-link-rollback-');
+    const skillName = 'double-missing-symlink-skill';
+    const canonicalPath = path.join(paths.sandboxRoot, '.agents', 'skills', skillName);
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
+    const windsurfPath = path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName);
+    await seedRepresentativeFixtures({ paths });
+    const beforeCanonical = await readFile(path.join(canonicalPath, 'SKILL.md'), 'utf8');
+    await expect(lstat(factoryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(windsurfPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'missing-symlinks',
+      skillName,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      testFailSkillLinkAt: 2,
+      writeCache: false,
+    })).rejects.toThrow(/Injected skill link replacement failure at 2/i);
+
+    expect(await readFile(path.join(canonicalPath, 'SKILL.md'), 'utf8')).toBe(beforeCanonical);
+    await expect(lstat(factoryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(windsurfPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('repairs missing skill symlinks for installed agents whose skills dir was not scanned yet', async () => {
     const paths = await createPaths('skillindex-resolve-parser-missing-skills-');
     const matrixEnv = {
@@ -2148,6 +2176,59 @@ describe('resolveInventoryIssue', () => {
     expect(await readlink(brokenPath)).toBe(beforeLink);
     expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
     expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+  });
+
+  it('rejects issue resolution when a writable factory skills root aliases a plugin cache', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-agent-alias-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const factorySkillsDir = path.join(homeDir, '.factory', 'skills');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    const skillText = [
+      '---',
+      'name: foo',
+      'description: Plugin foo.',
+      '---',
+      '',
+      '# Plugin foo',
+      '',
+    ].join('\n');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), skillText);
+    await writeSkillFile(path.join(universalPath, 'SKILL.md'), skillText);
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await symlink(path.join(pluginRoot, 'skills'), factorySkillsDir);
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'missing-symlinks',
+      skillName: 'tools:foo',
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/plugin-managed cache path/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(factorySkillsDir)).toBe(path.join(pluginRoot, 'skills'));
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(skillText);
   });
 
   it('creates missing live canonical packages in the preferred source when configured', async () => {
