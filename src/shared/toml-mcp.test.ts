@@ -46,6 +46,26 @@ describe('toml MCP helpers', () => {
     ].join('\n'));
   });
 
+  it('reads Codex multiline argument arrays', () => {
+    expect(parseTomlMcpServers([
+      '[mcp_servers.paper]',
+      'args = [',
+      '  "mcp-remote",',
+      '  "http://127.0.0.1:29979/mcp",',
+      ']',
+      'command = "npx"',
+      '',
+    ].join('\n'))).toEqual({
+      paper: {
+        args: [
+          'mcp-remote',
+          'http://127.0.0.1:29979/mcp',
+        ],
+        command: 'npx',
+      },
+    });
+  });
+
   it('reads Mistral Vibe MCP server arrays keyed by name', () => {
     expect(parseTomlMcpServerArray([
       'model = "codestral"',
