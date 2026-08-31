@@ -223,6 +223,25 @@ describe('plugin managed sources', () => {
     expect(await readFile(path.join(firstPath, 'SKILL.md'), 'utf8')).toBe('# First\n');
   });
 
+  it('preserves the initiating replacement failure when rollback also fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-link-error-composition-'));
+    const canonicalPath = path.join(root, '.agents', 'skills', 'foo');
+    const firstPath = path.join(root, '.factory', 'skills', 'foo');
+    const secondPath = path.join(root, '.windsurf', 'skills', 'foo');
+    await Promise.all([mkdir(canonicalPath, { recursive: true }), mkdir(firstPath, { recursive: true }), mkdir(secondPath, { recursive: true })]);
+    await Promise.all([writeFile(path.join(canonicalPath, 'SKILL.md'), '# Canonical\n'), writeFile(path.join(firstPath, 'SKILL.md'), '# First\n'), writeFile(path.join(secondPath, 'SKILL.md'), '# Second\n')]);
+    const failure = await replaceSkillLinksTransaction([firstPath, secondPath], canonicalPath, [], {
+      failAt: 2,
+      failRestoreAt: 1,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    const errors = (failure as AggregateError).errors.map((error) => String(error));
+    expect(errors.join('\n')).toContain('Injected skill link replacement failure at 2');
+    const rollbackFailure = (failure as AggregateError).errors[1] as AggregateError;
+    expect(rollbackFailure.errors.map((error) => String(error)).join('\n'))
+      .toContain('Injected skill link restore failure at 1');
+  });
+
   it('annotates only the greatest comparable version when no candidate is enabled', () => {
     const candidates = [
       { version: '1.0.0', evidence: 'cached-unknown' as const },

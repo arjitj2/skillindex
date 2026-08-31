@@ -48,7 +48,11 @@ export async function replaceSkillLinksTransaction(
       await symlink(canonicalPath, locationPath);
     }
   } catch (error) {
-    await restoreBackups(backups, options.failRestoreAt);
+    try {
+      await restoreBackups(backups, options.failRestoreAt);
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], 'Skill link replacement failed and rollback was incomplete.');
+    }
     throw error;
   }
 
