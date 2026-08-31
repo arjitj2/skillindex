@@ -115,7 +115,7 @@ export function detectPluginDependencyWarnings({
   providerSpecificFields?: string[];
 }): PluginDependencyWarning[] {
   const warnings: PluginDependencyWarning[] = [];
-  if (/(?:\$\{(?:CODEX|CLAUDE)_PLUGIN_ROOT\}|\$(?:CODEX|CLAUDE)_PLUGIN_ROOT(?![A-Z0-9_]))/u.test(text)) {
+  if (/(?:\$\{(?:CODEX|CLAUDE)_PLUGIN_ROOT\}|\$(?:CODEX|CLAUDE)_PLUGIN_ROOT(?![A-Za-z0-9_]))/u.test(text)) {
     warnings.push({
       kind: 'plugin-root-variable',
       detail: 'References a plugin-root environment variable.',
@@ -142,8 +142,12 @@ function hasPluginRootPathReference(text: string, pluginRoot: string): boolean {
   while (true) {
     const index = text.indexOf(normalizedRoot, start);
     if (index === -1) return false;
+    const previous = text[index - 1];
     const next = text[index + normalizedRoot.length];
-    if (next === undefined || next === '/' || next === '\\') return true;
+    if ((!previous || !/[A-Za-z0-9_]/u.test(previous))
+      && (!next || !/[A-Za-z0-9_]/u.test(next))) {
+      return true;
+    }
     start = index + normalizedRoot.length;
   }
 }

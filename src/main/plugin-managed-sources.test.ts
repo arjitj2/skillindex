@@ -102,6 +102,7 @@ describe('plugin managed sources', () => {
     const sources = [{ kind: 'plugin' as const, skillsDir: '/cache/tools/skills' }];
 
     expect(isPluginManagedTarget('/', [{ kind: 'plugin', skillsDir: '/' }])).toBe(true);
+    expect(isPluginManagedTarget('/child', [{ kind: 'plugin', skillsDir: '/' }])).toBe(true);
     expect(isPluginManagedTarget('/cache/tools/skills', sources)).toBe(true);
     expect(isPluginManagedTarget(path.join('/cache/tools/skills', 'foo'), sources)).toBe(true);
     expect(isPluginManagedTarget('/cache/tools/skills-other/foo', sources)).toBe(false);
@@ -173,7 +174,7 @@ describe('plugin managed sources', () => {
 
   it('requires dependency variable and path boundaries', () => {
     expect(detectPluginDependencyWarnings({
-      text: '${CODEX_PLUGIN_ROOTED}/x $CLAUDE_PLUGIN_ROOTED/y',
+      text: '${CODEX_PLUGIN_ROOTED}/x $CLAUDE_PLUGIN_ROOTed/y',
       pluginRoot: '/cache/tools/1.0.0',
     })).toEqual([]);
     expect(detectPluginDependencyWarnings({
@@ -184,6 +185,14 @@ describe('plugin managed sources', () => {
       text: '/cache/tools/1.0.0/data',
       pluginRoot: '',
     })).toEqual([]);
+    expect(detectPluginDependencyWarnings({
+      text: '/other/cache/tools/1.0.0/data',
+      pluginRoot: '/cache/tools/1.0.0',
+    })).toEqual([]);
+    expect(detectPluginDependencyWarnings({
+      text: '"/cache/tools/1.0.0"',
+      pluginRoot: '/cache/tools/1.0.0',
+    }).map((warning) => warning.kind)).toEqual(['plugin-contained-path']);
   });
 
   it('round-trips managed-source records and rejects malformed managed metadata in cache', async () => {
