@@ -114,7 +114,7 @@ export function buildPluginSkillScanSources(plugins: PluginRecord[]): SkillScanS
     .flatMap((plugin) => getPluginSkillRoots(plugin).map((skillRoot, index) => ({
       id: createPluginSkillRootSourceId(plugin, index),
       label: `${formatPluginHost(plugin.host)} Plugin ${plugin.pluginName}`,
-      canonical: true,
+      canonical: false,
       kind: 'plugin',
       writable: false,
       scope: plugin.scope ?? 'live',

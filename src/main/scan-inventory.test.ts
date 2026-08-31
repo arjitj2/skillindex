@@ -865,41 +865,41 @@ describe('representative-agent scan foundation', () => {
     expect((inventory.plugins ?? []).filter((plugin) => plugin.pluginName === 'example-workflow-kit')
       .map((plugin) => plugin.host).sort()).toEqual(['claude', 'codex']);
     const examplePluginSkill = inventory.skills.find((skill) => skill.name === 'example-workflow-kit:idea-shaping');
-    expect(examplePluginSkill?.structuralState).toBe('missing-symlinks');
+    expect(examplePluginSkill?.structuralState).toBe('single-source-noncanonical');
     expect(examplePluginSkill?.isDrifted).toBe(true);
-    expect(examplePluginSkill?.issueReasons).toEqual(['missing-symlinks']);
+    expect(examplePluginSkill?.issueReasons).toEqual(['missing-canonical']);
     expect(examplePluginSkill?.locations).toHaveLength(2);
     expect(examplePluginSkill?.locations.map((location) => location.provenance?.plugin?.host).sort()).toEqual(['claude', 'codex']);
     const versionShadowSkill = inventory.skills.find((skill) => skill.name === 'version-shadow-kit:cache-shadow');
     expect(versionShadowSkill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
     expect(versionShadowSkill?.locations).toHaveLength(2);
     expect(versionShadowSkill?.locations
       .map((location) => location.provenance?.plugin?.version)
       .sort()).toEqual(['1.0.0', '1.1.0']);
-    expect(versionShadowSkill?.detailDiagnostics.duplicateCandidates).toHaveLength(2);
+    expect(versionShadowSkill?.detailDiagnostics.duplicateCandidates).toEqual([]);
     expect(inventory.skills.find((skill) => skill.name === 'mixed-plugin-skill')).toMatchObject({
-      structuralState: 'identical-drift',
-      issueReasons: arrayContaining(['identical-copies']),
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-identical-skill')).toMatchObject({
       structuralState: 'missing-symlinks',
       issueReasons: ['missing-symlinks'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-diverged-skill')).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'example-workflow-kit:overlap-check')).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'example-workflow-kit:handoff-notes')).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
       locations: arrayContaining([
         objectContaining({
           provenance: objectContaining({
@@ -915,8 +915,8 @@ describe('representative-agent scan foundation', () => {
     });
     const twoPluginsOneStaticSkill = inventory.skills.find((skill) => skill.name === 'example-workflow-kit:handoff-notes-with-static');
     expect(twoPluginsOneStaticSkill).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
     expect(twoPluginsOneStaticSkill?.locations).toHaveLength(3);
     expect(twoPluginsOneStaticSkill?.locations.map((location) => location.sourceId)).toEqual(expect.arrayContaining([
@@ -3562,7 +3562,7 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
-  it('marks plugin-only skills as needing Universal links', async () => {
+  it('marks plugin-only skills as noncanonical managed sources', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-universal-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -3606,14 +3606,12 @@ describe('representative-agent scan foundation', () => {
 
     const skill = inventory.skills.find((entry) => entry.name === 'tools:foo');
     expect(skill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
-    expect(skill?.detailDiagnostics.missingInstallSources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceId: 'live-agents', canonical: false, writable: true }),
-      expect.objectContaining({ sourceId: 'live-factory', kind: 'agent', writable: true }),
-    ]));
+    expect(skill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    expect(skill?.managedSourceCandidates).toHaveLength(1);
   });
 
   it('does not report identical copies for read-only plugin cache versions with matching content', async () => {
@@ -3665,19 +3663,16 @@ describe('representative-agent scan foundation', () => {
 
     const skill = inventory.skills.find((entry) => entry.name === 'tools:foo');
     expect(skill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
     expect(skill?.issueReasons).not.toContain('identical-copies');
-    expect(skill?.detailDiagnostics.duplicateCandidates).toHaveLength(2);
-    expect(skill?.detailDiagnostics.missingInstallSources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceId: 'live-agents', canonical: false, writable: true }),
-      expect.objectContaining({ sourceId: 'live-factory', kind: 'agent', writable: true }),
-    ]));
+    expect(skill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    expect(skill?.managedSourceCandidates).toHaveLength(2);
   });
 
-  it('groups a same-slug plugin skill with the matching local skill as diverged copies', async () => {
+  it('keeps a differing same-slug plugin skill out of structural copy classification', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-self-named-plugin-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -3688,6 +3683,8 @@ describe('representative-agent scan foundation', () => {
       homeDir,
     });
     const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'frontend-design', '1.0.0');
+    const localSkillPath = path.join(homeDir, '.agents', 'skills', 'frontend-design');
+    const claudeSkillPath = path.join(homeDir, '.claude', 'skills', 'frontend-design');
 
     await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
     await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
@@ -3724,6 +3721,8 @@ describe('representative-agent scan foundation', () => {
       ].join('\n'),
       '2026-01-08T00:00:01.000Z',
     );
+    await mkdir(path.dirname(claudeSkillPath), { recursive: true });
+    await symlink(localSkillPath, claudeSkillPath);
 
     const inventory = await scanInventory({
       paths,
@@ -3735,9 +3734,9 @@ describe('representative-agent scan foundation', () => {
     expect(inventory.skills.find((entry) => entry.name === 'frontend-design:frontend-design')).toBeUndefined();
     expect(inventory.skills.find((entry) => entry.name === 'frontend-design')).toMatchObject({
       displayName: 'frontend-design',
-      structuralState: 'diverged-drift',
-      isDrifted: true,
-      issueReasons: arrayContaining(['diverged-copies']),
+      structuralState: 'healthy',
+      isDrifted: false,
+      issueReasons: [],
       locations: arrayContaining([
         objectContaining({
           provenance: objectContaining({
@@ -3751,17 +3750,55 @@ describe('representative-agent scan foundation', () => {
         }),
       ]),
       detailDiagnostics: {
-        duplicateCandidates: arrayContaining([
-          objectContaining({
-            fileType: 'real-file',
-            provenance: objectContaining({ kind: 'plugin' }),
-          }),
-          objectContaining({
-            fileType: 'real-file',
-            sourceId: 'live-agents',
-          }),
-        ]),
+        duplicateCandidates: [],
       },
+    });
+    expect(inventory.skills.find((entry) => entry.name === 'frontend-design')?.managedSourceCandidates).toEqual([
+      expect.objectContaining({ relationship: 'differs-from-universal' }),
+    ]);
+  });
+
+  it('keeps a matching plugin skill as managed-source evidence when the Universal is installed', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-matching-universal-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'foo', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'foo');
+    const content = [
+      '---',
+      'name: foo',
+      'description: Shared foo.',
+      '---',
+      '',
+      '# Foo',
+      'Shared content.',
+      '',
+    ].join('\n');
+
+    await writeSkillFile(path.dirname(universalPath), 'foo', content, '2026-01-08T00:00:00.000Z');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
+      name: 'foo',
+      version: '1.0.0',
+    }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', content, '2026-01-08T00:00:00.000Z');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(universalPath, claudePath);
+
+    const inventory = await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    });
+
+    expect(inventory.skills.find((entry) => entry.name === 'foo')).toMatchObject({
+      structuralState: 'healthy',
+      isDrifted: false,
+      issueReasons: [],
+      detailDiagnostics: { duplicateCandidates: [] },
+      managedSourceCandidates: [expect.objectContaining({ relationship: 'matches-universal' })],
     });
   });
 
@@ -3938,9 +3975,9 @@ describe('representative-agent scan foundation', () => {
       },
     });
     expect(inventory.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: ['missing-canonical'],
     });
 
     const cachedInventory = await readCachedInventory({
@@ -3950,9 +3987,9 @@ describe('representative-agent scan foundation', () => {
       includeSandboxSources: true,
     });
     expect(cachedInventory?.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: ['missing-canonical'],
     });
   });
 
@@ -4048,13 +4085,13 @@ describe('representative-agent scan foundation', () => {
       issueReasons: [],
     });
     expect(inventory.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
   });
 
-  it('treats symlinks to an explicitly selected plugin Universal as healthy for a manual skill name', async () => {
+  it('does not treat a selected plugin cache path as a canonical manual skill', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-manual-symlink-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4125,16 +4162,16 @@ describe('representative-agent scan foundation', () => {
     const resolvedPluginSkillPath = await realpath(pluginSkillPath);
 
     expect(inventory.skills.find((entry) => entry.name === 'foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: arrayContaining(['missing-canonical', 'wrong-symlink-target']),
     });
     expect(inventory.skills.find((entry) => entry.name === 'foo')?.locations).toEqual(expect.arrayContaining([
       expect.objectContaining({
         path: agentsPath,
         fileType: 'symlink',
         resolvedPath: resolvedPluginSkillPath,
-        canonical: false,
+        canonical: true,
       }),
       expect.objectContaining({
         path: factoryPath,
@@ -4145,7 +4182,7 @@ describe('representative-agent scan foundation', () => {
     ]));
   });
 
-  it('treats symlink-only skills pointing at one plugin cache skill as healthy', async () => {
+  it('does not treat symlink-only plugin cache targets as canonical', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-symlink-only-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4188,9 +4225,9 @@ describe('representative-agent scan foundation', () => {
     });
 
     expect(inventory.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: arrayContaining(['missing-canonical', 'wrong-symlink-target']),
     });
   });
 
@@ -4417,8 +4454,8 @@ describe('representative-agent scan foundation', () => {
     const skill = snapshot.skills.find((candidate) => candidate.name === skillName);
 
     expect(skill).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies']),
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
     expect(skill?.locations).toEqual(arrayContaining([
       objectContaining({
@@ -4442,18 +4479,7 @@ describe('representative-agent scan foundation', () => {
       path: candidate.path,
       fileType: candidate.fileType,
       canonical: candidate.canonical,
-    })).sort((left, right) => left.path.localeCompare(right.path))).toEqual([
-      {
-        path: pluginSkillPath,
-        fileType: 'real-file',
-        canonical: false,
-      },
-      {
-        path: repoSkillPath,
-        fileType: 'real-file',
-        canonical: true,
-      },
-    ].sort((left, right) => left.path.localeCompare(right.path)));
+    }))).toEqual([]);
   });
 
   it('hydrates from the saved cache and rewrites it to reconciled live disk truth after refresh', async () => {
@@ -4608,7 +4634,7 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
-  it('keeps dismissed missing-symlink plugin skills hidden when managed plugin content changes', async () => {
+  it('reactivates dismissed plugin-only drift when managed source content changes', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-dismissal-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4656,7 +4682,7 @@ describe('representative-agent scan foundation', () => {
     };
     const initialSnapshot = await scanInventory(scanOptions);
     expect(initialSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
       driftPresentation: 'active',
     });
@@ -4684,15 +4710,15 @@ describe('representative-agent scan foundation', () => {
     const rescannedSnapshot = await scanInventory(scanOptions);
     const rescannedSkill = rescannedSnapshot.skills.find((skill) => skill.name === skillName);
     expect(rescannedSkill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      driftPresentation: 'dismissed',
+      driftPresentation: 'active',
     });
     expect(rescannedSkill?.driftSignature).not.toBe(dismissedSignature);
     const configAfterRescan = JSON.parse(await readFile(paths.configFile, 'utf8')) as {
       dismissedDriftSignatures: string[];
     };
-    expect(configAfterRescan.dismissedDriftSignatures).toContain(dismissedSignature);
+    expect(configAfterRescan.dismissedDriftSignatures).not.toContain(dismissedSignature);
   });
 
   it('undismisses a previously dismissed skill back into active drift', async () => {

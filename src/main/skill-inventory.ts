@@ -64,6 +64,12 @@ import {
 } from '@main/mcp-inventory';
 import { applyDismissedSubagentState, countSubagents } from '@main/subagent-inventory';
 import { parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
+import {
+  annotateComparableVersionEvidence,
+  buildPluginManagedSourceCandidate,
+  detectPluginDependencyWarnings,
+  getOperationalLocations,
+} from '@main/plugin-managed-sources';
 
 interface IndexedSkillLocation extends SkillLocationRecord {
   entrypointContent?: string;
@@ -265,26 +271,19 @@ function classifySkillLocations(
   });
   const displayName = getPreferredSkillDisplayName(canonicalizedLocations, name);
   const description = getPreferredSkillDescription(canonicalizedLocations);
-  const issueLocations = getIssueRelevantSkillLocations(canonicalizedLocations, options.universalDecisionContext);
+  const issueLocations = getOperationalLocations(
+    getIssueRelevantSkillLocations(canonicalizedLocations, options.universalDecisionContext),
+  );
   const canonicalRealFileLocations = issueLocations.filter((location) =>
     location.fileType === 'real-file' && matchesCanonicalSkillPath(location, canonicalPaths));
-  const hasExternalPluginSymlinkOrigin = hasPluginSymlinkCanonicalOrigin(issueLocations, canonicalPaths);
-  const hasExternalUniversalOrigin = canonicalRealFileLocations.length === 0
-    && (hasExternalPluginSymlinkOrigin
-      || (options.universalDecisionContext?.acceptedAlternateOnly === false
-        && options.universalDecisionContext.decision.universal.kind === 'plugin'
-        && options.universalDecisionContext.resolvedUniversalPaths.length > 0));
   const canonicalTargets = new Set(canonicalRealFileLocations.length > 0
     ? canonicalRealFileLocations.map((location) => location.resolvedPath ?? location.path)
-    : hasExternalUniversalOrigin
-      ? canonicalPaths
-      : []);
+    : []);
   const missingInstallSources = detailDiagnostics.missingInstallSources ?? [];
   const definitionIssues = detailDiagnostics.definitionIssues ?? [];
   const issueReasons = getSkillIssueReasons({
     canonicalPaths,
     definitionIssues,
-    hasExternalUniversalOrigin,
     locations: issueLocations,
     missingInstallSources,
   });
@@ -315,6 +314,7 @@ function classifySkillLocations(
       issueReasons: [],
       locations: publicLocations,
       detailDiagnostics,
+      ...withManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths),
     };
   }
 
@@ -328,8 +328,9 @@ function classifySkillLocations(
     issueReasons,
     locations: publicLocations,
     detailDiagnostics,
+    ...withManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths),
     driftSignature: issueReasons.length > 0 ? createDriftSignature(name, structuralState, publicLocations, issueReasons) : undefined,
-    diff: issueReasons.includes('diverged-copies') ? buildSkillDiff(sortedLocations) : undefined,
+    diff: issueReasons.includes('diverged-copies') ? buildSkillDiff(issueLocations) : undefined,
   };
 }
 
@@ -470,7 +471,9 @@ async function readSkillLocation(
     packageFiles,
     entrypointContent: entrypointText,
     provenance: createSkillLocationProvenance(rootPath, source, modifiedAt, npxLockCache),
-    canonicalRole: source.canonical ? 'canonical' : 'materialized-copy',
+    canonicalRole: source.kind === 'plugin'
+      ? 'managed-source'
+      : source.canonical ? 'canonical' : 'materialized-copy',
     mutability: source.writable ? 'writable' : source.kind === 'plugin' ? 'read-only-managed' : 'unknown',
   };
 }
@@ -1199,7 +1202,7 @@ function buildSkillDetailDiagnostics(
   const universalDecision = options.universalDecisionContext?.decision;
   const acceptedAlternates = universalDecision?.acceptedAlternates ?? [];
   return {
-    duplicateCandidates: buildDuplicateCandidates(locations),
+    duplicateCandidates: buildDuplicateCandidates(getOperationalLocations(locations)),
     installSources: buildInstallSources(locations),
     missingInstallSources: options.universalDecisionContext?.acceptedAlternateOnly === true
       ? []
@@ -1217,6 +1220,43 @@ function buildSkillDetailDiagnostics(
     ...(universalDecision ? { universalDecision } : {}),
     ...(acceptedAlternates.length > 0 ? { acceptedAlternates } : {}),
   };
+}
+
+function withManagedSourceCandidates(
+  locations: SkillLocationRecord[],
+  sources: SkillScanSource[],
+  canonicalPaths: string[],
+): Pick<SkillRecord, 'managedSourceCandidates'> {
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  const universalLocation = getOperationalLocations(locations).find((location) =>
+    location.fileType === 'real-file' && matchesCachedCanonicalSkillPath(location, canonicalPaths));
+  const universalComparisonKey = universalLocation
+    ? getSkillComparisonContentHash(universalLocation, false)
+    : null;
+  const candidates = locations.flatMap((location) => {
+    if (location.fileType !== 'real-file' || location.canonicalRole !== 'managed-source') {
+      return [];
+    }
+    const plugin = sourceById.get(location.sourceId)?.plugin;
+    if (!plugin) {
+      return [];
+    }
+    const text = location.packageFiles
+      ?.filter((file) => file.kind === 'text' && file.text !== undefined)
+      .map((file) => file.text)
+      .join('\n') ?? location.definitionText ?? '';
+    return [buildPluginManagedSourceCandidate({
+      path: location.path,
+      plugin,
+      comparisonKey: getSkillComparisonContentHash(location, false),
+      universalComparisonKey,
+      dependencyWarnings: detectPluginDependencyWarnings({ text, pluginRoot: plugin.rootPath }),
+    })];
+  });
+
+  return candidates.length > 0
+    ? { managedSourceCandidates: annotateComparableVersionEvidence(candidates) }
+    : {};
 }
 
 function buildDuplicateCandidate(location: IndexedSkillLocation): SkillDuplicateCandidate {
@@ -1508,7 +1548,9 @@ function getCanonicalSkillRoots(
   scope: SkillScanSource['scope'] | undefined,
   universalDecisionContext?: SkillUniversalDecisionContext,
 ): string[] {
-  if (universalDecisionContext && !universalDecisionContext.acceptedAlternateOnly) {
+  if (universalDecisionContext
+    && !universalDecisionContext.acceptedAlternateOnly
+    && universalDecisionContext.decision.universal.kind === 'path') {
     const decisionCanonicalPaths = resolveUniversalDecisionCanonicalPaths(
       universalDecisionContext.decision,
       locations,
@@ -1521,7 +1563,6 @@ function getCanonicalSkillRoots(
     }
   }
 
-  const sourceById = new Map(sources.map((source) => [source.id, source]));
   const preferredCanonicalSourceIds = new Set(
     sources
       .filter((source) => source.preferredCanonical === true && source.scope === (scope ?? source.scope))
@@ -1533,22 +1574,6 @@ function getCanonicalSkillRoots(
     .sort((left, right) => left.localeCompare(right));
   if (preferredCanonicalPaths.length > 0) {
     return [...new Set(preferredCanonicalPaths)];
-  }
-
-  const pluginCanonicalPaths = locations
-    .filter((location) => {
-      const source = sourceById.get(location.sourceId);
-      return source?.kind === 'plugin' && source.canonical && source.scope === (scope ?? source.scope);
-    })
-    .map((location) => location.path)
-    .sort((left, right) => left.localeCompare(right));
-  if (pluginCanonicalPaths.length > 0) {
-    return [...new Set(pluginCanonicalPaths)];
-  }
-
-  const pluginSymlinkCanonicalPaths = getPluginSymlinkCanonicalPaths(locations);
-  if (pluginSymlinkCanonicalPaths.length > 0) {
-    return pluginSymlinkCanonicalPaths;
   }
 
   const canonicalSource = sources.find((source) =>
@@ -1658,35 +1683,6 @@ function locationMatchesAcceptedAlternate(
     && path.basename(location.path) === alternate.pluginSkillName;
 }
 
-function getPluginSymlinkCanonicalPaths(locations: CanonicalPathLocation[]): string[] {
-  const pluginSymlinkTargets = locations
-    .filter((location) =>
-      location.fileType === 'symlink'
-      && location.resolvedPath !== undefined
-      && isLikelyPluginSkillPath(location.resolvedPath))
-    .map((location) => location.resolvedPath as string)
-    .sort((left, right) => left.localeCompare(right));
-  const uniqueTargets = [...new Set(pluginSymlinkTargets)];
-  return uniqueTargets.length === 1 ? uniqueTargets : [];
-}
-
-function hasPluginSymlinkCanonicalOrigin(
-  locations: SkillLocationRecord[],
-  canonicalPaths: string[],
-): boolean {
-  const normalizedCanonicalPaths = new Set(canonicalPaths.map(normalizePath));
-  return canonicalPaths.some(isLikelyPluginSkillPath)
-    && locations.some((location) =>
-      location.fileType === 'symlink'
-      && location.resolvedPath !== undefined
-      && normalizedCanonicalPaths.has(normalizePath(location.resolvedPath)));
-}
-
-function isLikelyPluginSkillPath(targetPath: string): boolean {
-  const normalized = targetPath.replace(/\\/g, '/');
-  return normalized.includes('/plugins/cache/') && normalized.includes('/skills/');
-}
-
 function matchesCanonicalSkillPath(location: IndexedSkillLocation, canonicalPaths: string[]): boolean {
   const normalizedCanonicalPaths = new Set(canonicalPaths.map(normalizePath));
   return normalizedCanonicalPaths.has(normalizePath(location.path))
@@ -1704,36 +1700,6 @@ function getExpectedLinkedSkillSources(
   const expectedSourcesById = new Map<string, SkillInstallSource>();
   const canonicalSkillPaths = new Set(canonicalPaths.map(normalizePath));
   const presentSkillPaths = new Set(locations.map((location) => normalizePath(location.path)));
-  const sourceById = new Map(sources.map((source) => [source.id, source]));
-  const hasPluginUniversalOrigin = locations.some((location) => {
-    const source = sourceById.get(location.sourceId);
-    return source?.kind === 'plugin'
-      && (canonicalSkillPaths.has(normalizePath(location.path))
-        || (location.resolvedPath !== undefined && canonicalSkillPaths.has(normalizePath(location.resolvedPath))));
-  });
-
-  if (hasPluginUniversalOrigin) {
-    for (const source of sources) {
-      if (!source.canonical || !source.writable || source.scope !== (scope ?? source.scope)) {
-        continue;
-      }
-
-      const canonicalSourceSkillPath = normalizePath(path.join(source.skillsDir, skillName));
-      if (canonicalSkillPaths.has(canonicalSourceSkillPath) || presentSkillPaths.has(canonicalSourceSkillPath)) {
-        continue;
-      }
-
-      expectedSourcesById.set(source.id, {
-        sourceId: source.id,
-        label: source.label,
-        kind: source.kind,
-        scope: source.scope,
-        writable: source.writable,
-        canonical: false,
-      });
-    }
-  }
-
   for (const agent of agents) {
     if (agent.installState !== 'installed') {
       continue;
@@ -1799,13 +1765,11 @@ function createAgentInstallSource(agent: AgentRecord): SkillInstallSource {
 function getSkillIssueReasons({
   canonicalPaths,
   definitionIssues,
-  hasExternalUniversalOrigin = false,
   locations,
   missingInstallSources,
 }: {
   canonicalPaths: string[];
   definitionIssues: SkillDefinitionIssue[];
-  hasExternalUniversalOrigin?: boolean;
   locations: SkillLocationRecord[];
   missingInstallSources: SkillInstallSource[];
 }): SkillIssueReason[] {
@@ -1828,7 +1792,7 @@ function getSkillIssueReasons({
     reasons.add('invalid-definition');
   }
 
-  if (canonicalRealFiles.length === 0 && !hasExternalUniversalOrigin) {
+  if (canonicalRealFiles.length === 0) {
     reasons.add('missing-canonical');
   }
 
@@ -1972,6 +1936,17 @@ function reconcileCachedSkill(
 
       return !isIgnoredSkillDiscoveryPath(source.skillsDir, location.path, source.ignoredSkillSubpaths);
     })
+    .map((location) => {
+      const source = sourceById.get(location.sourceId);
+      return source?.kind === 'plugin'
+        ? {
+          ...location,
+          canonical: false,
+          canonicalRole: 'managed-source' as const,
+          mutability: 'read-only-managed' as const,
+        }
+        : location;
+    })
     .sort((left, right) => left.path.localeCompare(right.path));
   if (locations.length === 0) {
     return null;
@@ -1992,7 +1967,9 @@ function reconcileCachedSkill(
   );
   const canonicalPaths = getCanonicalSkillRoots(skill.name, locations, sources, locations[0]?.sourceScope, universalDecisionContext);
   const canonicalizedLocations = applySkillCanonicalState(locations, canonicalPaths);
-  const issueLocations = getIssueRelevantSkillLocations(canonicalizedLocations, universalDecisionContext);
+  const issueLocations = getOperationalLocations(
+    getIssueRelevantSkillLocations(canonicalizedLocations, universalDecisionContext),
+  );
   const missingInstallSources = universalDecisionContext?.acceptedAlternateOnly === true
     ? []
     : computeMissingInstallSourcesFromCachedLocations(
@@ -2003,25 +1980,19 @@ function reconcileCachedSkill(
       canonicalPaths,
     );
   const installSources = buildCachedInstallSources(canonicalizedLocations, skill.detailDiagnostics.installSources ?? []);
-  const canonicalLocationKeys = new Set(canonicalizedLocations.map((location) => createLocationCacheKey(location.path, location.sourceId)));
-  const duplicateCandidates = canonicalizedLocations.length > 1
+  const operationalLocationKeys = new Set(
+    getOperationalLocations(canonicalizedLocations)
+      .map((location) => createLocationCacheKey(location.path, location.sourceId)),
+  );
+  const duplicateCandidates = operationalLocationKeys.size > 1
     ? (skill.detailDiagnostics.duplicateCandidates ?? [])
-      .filter((candidate) => canonicalLocationKeys.has(createLocationCacheKey(candidate.path, candidate.sourceId)))
+      .filter((candidate) => operationalLocationKeys.has(createLocationCacheKey(candidate.path, candidate.sourceId)))
       .map((candidate) => applyCanonicalStateToDuplicateCandidate(candidate, canonicalPaths))
     : [];
   const canonicalizedDefinitionIssues = definitionIssues.map((issue) => applyCanonicalStateToDefinitionIssue(issue, canonicalPaths));
-  const canonicalRealFileLocations = issueLocations.filter((location) =>
-    location.fileType === 'real-file' && matchesCachedCanonicalSkillPath(location, canonicalPaths));
-  const hasExternalPluginSymlinkOrigin = hasPluginSymlinkCanonicalOrigin(issueLocations, canonicalPaths);
-  const hasExternalUniversalOrigin = canonicalRealFileLocations.length === 0
-    && (hasExternalPluginSymlinkOrigin
-      || (universalDecisionContext?.acceptedAlternateOnly === false
-        && universalDecisionContext.decision.universal.kind === 'plugin'
-        && universalDecisionContext.resolvedUniversalPaths.length > 0));
   const issueReasons = getSkillIssueReasons({
     canonicalPaths,
     definitionIssues: canonicalizedDefinitionIssues,
-    hasExternalUniversalOrigin,
     locations: issueLocations,
     missingInstallSources,
   });
@@ -2040,6 +2011,7 @@ function reconcileCachedSkill(
       ? { acceptedAlternates: universalDecisionContext?.decision.acceptedAlternates ?? [] }
       : {}),
   };
+  const managedSourceCandidates = withManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const diff = issueReasons.includes('diverged-copies')
     ? pruneCachedSkillDiff(skill.diff, new Set(canonicalizedLocations.map((location) => location.path)))
     : undefined;
@@ -2054,6 +2026,7 @@ function reconcileCachedSkill(
       issueReasons: [],
       locations: canonicalizedLocations,
       detailDiagnostics,
+      ...managedSourceCandidates,
       driftSignature: undefined,
       diff: undefined,
     };
@@ -2067,6 +2040,7 @@ function reconcileCachedSkill(
     issueReasons,
     locations: canonicalizedLocations,
     detailDiagnostics,
+    ...managedSourceCandidates,
     driftSignature: issueReasons.length > 0
       ? createDriftSignature(skill.name, structuralState, canonicalizedLocations, issueReasons)
       : undefined,
@@ -2097,6 +2071,9 @@ function applySkillCanonicalState<T extends SkillLocationRecord>(locations: T[],
 }
 
 function applyCanonicalStateToCachedLocation<T extends SkillLocationRecord>(location: T, canonicalPaths: string[]): T {
+  if (location.canonicalRole === 'managed-source') {
+    return { ...location, canonical: false };
+  }
   const isCanonicalPath = matchesCanonicalLocationPath(location.path, canonicalPaths);
   return {
     ...location,
@@ -2178,7 +2155,8 @@ function isHealthyCachedSkill(
   missingInstallSources: SkillInstallSource[],
   issueReasons: SkillIssueReason[],
 ): boolean {
-  const canonicalRealFileLocations = locations.filter((location) =>
+  const operationalLocations = getOperationalLocations(locations);
+  const canonicalRealFileLocations = operationalLocations.filter((location) =>
     location.canonical
     && location.fileType === 'real-file'
     && matchesCachedCanonicalSkillPath(location, canonicalPaths));
@@ -2187,7 +2165,7 @@ function isHealthyCachedSkill(
   return issueReasons.length === 0
     && canonicalTargets.size > 0
     && missingInstallSources.length === 0
-    && locations.every((location) => {
+    && operationalLocations.every((location) => {
       if (location.fileType === 'real-file') {
         return location.canonical && canonicalTargets.has(location.resolvedPath ?? location.path);
       }
