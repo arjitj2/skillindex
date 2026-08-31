@@ -772,7 +772,6 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
       scope: owner.scope,
       configPath: owner.configPath as string,
       configName: name,
-      parserKind: owner.parserKind,
       transport: connection.transport,
       command: connection.command,
       url: connection.url,

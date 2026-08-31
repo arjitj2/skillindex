@@ -26,7 +26,6 @@ import {
   getMcpDefinitionArgs,
   isMcpDefinitionObject,
   isMcpServerDefinitions,
-  normalizeMcpDefinitionForParser,
   splitMcpDefinitionForComparison,
 } from '@shared/mcp-definition';
 import {
@@ -1402,6 +1401,15 @@ function isAgentsMcpConfigPath(value: string): boolean {
 }
 
 function parseSelectedMcpDefinition(location: McpLocationRecord): SelectedMcpDefinition {
+  if (location.portableDefinition) {
+    return {
+      agentLocal: location.agentLocal ?? {},
+      agentLocalKey: location.agentLocalKey,
+      core: buildPortableMcpDefinition(location.portableDefinition, location),
+      native: location.nativeDefinition ?? {},
+    };
+  }
+
   if (!location.definitionText) {
     const fallbackDefinition = {
       ...(location.command ? { command: location.command } : {}),
@@ -1421,12 +1429,11 @@ function parseSelectedMcpDefinition(location: McpLocationRecord): SelectedMcpDef
     throw new Error('The selected MCP definition must use a supported object structure.');
   }
 
-  const normalizedDefinition = normalizeMcpDefinitionForParser(parsed, location.parserKind);
-  const splitDefinition = splitMcpDefinitionForComparison(normalizedDefinition, location);
+  const splitDefinition = splitMcpDefinitionForComparison(parsed, location);
   return {
     agentLocal: splitDefinition.agentLocal,
     agentLocalKey: location.agentLocalKey,
-    core: buildPortableMcpDefinition(normalizedDefinition, location),
+    core: buildPortableMcpDefinition(parsed, location),
     native: splitDefinition.native,
   };
 }

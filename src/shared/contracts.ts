@@ -541,7 +541,6 @@ export interface McpLocationRecord {
   scope: SkillSourceScope;
   configPath: string;
   configName?: string;
-  parserKind?: AgentMcpParserKind;
   transport?: McpTransportKind;
   command?: string;
   url?: string;
