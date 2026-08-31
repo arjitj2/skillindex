@@ -1716,7 +1716,7 @@ describe('resolveInventoryIssue', () => {
       driftPresentation: 'none',
       issueReasons: [],
     });
-    expect(await readlink(claudePath)).toBe(agentsPath);
+    await expect(lstat(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(await readlink(windsurfPath)).toBe(agentsPath);
     expect((resolvedSkill?.detailDiagnostics.acceptedAlternates ?? [])
@@ -1732,7 +1732,6 @@ describe('resolveInventoryIssue', () => {
     await seedRepresentativeFixtures({ paths });
     const skillName = 'example-workflow-kit:handoff-notes-with-static';
     const agentsPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
-    const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', skillName);
     const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
     const windsurfPath = path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName);
 
@@ -1781,7 +1780,7 @@ describe('resolveInventoryIssue', () => {
       fileType: 'real-file',
       canonical: true,
     });
-    for (const linkPath of [claudePath, factoryPath, windsurfPath]) {
+    for (const linkPath of [factoryPath, windsurfPath]) {
       expect(await readlink(linkPath)).toBe(agentsPath);
       const linkLocation = switchedSkill?.locations.find((location) => location.path === linkPath);
       expect(linkLocation).toMatchObject({
@@ -2229,6 +2228,101 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
     expect(await readlink(factorySkillsDir)).toBe(path.join(pluginRoot, 'skills'));
     expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(skillText);
+  });
+
+  it('rejects a user-confirmed Universal path for another skill before changing its victim package', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-cross-skill-destination-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const skillName = 'alpha';
+    const canonicalPath = path.join(homeDir, '.agents', 'skills', skillName);
+    const victimPath = path.join(homeDir, '.agents', 'skills', 'victim');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', skillName);
+    await writeSkillFile(path.join(canonicalPath, 'SKILL.md'), [
+      '---',
+      'name: alpha',
+      'description: Alpha skill.',
+      '---',
+      '',
+      '# Alpha',
+      '',
+    ].join('\n'));
+    await writeSkillFile(path.join(victimPath, 'SKILL.md'), '# Victim sentinel\n');
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    const wrongTargetPath = path.join(homeDir, 'wrong-skills', skillName);
+    await writeSkillFile(path.join(wrongTargetPath, 'SKILL.md'), '# Wrong target\n');
+    await mkdir(path.dirname(factoryPath), { recursive: true });
+    await symlink(wrongTargetPath, factoryPath);
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+      skillUniversalDecisions: [{
+        id: 'skill:alpha:cross-skill',
+        skillName,
+        state: 'user-confirmed',
+        universal: { kind: 'path', sourceId: 'live-agents', path: victimPath },
+        acceptedAlternates: [],
+        updatedAt: '2026-08-31T00:00:00.000Z',
+      }],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforeVictim = await readFile(path.join(victimPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'wrong-symlink-target',
+      skillName,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/current writable Universal destination/i);
+
+    expect(await readFile(path.join(victimPath, 'SKILL.md'), 'utf8')).toBe(beforeVictim);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(factoryPath)).toBe(wrongTargetPath);
+  });
+
+  it('rolls back issue-resolution Universal and links when plugin decision persistence fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-persist-rollback-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const agentsPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'tools:foo');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin source\n');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(pluginPath, claudePath);
+    await writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), '{}\n');
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [], preferredCanonicalSourcePath: null, dismissedDriftSignatures: [], dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforeClaude = await readlink(claudePath);
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill', issue: 'wrong-symlink-target', skillName: 'tools:foo', selectedVariantPath: pluginPath,
+    }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true, writeCache: false,
+      testFailSkillDecisionPersist: true,
+    })).rejects.toThrow(/Injected skill Universal decision persistence failure/i);
+
+    await expect(lstat(agentsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readlink(claudePath)).toBe(beforeClaude);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
   });
 
   it('creates missing live canonical packages in the preferred source when configured', async () => {

@@ -172,6 +172,27 @@ describe('plugin managed sources', () => {
     await expect(lstat(linkPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('revalidates every writable link destination immediately before mutation', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-link-validator-'));
+    const canonicalPath = path.join(root, '.agents', 'skills', 'foo');
+    const firstPath = path.join(root, '.factory', 'skills', 'foo');
+    const secondPath = path.join(root, '.windsurf', 'skills', 'foo');
+    await mkdir(canonicalPath, { recursive: true });
+    await writeFile(path.join(canonicalPath, 'SKILL.md'), '# Foo\n', 'utf8');
+    const validated: string[] = [];
+
+    const transaction = await replaceSkillLinksTransaction([firstPath, secondPath], canonicalPath, [], {
+      validateDestination: (locationPath) => {
+        validated.push(locationPath);
+        return Promise.resolve();
+      },
+    });
+    expect(validated).toEqual([firstPath, secondPath]);
+    await transaction.rollback();
+    await expect(lstat(firstPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(secondPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('annotates only the greatest comparable version when no candidate is enabled', () => {
     const candidates = [
       { version: '1.0.0', evidence: 'cached-unknown' as const },

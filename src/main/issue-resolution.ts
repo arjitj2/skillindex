@@ -68,6 +68,8 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
   /** Test-only deterministic failure point for skill link transactions. */
   testFailSkillLinkAt?: number;
+  /** Test-only deterministic failure point for skill Universal decision persistence. */
+  testFailSkillDecisionPersist?: boolean;
 }
 
 export interface McpMutationTarget {
@@ -414,14 +416,17 @@ async function completeCanonicalSkillResolution(
   snapshot: SkillInventorySnapshot,
   options: ResolveIssueOptions & { paths: SkillIndexPaths },
 ): Promise<void> {
+  let linkTransaction: Awaited<ReturnType<typeof replaceSkillLinksTransaction>> | undefined;
   try {
-    await replaceWritableWithCanonicalSymlinks(locationPaths, canonicalPackage.path, snapshot, options);
+    linkTransaction = await replaceWritableWithCanonicalSymlinks(locationPaths, canonicalPackage.path, snapshot, options);
+    await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
   } catch (error) {
+    await linkTransaction?.rollback();
     await canonicalPackage.rollback();
     throw error;
   }
+  await linkTransaction.commit();
   await canonicalPackage.commit();
-  await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
 }
 
 async function assertWritableSkillLinkMutationPlan(
@@ -1273,6 +1278,7 @@ async function ensureCanonicalSkillPackage(
   await assertSafeUniversalSkillMutation({
     destinationPath: canonicalPath,
     universalRoot: canonicalRoot,
+    skillName: skill.name,
     scope: selectedLocation.sourceScope,
     sources: snapshot.sources,
     allowDefaultUniversalRoot: selectedLocation.provenance?.kind === 'plugin',
@@ -1291,6 +1297,7 @@ async function ensureCanonicalSkillPackage(
   await assertSafeUniversalSkillMutation({
     destinationPath: canonicalPath,
     universalRoot: canonicalRoot,
+    skillName: skill.name,
     scope: selectedLocation.sourceScope,
     sources: snapshot.sources,
     allowDefaultUniversalRoot: selectedLocation.provenance?.kind === 'plugin',
@@ -1319,7 +1326,7 @@ async function ensureCanonicalSkillPackage(
     path: canonicalPath,
     location: createCanonicalSkillLocation(selectedLocation, canonicalPath, snapshot, paths),
     commit: async () => {
-      await rm(backupPath, { recursive: true, force: true });
+      await rm(backupPath, { recursive: true, force: true }).catch(() => undefined);
     },
     rollback: async () => {
       await rm(canonicalPath, { recursive: true, force: true });
@@ -1925,11 +1932,16 @@ async function replaceWritableWithCanonicalSymlinks(
   canonicalPath: string,
   snapshot: SkillInventorySnapshot,
   options: Pick<ResolveIssueOptions, 'testFailSkillLinkAt'>,
-): Promise<void> {
+): ReturnType<typeof replaceSkillLinksTransaction> {
   const uniquePaths = dedupeNormalizedPaths(locationPaths);
   await assertWritableSkillLinkMutationPlan(uniquePaths, snapshot);
-  await replaceSkillLinksTransaction(uniquePaths, canonicalPath, snapshot.sources, {
+  return replaceSkillLinksTransaction(uniquePaths, canonicalPath, snapshot.sources, {
     failAt: options.testFailSkillLinkAt,
+    validateDestination: (targetPath) => assertSafeWritableSkillLinkMutation(
+      targetPath,
+      snapshot.sources,
+      (snapshot.agents ?? []).flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []),
+    ),
   });
 }
 

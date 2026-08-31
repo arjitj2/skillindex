@@ -68,6 +68,7 @@ import {
   buildPluginManagedSourceCandidate,
   detectPluginDependencyWarnings,
   getOperationalLocations,
+  isAgentSatisfiedByNativePlugin,
 } from '@main/plugin-managed-sources';
 
 interface IndexedSkillLocation extends SkillLocationRecord {
@@ -1728,7 +1729,7 @@ function matchesCanonicalSkillPath(location: IndexedSkillLocation, canonicalPath
 
 function getExpectedLinkedSkillSources(
   skillName: string,
-  locations: Array<Pick<SkillLocationRecord, 'path' | 'sourceId'> & Partial<Pick<SkillLocationRecord, 'resolvedPath'>>>,
+  locations: Array<Pick<SkillLocationRecord, 'path' | 'sourceId'> & Partial<Pick<SkillLocationRecord, 'resolvedPath' | 'provenance'>>>,
   sources: SkillScanSource[],
   agents: AgentRecord[] = [],
   scope: SkillScanSource['scope'] | undefined,
@@ -1743,6 +1744,19 @@ function getExpectedLinkedSkillSources(
     }
 
     if (scope !== undefined && agent.scope !== scope) {
+      continue;
+    }
+
+    if (isAgentSatisfiedByNativePlugin(
+      agent.family,
+      locations.flatMap((location) => {
+        if (location.provenance?.kind !== 'plugin') {
+          return [];
+        }
+        const plugin = sources.find((source) => source.id === location.sourceId)?.plugin;
+        return plugin ? [plugin] : [];
+      }),
+    )) {
       continue;
     }
 

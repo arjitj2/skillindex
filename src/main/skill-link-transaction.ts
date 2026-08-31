@@ -7,6 +7,12 @@ import { assertSkillSymlinkTargetIsUniversal } from '@main/plugin-managed-source
 
 export interface ReplaceSkillLinksOptions {
   failAt?: number;
+  validateDestination?(locationPath: string): Promise<void>;
+}
+
+export interface SkillLinkTransaction {
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
 }
 
 interface BackupEntry {
@@ -19,11 +25,12 @@ export async function replaceSkillLinksTransaction(
   canonicalPath: string,
   sources: SkillScanSource[],
   options: ReplaceSkillLinksOptions = {},
-): Promise<void> {
+): Promise<SkillLinkTransaction> {
   const backups: BackupEntry[] = [];
   try {
     for (const [index, locationPath] of locationPaths.entries()) {
       await assertSkillSymlinkTargetIsUniversal(canonicalPath, sources);
+      await options.validateDestination?.(locationPath);
       await mkdir(path.dirname(locationPath), { recursive: true });
       const backupPath = path.join(path.dirname(locationPath), `.${path.basename(locationPath)}.backup-${randomUUID()}`);
       const moved = await rename(locationPath, backupPath)
@@ -39,16 +46,25 @@ export async function replaceSkillLinksTransaction(
       await symlink(canonicalPath, locationPath);
     }
   } catch (error) {
-    for (const entry of backups.reverse()) {
-      await rm(entry.locationPath, { recursive: true, force: true }).catch(() => undefined);
-      if (entry.backupPath) {
-        await rename(entry.backupPath, entry.locationPath).catch(() => undefined);
-      }
-    }
+    await restoreBackups(backups);
     throw error;
   }
 
-  await Promise.all(backups.flatMap((entry) => entry.backupPath
-    ? [rm(entry.backupPath, { recursive: true, force: true })]
-    : []));
+  return {
+    commit: async () => {
+      await Promise.all(backups.flatMap((entry) => entry.backupPath
+        ? [rm(entry.backupPath, { recursive: true, force: true }).catch(() => undefined)]
+        : []));
+    },
+    rollback: async () => restoreBackups(backups),
+  };
+}
+
+async function restoreBackups(backups: BackupEntry[]): Promise<void> {
+  for (const entry of backups.slice().reverse()) {
+    await rm(entry.locationPath, { recursive: true, force: true }).catch(() => undefined);
+    if (entry.backupPath) {
+      await rename(entry.backupPath, entry.locationPath).catch(() => undefined);
+    }
+  }
 }

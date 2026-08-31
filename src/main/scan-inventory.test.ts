@@ -3888,6 +3888,37 @@ describe('representative-agent scan foundation', () => {
     expect(cachedWarningKinds).toEqual(['plugin-root-variable', 'plugin-contained-path']);
   });
 
+  it('uses exact enabled plugin records when deciding whether native Claude needs a Universal symlink', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-native-plugin-missing-install-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const alphaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const betaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'beta', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'skills');
+    await Promise.all([
+      mkdir(path.join(alphaRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(path.join(betaRoot, '.claude-plugin'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(alphaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'alpha', version: '1.0.0' }), 'utf8'),
+      writeFile(path.join(betaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'beta', version: '1.0.0' }), 'utf8'),
+      writeSkillFile(path.join(alphaRoot, 'skills'), 'foo', '# Alpha\n', '2026-01-08T00:00:00.000Z'),
+      writeSkillFile(path.join(betaRoot, 'skills'), 'foo', '# Beta\n', '2026-01-08T00:00:00.000Z'),
+      writeSkillFile(universalPath, 'alpha:foo', '# Alpha\n', '2026-01-08T00:00:00.000Z'),
+      writeFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }), 'utf8'),
+    ]);
+
+    const alpha = (await scanInventory({ paths, homeDir, includeLiveSources: true, includeSandboxSources: false }))
+      .skills.find((skill) => skill.name === 'alpha:foo');
+    expect(alpha?.detailDiagnostics.missingInstallSources?.some((source) => source.sourceId === 'live-claude')).toBe(false);
+
+    await writeFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'beta@official': true } }), 'utf8');
+    const alphaWithOnlyBetaEnabled = (await scanInventory({ paths, homeDir, includeLiveSources: true, includeSandboxSources: false }))
+      .skills.find((skill) => skill.name === 'alpha:foo');
+    expect(alphaWithOnlyBetaEnabled?.detailDiagnostics.missingInstallSources)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ sourceId: 'live-claude' })]));
+  });
+
   it('keeps a differing same-slug plugin skill out of structural copy classification', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-self-named-plugin-'));
     const homeDir = path.join(root, 'home');

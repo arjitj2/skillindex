@@ -30,6 +30,7 @@ export interface MakeSkillCanonicalOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
   linkMissingAgentInstalls?: boolean;
   testFailSkillLinkAt?: number;
+  testFailSkillDecisionPersist?: boolean;
 }
 
 export async function makeSkillCanonical(
@@ -110,19 +111,18 @@ export async function makeSkillCanonical(
   await assertSafeUniversalSkillMutation({
     destinationPath: universalTargetPath,
     universalRoot: canonicalSource.skillsDir,
+    skillName: skill.name,
     scope: mutationScope,
     sources: beforeSnapshot.sources,
     allowDefaultUniversalRoot: selectedSource.provenance?.kind === 'plugin',
   });
   const shouldLinkMissingAgentInstalls = options.linkMissingAgentInstalls !== false;
-  const selectedSkillPluginHosts = new Set(skill.locations.flatMap((location) =>
-    location.provenance?.kind === 'plugin' && location.provenance.plugin
-      ? [location.provenance.plugin.host]
-      : []));
-  const selectedSkillPluginCandidates = beforeSnapshot.sources.flatMap((source) =>
-    source.kind === 'plugin' && source.plugin && selectedSkillPluginHosts.has(source.plugin.host)
-      ? [source.plugin]
-      : []);
+  const selectedSkillPluginCandidates = selectedSource.provenance?.kind === 'plugin'
+    ? beforeSnapshot.sources.flatMap((source) =>
+      source.id === selectedSource.sourceId && source.kind === 'plugin' && source.plugin
+        ? [source.plugin]
+        : [])
+    : [];
   const writableLinkedSkillsDirs = new Set(
     !shouldLinkMissingAgentInstalls
       ? []
@@ -166,25 +166,34 @@ export async function makeSkillCanonical(
   )));
   const materializedPackage = await materializeCanonicalFile({
     canonicalPath,
+    skillName: skill.name,
     selectedSource,
     sources: beforeSnapshot.sources,
     universalRoot: canonicalSource.skillsDir,
     scope: mutationScope,
     allowDefaultUniversalRoot: selectedSource.provenance?.kind === 'plugin',
   });
+  let linkTransaction: Awaited<ReturnType<typeof replaceSkillLinksTransaction>> | undefined;
   try {
-    await replaceSkillLinksTransaction(linkPaths, universalTargetPath, beforeSnapshot.sources, {
+    linkTransaction = await replaceSkillLinksTransaction(linkPaths, universalTargetPath, beforeSnapshot.sources, {
       failAt: options.testFailSkillLinkAt,
+      validateDestination: (targetPath) => assertSafeWritableSkillLinkMutation(
+        targetPath,
+        beforeSnapshot.sources,
+        (beforeSnapshot.agents ?? []).flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []),
+      ),
+    });
+    await persistSkillUniversalDecisionForSelection(skill, persistedUniversalLocation, {
+      ...options,
+      paths,
     });
   } catch (error) {
+    await linkTransaction?.rollback();
     await materializedPackage.rollback();
     throw error;
   }
+  await linkTransaction.commit();
   await materializedPackage.commit();
-  await persistSkillUniversalDecisionForSelection(skill, persistedUniversalLocation, {
-    ...options,
-    paths,
-  });
 
   return scanInventory({
     ...options,
@@ -227,6 +236,7 @@ function pickSelectedSource({
 
 async function materializeCanonicalFile({
   canonicalPath,
+  skillName,
   selectedSource,
   sources,
   universalRoot,
@@ -234,6 +244,7 @@ async function materializeCanonicalFile({
   allowDefaultUniversalRoot,
 }: {
   canonicalPath: string;
+  skillName: string;
   selectedSource: SkillLocationRecord;
   sources: SkillInventorySnapshot['sources'];
   universalRoot: string;
@@ -244,7 +255,7 @@ async function materializeCanonicalFile({
     return { commit: () => Promise.resolve(), rollback: () => Promise.resolve() };
   }
 
-  await assertSafeUniversalSkillMutation({ destinationPath: canonicalPath, universalRoot, scope, sources, allowDefaultUniversalRoot });
+  await assertSafeUniversalSkillMutation({ destinationPath: canonicalPath, universalRoot, skillName, scope, sources, allowDefaultUniversalRoot });
   const parentPath = path.dirname(canonicalPath);
   const stagePath = path.join(parentPath, `.${path.basename(canonicalPath)}.stage-${randomUUID()}`);
   const backupPath = path.join(parentPath, `.${path.basename(canonicalPath)}.backup-${randomUUID()}`);
@@ -262,7 +273,7 @@ async function materializeCanonicalFile({
       throw error;
     }
     return {
-      commit: async () => rm(backupPath, { recursive: true, force: true }),
+      commit: async () => { await rm(backupPath, { recursive: true, force: true }).catch(() => undefined); },
       rollback: async () => {
         await rm(canonicalPath, { recursive: true, force: true });
         await rename(backupPath, canonicalPath).catch((error: NodeJS.ErrnoException) => {

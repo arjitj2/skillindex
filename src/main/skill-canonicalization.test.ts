@@ -593,6 +593,70 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
   });
 
+  it('does materialize a selected plugin into Claude when only an unrelated Claude plugin is enabled', async () => {
+    const root = await createRoot('skillindex-canonicalize-exact-native-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const alphaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const betaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'beta', '1.0.0');
+    const alphaPath = path.join(alphaRoot, 'skills', 'foo');
+    const betaPath = path.join(betaRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'alpha:foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'alpha:foo');
+    await Promise.all([
+      mkdir(path.join(alphaRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(path.join(betaRoot, '.claude-plugin'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(alphaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'alpha', version: '1.0.0' }), 'utf8'),
+      writeFile(path.join(betaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'beta', version: '1.0.0' }), 'utf8'),
+      writeSkillFile(path.join(alphaPath, 'SKILL.md'), '# Alpha foo\n'),
+      writeSkillFile(path.join(betaPath, 'SKILL.md'), '# Beta foo\n'),
+      writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'beta@official': true } })),
+    ]);
+
+    await makeSkillCanonical({ skillName: 'alpha:foo', selectedVariantPath: alphaPath }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true,
+    });
+
+    expect(await readlink(claudePath)).toBe(universalPath);
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toContain('Alpha foo');
+  });
+
+  it('rolls back Universal and links when persisting a plugin selection fails', async () => {
+    const root = await createRoot('skillindex-canonicalize-persist-rollback-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin source\n');
+    await writeSkillFile(path.join(universalPath, 'SKILL.md'), '# Universal sentinel\n');
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), '# Factory sentinel\n');
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [], preferredCanonicalSourcePath: null, dismissedDriftSignatures: [], dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforeUniversal = await snapshotPath(universalPath);
+    const beforeFactory = await snapshotPath(factoryPath);
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: pluginPath }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true, writeCache: false,
+      testFailSkillDecisionPersist: true,
+    })).rejects.toThrow(/Injected skill Universal decision persistence failure/i);
+
+    await expect(snapshotPath(universalPath)).resolves.toEqual(beforeUniversal);
+    await expect(snapshotPath(factoryPath)).resolves.toEqual(beforeFactory);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+  });
+
   it('refuses a Universal directory symlinked into a plugin cache without mutating packages or state', async () => {
     const root = await createRoot('skillindex-canonicalize-plugin-target-');
     const homeDir = await createRoot('skillindex-live-home-');

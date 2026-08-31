@@ -71,12 +71,14 @@ export async function assertSkillSymlinkTargetIsUniversal(
 export async function assertSafeUniversalSkillMutation({
   destinationPath,
   universalRoot,
+  skillName,
   scope,
   sources,
   allowDefaultUniversalRoot,
 }: {
   destinationPath: string;
   universalRoot: string;
+  skillName: string;
   scope: SkillScanSource['scope'];
   sources: SkillScanSource[];
   allowDefaultUniversalRoot: boolean;
@@ -91,14 +93,15 @@ export async function assertSafeUniversalSkillMutation({
   if (allowDefaultUniversalRoot) {
     permittedRoots.push(universalRoot);
   }
-  if (!permittedRoots.some((root) => isContainedDirectSkillPackage(root, destinationPath))) {
+  assertSafeSkillPackageName(skillName);
+  if (!permittedRoots.some((root) => isExactSkillPackageDestination(root, destinationPath, skillName))) {
     throw new Error('Universal skill mutation requires a current writable Universal destination in the active scope.');
   }
 
   await assertPathDoesNotResolveIntoPlugin(destinationPath, sources);
   for (const root of permittedRoots) {
-    if (isContainedDirectSkillPackage(root, destinationPath)) {
-      await assertResolvedContainment(root, destinationPath);
+    if (isExactSkillPackageDestination(root, destinationPath, skillName)) {
+      await assertResolvedExactSkillDestination(root, destinationPath, skillName);
       return;
     }
   }
@@ -172,10 +175,15 @@ function isContainedDirectSkillPackage(rootPath: string, destinationPath: string
     && !relative.includes(path.sep);
 }
 
-async function assertResolvedContainment(rootPath: string, destinationPath: string): Promise<void> {
+function isExactSkillPackageDestination(rootPath: string, destinationPath: string, skillName: string): boolean {
+  return path.normalize(destinationPath) === path.normalize(path.join(rootPath, skillName))
+    && isContainedDirectSkillPackage(rootPath, destinationPath);
+}
+
+async function assertResolvedExactSkillDestination(rootPath: string, destinationPath: string, skillName: string): Promise<void> {
   const resolvedRoot = await resolvePathThroughNearestExistingParent(rootPath);
   const resolvedDestination = await resolvePathThroughNearestExistingParent(destinationPath);
-  if (!isContainedDirectSkillPackage(resolvedRoot, resolvedDestination)) {
+  if (path.normalize(resolvedDestination) !== path.normalize(path.join(resolvedRoot, skillName))) {
     throw new Error('Universal skill destination escapes its writable Universal root.');
   }
 }

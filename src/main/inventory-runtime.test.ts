@@ -786,7 +786,7 @@ describe('inventory runtime', () => {
 
     const skillName = 'example-workflow-kit:handoff-notes-with-static';
     const agentsPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
-    const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', skillName);
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
 
     const afterDivergedResolution = await runtime.applyCapabilityAction({
       entity: 'skill',
@@ -810,7 +810,7 @@ describe('inventory runtime', () => {
     expect(afterMissingSkill?.detailDiagnostics.acceptedAlternates).toHaveLength(2);
 
     const previousUpdateCount = updates.length;
-    fakeWatchers.get('sandbox-claude')?.emit(claudePath);
+    fakeWatchers.get('sandbox-factory')?.emit(factoryPath);
 
     await waitFor(() => {
       expect(updates.length).toBeGreaterThan(previousUpdateCount);
