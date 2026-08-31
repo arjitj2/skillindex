@@ -21,7 +21,6 @@ import type {
   SkillDetailDiagnostics,
   SkillDefinitionIssue,
   SkillDiffFileRecord,
-  SkillDiffRecord,
   SkillDuplicateCandidate,
   SkillInstallKind,
   SkillFrontMatterRequiredField,
@@ -1155,7 +1154,7 @@ function createDriftSignature(
   });
 }
 
-function buildSkillDiff(locations: IndexedSkillLocation[]) {
+function buildSkillDiff(locations: SkillLocationRecord[]) {
   const realFileLocations = locations
     .filter((location) => location.fileType === 'real-file')
     .sort(compareByNewestModifiedAt);
@@ -1176,7 +1175,7 @@ function buildSkillDiff(locations: IndexedSkillLocation[]) {
   return comparisons[0] ?? undefined;
 }
 
-function buildDiffComparison(primaryLocation: IndexedSkillLocation, comparisonLocation: IndexedSkillLocation) {
+function buildDiffComparison(primaryLocation: SkillLocationRecord, comparisonLocation: SkillLocationRecord) {
   const files = buildPackageDiffFiles(comparisonLocation, primaryLocation);
   if (files.length === 0) {
     return null;
@@ -2051,7 +2050,7 @@ function reconcileCachedSkill(
   };
   const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const diff = issueReasons.includes('diverged-copies')
-    ? pruneCachedSkillDiff(skill.diff, new Set(issueLocations.map((location) => location.path)))
+    ? buildSkillDiff(issueLocations)
     : undefined;
 
   if (isHealthyCachedSkill(canonicalizedLocations, canonicalPaths, missingInstallSources, issueReasons)) {
@@ -2253,43 +2252,6 @@ function matchesCanonicalLocationPath(locationPath: string, canonicalPaths: stri
 
 function createLocationCacheKey(filePath: string, sourceId: string): string {
   return `${sourceId}:${filePath}`;
-}
-
-function pruneCachedSkillDiff(
-  diff: SkillDiffRecord | undefined,
-  activePaths: Set<string>,
-): SkillDiffRecord | undefined {
-  if (!diff) {
-    return undefined;
-  }
-
-  if (diff.selectedPath || diff.baselinePath || diff.files) {
-    if (!diff.selectedPath || !diff.baselinePath) {
-      return undefined;
-    }
-    if (!activePaths.has(diff.selectedPath) || !activePaths.has(diff.baselinePath)) {
-      return undefined;
-    }
-
-    return {
-      ...diff,
-      files: diff.files ?? [],
-    };
-  }
-
-  if (!diff.primaryPath || !activePaths.has(diff.primaryPath)) {
-    return undefined;
-  }
-
-  const comparisons = (diff.comparisons ?? []).filter((comparison) => activePaths.has(comparison.path));
-  if (comparisons.length === 0) {
-    return undefined;
-  }
-
-  return {
-    ...diff,
-    comparisons,
-  };
 }
 
 function findSkillLocationByPath(
@@ -2678,8 +2640,8 @@ async function getLocationModifiedAt(
 }
 
 function buildPackageDiffFiles(
-  baselineLocation: IndexedSkillLocation,
-  selectedLocation: IndexedSkillLocation,
+  baselineLocation: SkillLocationRecord,
+  selectedLocation: SkillLocationRecord,
 ): SkillDiffFileRecord[] {
   const baselineFiles = new Map((baselineLocation.packageFiles ?? []).map((file) => [file.relativePath, file]));
   const selectedFiles = new Map((selectedLocation.packageFiles ?? []).map((file) => [file.relativePath, file]));

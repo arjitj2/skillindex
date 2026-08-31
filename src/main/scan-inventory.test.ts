@@ -3853,7 +3853,15 @@ describe('representative-agent scan foundation', () => {
     await mkdir(path.join(homeDir, '.codex'), { recursive: true });
     await writeFile(path.join(homeDir, '.codex', 'config.toml'), '[plugins."foo@official"]\nenabled = true\n', 'utf8');
 
-    expect((await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'foo')?.diff).toBeUndefined();
+    const reconciledDiff = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'foo')?.diff;
+    expect(reconciledDiff).toMatchObject({
+      baselinePath: universalPath,
+      selectedPath: factoryPath,
+    });
+    expect(reconciledDiff?.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: 'SKILL.md', status: 'changed' }),
+    ]));
+    expect(JSON.stringify(reconciledDiff)).not.toContain(pluginRoot);
   });
 
   it('preserves plugin dependency warnings through fresh and cached inventory', async () => {
