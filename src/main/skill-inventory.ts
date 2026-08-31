@@ -2851,7 +2851,8 @@ function isPluginSourceRef(value: unknown): value is PluginSourceRef {
     && isString(value.pluginName)
     && (value.version === undefined || isString(value.version))
     && isString(value.rootPath)
-    && (value.manifestPath === undefined || isString(value.manifestPath));
+    && (value.manifestPath === undefined || isString(value.manifestPath))
+    && (value.enabled === 'unknown' || typeof value.enabled === 'boolean');
 }
 
 function isSkillProvenance(value: unknown): boolean {
@@ -2891,7 +2892,38 @@ function isProvenanceKind(value: unknown): boolean {
 
 function isCanonicalRole(value: unknown): boolean {
   return value === 'canonical'
-    || value === 'materialized-copy';
+    || value === 'materialized-copy'
+    || value === 'managed-source';
+}
+
+function isPluginSourceEvidence(value: unknown): boolean {
+  return value === 'enabled-installation'
+    || value === 'newer-comparable-version'
+    || value === 'cached-unknown';
+}
+
+function isPluginDependencyWarningKind(value: unknown): boolean {
+  return value === 'plugin-root-variable'
+    || value === 'plugin-contained-path'
+    || value === 'provider-specific-field';
+}
+
+function isPluginDependencyWarning(value: unknown): boolean {
+  return isRecord(value)
+    && isPluginDependencyWarningKind(value.kind)
+    && isString(value.detail);
+}
+
+function isPluginManagedSourceCandidate(value: unknown): boolean {
+  return isRecord(value)
+    && isString(value.path)
+    && isPluginSourceRef(value.plugin)
+    && isPluginSourceEvidence(value.evidence)
+    && (value.relationship === 'universal-missing'
+      || value.relationship === 'matches-universal'
+      || value.relationship === 'differs-from-universal')
+    && Array.isArray(value.dependencyWarnings)
+    && value.dependencyWarnings.every(isPluginDependencyWarning);
 }
 
 function isMutability(value: unknown): boolean {
@@ -2912,6 +2944,8 @@ function isSkillRecord(value: unknown): boolean {
     && Array.isArray(value.locations)
     && value.locations.every(isSkillLocationRecord)
     && isSkillDetailDiagnostics(value.detailDiagnostics)
+    && (value.managedSourceCandidates === undefined
+      || (Array.isArray(value.managedSourceCandidates) && value.managedSourceCandidates.every(isPluginManagedSourceCandidate)))
     && (value.diff === undefined || isSkillDiffRecord(value.diff));
 }
 
@@ -3113,7 +3147,9 @@ function isMcpRecord(value: unknown): value is McpRecord {
     && (value.missingLocations === undefined || (Array.isArray(value.missingLocations) && value.missingLocations.every(isMcpExpectedLocationRecord)))
     && Array.isArray(value.issueReasons)
     && value.issueReasons.every(isMcpIssueReason)
-    && (value.signature === undefined || isString(value.signature));
+    && (value.signature === undefined || isString(value.signature))
+    && (value.managedSourceCandidates === undefined
+      || (Array.isArray(value.managedSourceCandidates) && value.managedSourceCandidates.every(isPluginManagedSourceCandidate)));
 }
 
 function isMcpInventoryCounts(value: unknown): value is McpInventoryCounts {
@@ -3173,7 +3209,9 @@ function isSubagentRecord(value: unknown): value is SubagentRecord {
     && (value.missingLocations === undefined || (Array.isArray(value.missingLocations) && value.missingLocations.every(isSubagentExpectedLocationRecord)))
     && Array.isArray(value.issueReasons)
     && value.issueReasons.every(isSubagentIssueReason)
-    && (value.signature === undefined || isString(value.signature));
+    && (value.signature === undefined || isString(value.signature))
+    && (value.managedSourceCandidates === undefined
+      || (Array.isArray(value.managedSourceCandidates) && value.managedSourceCandidates.every(isPluginManagedSourceCandidate)));
 }
 
 function isSubagentInventoryCounts(value: unknown): value is SubagentInventoryCounts {

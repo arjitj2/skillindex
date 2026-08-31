@@ -28,8 +28,11 @@ export function isPluginManagedTarget(
   return sources.some((source) => {
     if (source.kind !== 'plugin') return false;
     const normalizedRoot = path.normalize(source.skillsDir);
-    return normalizedTarget === normalizedRoot
-      || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`);
+    const relative = path.relative(normalizedRoot, normalizedTarget);
+    return relative === ''
+      || (relative !== '..'
+        && !relative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relative));
   });
 }
 
@@ -68,24 +71,38 @@ export function annotateComparableVersionEvidence<
     candidate,
     version: parseComparableVersion(candidate.version),
   }));
-  if (parsed.some((entry) => entry.version === null)) return candidates;
+  if (parsed.length < 2 || parsed.some((entry) => entry.version === null)) return candidates;
 
-  const greatest = parsed
-    .slice()
-    .sort((left, right) => compareVersionParts(right.version!, left.version!))[0];
+  const greatestVersion = parsed.reduce<[string, string, string] | null>((greatest, entry) => {
+    if (!entry.version || greatest === null || compareVersionParts(entry.version, greatest) > 0) {
+      return entry.version;
+    }
+    return greatest;
+  }, null);
+  if (greatestVersion === null
+    || parsed.filter((entry) => compareVersionParts(entry.version!, greatestVersion) === 0).length !== 1) {
+    return candidates;
+  }
+  const greatest = parsed.find((entry) => compareVersionParts(entry.version!, greatestVersion) === 0);
 
   return candidates.map((candidate) => candidate === greatest?.candidate
     ? { ...candidate, evidence: 'newer-comparable-version' }
     : candidate);
 }
 
-function parseComparableVersion(value: string | undefined): [number, number, number] | null {
-  const match = value?.match(/^(\d+)\.(\d+)\.(\d+)$/u);
-  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+function parseComparableVersion(value: string | undefined): [string, string, string] | null {
+  const match = value?.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u);
+  return match ? [match[1], match[2], match[3]] : null;
 }
 
-function compareVersionParts(left: [number, number, number], right: [number, number, number]): number {
-  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+function compareVersionParts(left: [string, string, string], right: [string, string, string]): number {
+  return compareDecimalStrings(left[0], right[0])
+    || compareDecimalStrings(left[1], right[1])
+    || compareDecimalStrings(left[2], right[2]);
+}
+
+function compareDecimalStrings(left: string, right: string): number {
+  return left.length - right.length || left.localeCompare(right);
 }
 
 export function detectPluginDependencyWarnings({
@@ -98,13 +115,13 @@ export function detectPluginDependencyWarnings({
   providerSpecificFields?: string[];
 }): PluginDependencyWarning[] {
   const warnings: PluginDependencyWarning[] = [];
-  if (/\$\{?(?:CODEX|CLAUDE)_PLUGIN_ROOT\}?/u.test(text)) {
+  if (/(?:\$\{(?:CODEX|CLAUDE)_PLUGIN_ROOT\}|\$(?:CODEX|CLAUDE)_PLUGIN_ROOT(?![A-Z0-9_]))/u.test(text)) {
     warnings.push({
       kind: 'plugin-root-variable',
       detail: 'References a plugin-root environment variable.',
     });
   }
-  if (text.includes(pluginRoot)) {
+  if (pluginRoot.length > 0 && hasPluginRootPathReference(text, pluginRoot)) {
     warnings.push({
       kind: 'plugin-contained-path',
       detail: `References a path inside ${pluginRoot}.`,
@@ -117,4 +134,16 @@ export function detectPluginDependencyWarnings({
     });
   }
   return warnings;
+}
+
+function hasPluginRootPathReference(text: string, pluginRoot: string): boolean {
+  const normalizedRoot = path.normalize(pluginRoot);
+  let start = 0;
+  while (true) {
+    const index = text.indexOf(normalizedRoot, start);
+    if (index === -1) return false;
+    const next = text[index + normalizedRoot.length];
+    if (next === undefined || next === '/' || next === '\\') return true;
+    start = index + normalizedRoot.length;
+  }
 }

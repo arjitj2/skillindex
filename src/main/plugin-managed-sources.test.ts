@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -12,6 +14,8 @@ import {
   isAgentSatisfiedByNativePlugin,
   isPluginManagedTarget,
 } from '@main/plugin-managed-sources';
+import { readSkillInventoryCache } from '@main/skill-inventory';
+import type { SkillInventorySnapshot } from '@shared/contracts';
 
 describe('plugin managed sources', () => {
   it('excludes managed-source locations from operational locations', () => {
@@ -97,10 +101,12 @@ describe('plugin managed sources', () => {
   it('recognizes plugin-managed targets with a path-separator boundary', () => {
     const sources = [{ kind: 'plugin' as const, skillsDir: '/cache/tools/skills' }];
 
+    expect(isPluginManagedTarget('/', [{ kind: 'plugin', skillsDir: '/' }])).toBe(true);
     expect(isPluginManagedTarget('/cache/tools/skills', sources)).toBe(true);
     expect(isPluginManagedTarget(path.join('/cache/tools/skills', 'foo'), sources)).toBe(true);
     expect(isPluginManagedTarget('/cache/tools/skills-other/foo', sources)).toBe(false);
     expect(isPluginManagedTarget('/cache/other/skills/foo', sources)).toBe(false);
+    expect(isPluginManagedTarget('/cache/tools/skills/../other', sources)).toBe(false);
     expect(isPluginManagedTarget('/cache/tools/skills', [{ kind: 'agent', skillsDir: '/cache/tools/skills' }])).toBe(false);
   });
 
@@ -131,5 +137,166 @@ describe('plugin managed sources', () => {
 
     expect(annotateComparableVersionEvidence(mixed)).toEqual(mixed);
     expect(annotateComparableVersionEvidence(enabled)).toEqual(enabled);
+  });
+
+  it('requires strict core semver, handles huge values safely, and does not label ties or singletons', () => {
+    const singleton = [{ version: '1.0.0', evidence: 'cached-unknown' as const }];
+    const leadingZero = [
+      { version: '01.0.0', evidence: 'cached-unknown' as const },
+      { version: '2.0.0', evidence: 'cached-unknown' as const },
+    ];
+    const huge = [
+      { version: '9007199254740992.0.0', evidence: 'cached-unknown' as const },
+      { version: '9007199254740991.99.99', evidence: 'cached-unknown' as const },
+    ];
+    const tied = [
+      { version: '2.0.0', evidence: 'cached-unknown' as const },
+      { version: '2.0.0', evidence: 'cached-unknown' as const },
+    ];
+    const tiedReordered = [
+      { version: '1.0.0', evidence: 'cached-unknown' as const },
+      { version: '2.0.0', evidence: 'cached-unknown' as const },
+      { version: '2.0.0', evidence: 'cached-unknown' as const },
+    ];
+
+    expect(annotateComparableVersionEvidence(singleton)).toEqual(singleton);
+    expect(annotateComparableVersionEvidence(leadingZero)).toEqual(leadingZero);
+    expect(annotateComparableVersionEvidence(huge)).toEqual([
+      { ...huge[0], evidence: 'newer-comparable-version' },
+      huge[1],
+    ]);
+    expect(annotateComparableVersionEvidence(tied)).toEqual(tied);
+    expect(annotateComparableVersionEvidence(tiedReordered)).toEqual(tiedReordered);
+    const tiedReorderedReverse = [...tiedReordered].reverse();
+    expect(annotateComparableVersionEvidence(tiedReorderedReverse)).toEqual(tiedReorderedReverse);
+  });
+
+  it('requires dependency variable and path boundaries', () => {
+    expect(detectPluginDependencyWarnings({
+      text: '${CODEX_PLUGIN_ROOTED}/x $CLAUDE_PLUGIN_ROOTED/y',
+      pluginRoot: '/cache/tools/1.0.0',
+    })).toEqual([]);
+    expect(detectPluginDependencyWarnings({
+      text: '$CODEX_PLUGIN_ROOT/x ${CLAUDE_PLUGIN_ROOT}/y /cache/tools/1.0.01/data',
+      pluginRoot: '/cache/tools/1.0.0',
+    }).map((warning) => warning.kind)).toEqual(['plugin-root-variable']);
+    expect(detectPluginDependencyWarnings({
+      text: '/cache/tools/1.0.0/data',
+      pluginRoot: '',
+    })).toEqual([]);
+  });
+
+  it('round-trips managed-source records and rejects malformed managed metadata in cache', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-managed-cache-'));
+    const cachePath = path.join(root, 'inventory.json');
+    const plugin = {
+      host: 'codex' as const,
+      pluginId: 'tools@official',
+      pluginName: 'tools',
+      version: '1.0.0',
+      rootPath: '/cache/tools/1.0.0',
+      enabled: true as const,
+    };
+    const candidate = {
+      path: '/cache/tools/1.0.0/skills/foo',
+      plugin,
+      evidence: 'enabled-installation' as const,
+      relationship: 'universal-missing' as const,
+      dependencyWarnings: [{ kind: 'plugin-root-variable' as const, detail: 'warning' }],
+    };
+    const snapshot: SkillInventorySnapshot = {
+      scannedAt: '2026-08-31T00:00:00.000Z',
+      sourceIds: ['plugin-source'],
+      sources: [{
+        id: 'plugin-source',
+        label: 'Tools',
+        canonical: false,
+        kind: 'plugin',
+        writable: false,
+        scope: 'live',
+        skillsDir: '/cache/tools/1.0.0/skills',
+        plugin,
+      }],
+      plugins: [{
+        ...plugin,
+        bundledSkills: [{ name: 'foo', path: candidate.path, entrypointPath: `${candidate.path}/SKILL.md`, sourceId: 'plugin-source' }],
+        bundledMcps: [],
+      }],
+      skills: [{
+        name: 'foo',
+        structuralState: 'single-source-noncanonical',
+        isDrifted: true,
+        driftPresentation: 'active',
+        locations: [{
+          path: candidate.path,
+          sourceId: 'plugin-source',
+          sourceLabel: 'Tools',
+          sourceScope: 'live',
+          fileType: 'real-file',
+          modifiedAt: '2026-08-31T00:00:00.000Z',
+          canonical: false,
+          canonicalRole: 'managed-source',
+        }],
+        detailDiagnostics: { duplicateCandidates: [], installSources: [] },
+        managedSourceCandidates: [candidate],
+      }],
+      counts: {
+        totalSkills: 1,
+        driftedSkills: 1,
+        healthySkills: 0,
+        singleSourceSkills: 1,
+        identicalDriftSkills: 0,
+        divergedDriftSkills: 0,
+        dismissedDriftSkills: 0,
+      },
+      mcps: [{
+        name: 'foo-server',
+        status: 'healthy',
+        presentation: 'none',
+        locations: [{
+          agentId: 'plugin-source',
+          agentLabel: 'Tools',
+          scope: 'live',
+          configPath: '/cache/tools/1.0.0/.mcp.json',
+          args: [],
+          canonicalRole: 'managed-source',
+        }],
+        issueReasons: [],
+        managedSourceCandidates: [candidate],
+      }],
+      mcpCounts: { totalMcps: 1, attentionMcps: 0, healthyMcps: 1, dismissedAttentionMcps: 0 },
+      subagents: [{
+        name: 'foo-agent',
+        status: 'healthy',
+        presentation: 'none',
+        locations: [{
+          agentId: 'plugin-source',
+          agentLabel: 'Tools',
+          scope: 'live',
+          path: '/cache/tools/1.0.0/agents/foo.md',
+          directoryPath: '/cache/tools/1.0.0/agents',
+          fileType: 'real-file',
+          modifiedAt: '2026-08-31T00:00:00.000Z',
+          canonical: false,
+          format: 'markdown-frontmatter',
+          canonicalRole: 'managed-source',
+        }],
+        issueReasons: [],
+        managedSourceCandidates: [candidate],
+      }],
+      subagentCounts: { totalSubagents: 1, attentionSubagents: 0, healthySubagents: 1, dismissedAttentionSubagents: 0 },
+    };
+
+    await writeFile(cachePath, `${JSON.stringify(snapshot)}\n`, 'utf8');
+    await expect(readSkillInventoryCache(cachePath)).resolves.toEqual(snapshot);
+
+    const malformed = structuredClone(snapshot) as unknown as Record<string, unknown>;
+    const malformedSkills = malformed.skills as Array<Record<string, unknown>>;
+    malformedSkills[0] = {
+      ...malformedSkills[0],
+      managedSourceCandidates: [{ ...candidate, evidence: 'not-valid' }],
+    };
+    await writeFile(cachePath, `${JSON.stringify(malformed)}\n`, 'utf8');
+    await expect(readSkillInventoryCache(cachePath)).resolves.toBeNull();
   });
 });
