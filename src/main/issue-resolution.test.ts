@@ -1257,7 +1257,7 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
       writeCache: false,
-    })).rejects.toThrow(/must target a writable Universal skill package/i);
+    })).rejects.toThrow(/plugin-managed cache path/i);
 
     expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
     expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
