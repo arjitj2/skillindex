@@ -61,7 +61,7 @@ import {
   emptyMcpInventoryCounts,
   reconcileCachedMcps,
 } from '@main/mcp-inventory';
-import { applyDismissedSubagentState, countSubagents } from '@main/subagent-inventory';
+import { applyDismissedSubagentState, countSubagents, reconcileCachedSubagents } from '@main/subagent-inventory';
 import { parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
 import {
   annotateComparableVersionEvidence,
@@ -1064,7 +1064,10 @@ export function reconcileSkillInventorySnapshot(
   ) {
     const mcps = applyDismissedMcpState(snapshot.mcps ?? [], dismissedMcpSignatures);
     const mcpCounts = countMcps(mcps);
-    const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+    const subagents = applyDismissedSubagentState(
+      reconcileCachedSubagents(snapshot.subagents ?? [], activeAgents, plugins),
+      dismissedSubagentSignatures,
+    );
     const subagentCounts = countSubagents(subagents);
     const agentCounts = countAgents(activeAgents);
 
@@ -1112,7 +1115,10 @@ export function reconcileSkillInventorySnapshot(
     dismissedMcpSignatures,
   );
   const mcpCounts = countMcps(reconciledMcps);
-  const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+  const subagents = applyDismissedSubagentState(
+    reconcileCachedSubagents(snapshot.subagents ?? [], activeAgents, plugins),
+    dismissedSubagentSignatures,
+  );
   const subagentCounts = countSubagents(subagents);
   const agentCounts = countAgents(activeAgents);
   const counts = countSkills(skills);

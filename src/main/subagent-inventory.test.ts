@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveInventoryIssue } from '@main/issue-resolution';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
-import { dismissDrift, scanInventory } from '@main/scan-inventory';
+import { dismissDrift, readCachedInventory, scanInventory } from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
   renderPortableSubagentDefinition,
@@ -527,7 +527,150 @@ describe('subagent inventory', () => {
     expect(universalDefinition).not.toContain('build-ios-apps:openai');
   });
 
-  it('repairs legacy plugin subagent Universal files without keeping the scoped name in frontmatter', async () => {
+  it('treats differing plugin subagent versions as managed source candidates instead of a mismatch', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const roots = [
+      path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0'),
+      path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.1.0'),
+    ];
+
+    for (const [index, root] of roots.entries()) {
+      const version = `1.${index}.0`;
+      await writeMarkdownSubagent(
+        path.join(root, 'agents', 'reviewer.md'),
+        'reviewer',
+        `Plugin reviewer ${version}.`,
+        `Use plugin revision ${version}.`,
+      );
+      await writeRawFile(path.join(root, '.codex-plugin', 'plugin.json'), `${JSON.stringify({ name: 'tools', version })}\n`);
+    }
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+
+    expect(reviewer?.issueReasons).toEqual(['missing-universal']);
+    expect(reviewer?.locations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ canonical: false, canonicalRole: 'managed-source', mutability: 'read-only-managed' }),
+    ]));
+    expect(reviewer?.managedSourceCandidates).toHaveLength(2);
+    expect(reviewer?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')).toMatchObject({
+      evidence: 'newer-comparable-version',
+      relationship: 'universal-missing',
+    });
+
+    const cached = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+    expect(cached?.issueReasons).toEqual(['missing-universal']);
+    expect(cached?.managedSourceCandidates).toHaveLength(2);
+  });
+
+  it('keeps plugin updates advisory when Universal matches one managed source', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md');
+    const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const secondRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'tools-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'tools-reviewer.toml');
+
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use revision one.');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(universalPath, claudePath);
+    await writeCodexSubagent(codexPath, 'reviewer', 'Plugin reviewer.', 'Use revision one.');
+    await writeMarkdownSubagent(path.join(firstRoot, 'agents', 'reviewer.md'), 'reviewer', 'Plugin reviewer.', 'Use revision one.');
+    await writeMarkdownSubagent(path.join(secondRoot, 'agents', 'reviewer.md'), 'reviewer', 'Plugin reviewer.', 'Use revision two.');
+    await writeRawFile(path.join(firstRoot, '.codex-plugin', 'plugin.json'), '{"name":"tools","version":"1.0.0"}\n');
+    await writeRawFile(path.join(secondRoot, '.codex-plugin', 'plugin.json'), '{"name":"tools","version":"1.1.0"}\n');
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+
+    expect(reviewer).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(reviewer?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+    }))).toEqual(expect.arrayContaining([
+      { version: '1.0.0', relationship: 'matches-universal' },
+      { version: '1.1.0', relationship: 'differs-from-universal' },
+    ]));
+  });
+
+  it('reports managed plugin dependency warnings without turning them into drift', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+
+    await writeRawFile(pluginPath, [
+      '---',
+      'name: reviewer',
+      'description: Plugin reviewer.',
+      'color: blue',
+      '---',
+      '$CODEX_PLUGIN_ROOT/bin/review',
+      `${root}/assets/rules.json`,
+      '',
+    ].join('\n'));
+    await writeRawFile(path.join(root, '.codex-plugin', 'plugin.json'), '{"name":"tools","version":"1.0.0"}\n');
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+    expect(reviewer?.issueReasons).toEqual(['missing-universal']);
+    expect(reviewer?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind)).toEqual([
+      'plugin-root-variable',
+      'plugin-contained-path',
+      'provider-specific-field',
+    ]);
+  });
+
+  it('uses only the exact enabled plugin subagent to satisfy its native provider', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const alphaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const betaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'beta', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(path.join(alphaRoot, 'agents', 'reviewer.md'), 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(path.join(betaRoot, 'agents', 'reviewer.md'), 'reviewer', 'Other reviewer.', 'Use beta rules.');
+    await writeRawFile(path.join(alphaRoot, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(path.join(betaRoot, '.claude-plugin', 'plugin.json'), '{"name":"beta","version":"1.0.0"}\n');
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }));
+
+    const alpha = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(alpha?.expectedLocations?.some((location) => location.agentLabel === 'Claude Code')).toBe(false);
+
+    const repaired = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-from-agents',
+      selectedVariantPath: universalPath,
+      subagentName: 'alpha:reviewer',
+    }, scanOptions);
+    expect(await readFile(path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml'), 'utf8'))
+      .toContain('developer_instructions = "Use alpha rules."');
+    await expect(lstat(path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md'))).rejects.toThrow();
+    expect(repaired.subagents?.find((subagent) => subagent.name === 'alpha:reviewer')?.missingLocations)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ agentLabel: 'Claude Code' })]));
+
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'beta@official': true } }));
+    const alphaWithOnlyBeta = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(alphaWithOnlyBeta?.missingLocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentLabel: 'Claude Code' }),
+    ]));
+  });
+
+  it('keeps invalid managed plugin definitions visible alongside missing Universal', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+
+    await writeRawFile(path.join(root, 'agents', 'reviewer.md'), [
+      '---',
+      'name: reviewer',
+      '---',
+      'This omits the required description.',
+      '',
+    ].join('\n'));
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"tools","version":"1.0.0"}\n');
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+    expect(reviewer?.issueReasons).toEqual(expect.arrayContaining(['invalid-definition', 'missing-universal']));
+    expect(reviewer?.locations[0]?.invalidDetails).toContain('Missing required field: description');
+  });
+
+  it('does not classify legacy plugin source differences as structural mismatch', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const universalPath = path.join(homeDir, '.agents', 'agents', 'github-tools-reviewer.md');
     const pluginPath = path.join(
@@ -559,21 +702,7 @@ describe('subagent inventory', () => {
 
     const inventory = await scanInventory(scanOptions);
     expect(inventory.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer')?.issueReasons)
-      .toContain('definition-mismatch');
-
-    const repaired = await resolveInventoryIssue({
-      entity: 'subagent',
-      issue: 'definition-mismatch',
-      selectedVariantPath: pluginPath,
-      subagentName: 'github-tools:reviewer',
-    }, scanOptions);
-    const repairedPlugin = repaired.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer');
-    const universalDefinition = await readFile(universalPath, 'utf8');
-
-    expect(repairedPlugin?.issueReasons).not.toContain('definition-mismatch');
-    expect(repairedPlugin?.issueReasons).not.toContain('missing-universal');
-    expect(universalDefinition).toContain('name: "reviewer"');
-    expect(universalDefinition).not.toContain('github-tools:reviewer');
+      .not.toContain('definition-mismatch');
   });
 
   it('auto-selects the Universal definition for ambiguous subagent mismatch repair', async () => {
