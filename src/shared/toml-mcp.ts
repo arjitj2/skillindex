@@ -5,7 +5,7 @@ export function parseTomlMcpServers(raw: string): McpServerDefinitions {
   let currentServerName: string | null = null;
   let currentTablePath: string[] = [];
 
-  for (const line of raw.split(/\r?\n/u)) {
+  for (const line of coalesceTomlMultilineArrays(raw)) {
     const trimmed = stripTomlComment(line).trim();
     if (!trimmed) {
       continue;
@@ -88,7 +88,7 @@ export function parseTomlMcpServerArray(raw: string): McpServerDefinitions {
     currentTablePath = [];
   }
 
-  for (const line of raw.split(/\r?\n/u)) {
+  for (const line of coalesceTomlMultilineArrays(raw)) {
     const trimmed = stripTomlComment(line).trim();
     if (!trimmed) {
       continue;
@@ -404,6 +404,85 @@ function stripTomlComment(line: string): string {
   }
 
   return result;
+}
+
+function coalesceTomlMultilineArrays(raw: string): string[] {
+  const lines: string[] = [];
+  let pendingArrayAssignment: string | null = null;
+
+  for (const line of raw.split(/\r?\n/u)) {
+    const trimmed = stripTomlComment(line).trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    if (pendingArrayAssignment) {
+      pendingArrayAssignment = `${pendingArrayAssignment} ${trimmed}`;
+      const assignment = splitTomlAssignment(pendingArrayAssignment);
+      if (assignment && !hasUnclosedTomlArray(assignment.value)) {
+        lines.push(pendingArrayAssignment);
+        pendingArrayAssignment = null;
+      }
+      continue;
+    }
+
+    const assignment = splitTomlAssignment(trimmed);
+    if (assignment && hasUnclosedTomlArray(assignment.value)) {
+      pendingArrayAssignment = trimmed;
+      continue;
+    }
+
+    lines.push(trimmed);
+  }
+
+  if (pendingArrayAssignment) {
+    lines.push(pendingArrayAssignment);
+  }
+
+  return lines;
+}
+
+function hasUnclosedTomlArray(value: string): boolean {
+  if (!value.trimStart().startsWith('[')) {
+    return false;
+  }
+
+  let depth = 0;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let escaped = false;
+
+  for (const character of value) {
+    if (inDoubleQuote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (character === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (character === '"') {
+      inDoubleQuote = true;
+    } else if (character === "'") {
+      inSingleQuote = true;
+    } else if (character === '[') {
+      depth += 1;
+    } else if (character === ']') {
+      depth -= 1;
+    }
+  }
+
+  return depth > 0;
 }
 
 function splitTomlAssignment(line: string): { key: string; value: string } | null {
