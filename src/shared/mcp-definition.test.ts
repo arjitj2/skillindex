@@ -70,6 +70,24 @@ describe('MCP definition normalization', () => {
     });
   });
 
+  it('normalizes OpenCode bearer environment headers to the portable auth field', () => {
+    expect(normalizeMcpDefinitionForComparison({
+      type: 'remote',
+      url: 'https://api.githubcopilot.com/mcp/',
+      headers: {
+        Authorization: 'Bearer {env:GITHUB_PAT_TOKEN}',
+        'X-Client': 'skill-index',
+      },
+    })).toEqual({
+      transport: 'http',
+      url: 'https://api.githubcopilot.com/mcp/',
+      headers: {
+        'X-Client': 'skill-index',
+      },
+      bearer_token_env_var: 'GITHUB_PAT_TOKEN',
+    });
+  });
+
   it('uses parsed connection hints when the raw definition omits transport fields', () => {
     expect(normalizeMcpDefinitionForComparison({
       args: ['server.js'],

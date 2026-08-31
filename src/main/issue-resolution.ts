@@ -2056,6 +2056,13 @@ function toOpenCodeMcpDefinition(definition: McpDefinitionValue): McpDefinitionO
     if (isMcpDefinitionObject(normalizedDefinition.headers)) {
       remoteDefinition.headers = normalizedDefinition.headers;
     }
+    const bearerTokenEnvVar = getNonEmptyString(normalizedDefinition.bearer_token_env_var);
+    if (bearerTokenEnvVar) {
+      remoteDefinition.headers = {
+        ...(isMcpDefinitionObject(remoteDefinition.headers) ? remoteDefinition.headers : {}),
+        Authorization: `Bearer {env:${bearerTokenEnvVar}}`,
+      };
+    }
     copyOptionalOpenCodeFields(normalizedDefinition, remoteDefinition, ['enabled', 'oauth', 'timeout']);
     return remoteDefinition;
   }
