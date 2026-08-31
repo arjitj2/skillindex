@@ -68,6 +68,107 @@ export async function assertSkillSymlinkTargetIsUniversal(
   }
 }
 
+export async function assertSafeUniversalSkillMutation({
+  destinationPath,
+  universalRoot,
+  scope,
+  sources,
+  allowDefaultUniversalRoot,
+}: {
+  destinationPath: string;
+  universalRoot: string;
+  scope: SkillScanSource['scope'];
+  sources: SkillScanSource[];
+  allowDefaultUniversalRoot: boolean;
+}): Promise<void> {
+  const permittedRoots = sources
+    .filter((source) =>
+      source.scope === scope
+      && source.writable
+      && source.kind !== 'plugin'
+      && (source.canonical || source.preferredCanonical))
+    .map((source) => source.skillsDir);
+  if (allowDefaultUniversalRoot) {
+    permittedRoots.push(universalRoot);
+  }
+  if (!permittedRoots.some((root) => isContainedDirectSkillPackage(root, destinationPath))) {
+    throw new Error('Universal skill mutation requires a current writable Universal destination in the active scope.');
+  }
+
+  await assertPathDoesNotResolveIntoPlugin(destinationPath, sources);
+  for (const root of permittedRoots) {
+    if (isContainedDirectSkillPackage(root, destinationPath)) {
+      await assertResolvedContainment(root, destinationPath);
+      return;
+    }
+  }
+}
+
+export async function assertSafeWritableSkillLinkMutation(
+  locationPath: string,
+  sources: SkillScanSource[],
+  additionalWritableRoots: string[] = [],
+): Promise<void> {
+  const writableRoots = sources
+    .filter((source) => source.writable && source.kind !== 'plugin')
+    .map((source) => source.skillsDir)
+    .concat(additionalWritableRoots);
+  if (!writableRoots.some((root) => isContainedDirectSkillPackage(root, locationPath))) {
+    throw new Error('Skill link mutation requires a current writable agent skills destination.');
+  }
+  await assertPathDoesNotResolveIntoPlugin(path.dirname(locationPath), sources);
+}
+
+export async function isPluginManagedTargetThroughRealpath(
+  targetPath: string,
+  sources: SkillScanSource[],
+): Promise<boolean> {
+  try {
+    await assertPathDoesNotResolveIntoPlugin(targetPath, sources);
+    return false;
+  } catch (error) {
+    if ((error as Error).message.includes('plugin-managed cache path')) return true;
+    throw error;
+  }
+}
+
+export function assertSafeSkillPackageName(skillName: string): void {
+  if (!skillName || skillName.includes('\0') || skillName.includes('/') || skillName.includes('\\')
+    || path.isAbsolute(skillName) || path.win32.isAbsolute(skillName) || /^[A-Za-z]:/u.test(skillName)
+    || skillName === '.' || skillName === '..') {
+    throw new Error('Skill names must be a single safe skill package name.');
+  }
+}
+
+async function assertPathDoesNotResolveIntoPlugin(targetPath: string, sources: SkillScanSource[]): Promise<void> {
+  if (isPluginManagedTarget(targetPath, sources)) {
+    throw new Error('Skill mutations cannot write into a plugin-managed cache path.');
+  }
+  const resolvedTarget = await resolvePathThroughNearestExistingParent(targetPath);
+  const pluginRoots = await Promise.all(sources.filter((source) => source.kind === 'plugin')
+    .map((source) => resolvePathThroughNearestExistingParent(source.skillsDir)));
+  if (pluginRoots.some((root) => isPathContainedBy(root, resolvedTarget))) {
+    throw new Error('Skill mutations cannot write into a plugin-managed cache path.');
+  }
+}
+
+function isContainedDirectSkillPackage(rootPath: string, destinationPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(destinationPath));
+  return relative !== ''
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative)
+    && !relative.includes(path.sep);
+}
+
+async function assertResolvedContainment(rootPath: string, destinationPath: string): Promise<void> {
+  const resolvedRoot = await resolvePathThroughNearestExistingParent(rootPath);
+  const resolvedDestination = await resolvePathThroughNearestExistingParent(destinationPath);
+  if (!isContainedDirectSkillPackage(resolvedRoot, resolvedDestination)) {
+    throw new Error('Universal skill destination escapes its writable Universal root.');
+  }
+}
+
 async function resolvePathThroughNearestExistingParent(targetPath: string): Promise<string> {
   const normalizedTarget = path.normalize(targetPath);
   let candidate = normalizedTarget;
@@ -78,7 +179,7 @@ async function resolvePathThroughNearestExistingParent(targetPath: string): Prom
       return path.join(resolved, ...missingSegments.reverse());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        return normalizedTarget;
+        throw new Error(`Unable to verify filesystem safety for ${normalizedTarget}.`);
       }
     }
 

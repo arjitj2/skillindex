@@ -12,6 +12,19 @@ import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import { resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 describe('makeSkillCanonical', () => {
+  it('rejects traversal-shaped plugin inventory names before any filesystem mutation', async () => {
+    const root = await createRoot('skillindex-canonicalize-malicious-name-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const escapedPath = path.join(root, 'escape');
+
+    await expect(makeSkillCanonical({ skillName: '../../../escape' }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/single safe skill package name/i);
+    await expect(lstat(escapedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('requires explicit source selection for diverged skills, writes the chosen content to sandbox .agents, and repairs duplicates into symlinks', async () => {
     const root = await createRoot('skillindex-canonicalize-');
     const paths = resolveSkillIndexPaths({
@@ -298,7 +311,7 @@ describe('makeSkillCanonical', () => {
     );
   });
 
-  it('creates the default live Universal directory when resolving copies without an installed canonical source', async () => {
+  it('refuses non-plugin resolution when no active canonical Universal source exists', async () => {
     const root = await createRoot('skillindex-canonicalize-live-missing-canonical-');
     const homeDir = path.join(root, 'home');
     const paths = resolveSkillIndexPaths({
@@ -337,7 +350,7 @@ describe('makeSkillCanonical', () => {
       writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n'),
     ]);
 
-    await makeSkillCanonical(
+    await expect(makeSkillCanonical(
       {
         skillName,
         selectedVariantPath: claudePath,
@@ -348,12 +361,9 @@ describe('makeSkillCanonical', () => {
         includeSandboxSources: false,
         includeLiveSources: true,
       },
-    );
-
-    const canonicalPath = path.join(homeDir, '.agents', 'skills', skillName);
-    expect(await readFile(path.join(canonicalPath, 'SKILL.md'), 'utf8')).toContain('Claude version wins.');
-    expect(await readlink(claudePath)).toBe(canonicalPath);
-    expect(await readlink(factoryPath)).toBe(canonicalPath);
+    )).rejects.toThrow(/current writable Universal destination/i);
+    await expect(lstat(path.join(homeDir, '.agents', 'skills', skillName))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(factoryPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
   });
 
   it('creates the canonical package in the live shared directory and rewrites live installs into symlinks', async () => {
@@ -560,7 +570,7 @@ describe('makeSkillCanonical', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
       writeCache: false,
-    })).rejects.toThrow(/must target a writable Universal skill package/i);
+    })).rejects.toThrow(/plugin-managed cache path/i);
 
     expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
     expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);

@@ -1,4 +1,5 @@
-import { cp, mkdir, rm, symlink } from 'node:fs/promises';
+import { cp, mkdir, rename, rm, symlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { SkillInventorySnapshot, SkillLocationRecord } from '@shared/contracts';
@@ -9,7 +10,12 @@ import {
 } from '@shared/skill-index-paths';
 
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
-import { assertSkillSymlinkTargetIsUniversal } from '@main/plugin-managed-sources';
+import {
+  assertSafeSkillPackageName,
+  assertSafeUniversalSkillMutation,
+  assertSafeWritableSkillLinkMutation,
+  isAgentSatisfiedByNativePlugin,
+} from '@main/plugin-managed-sources';
 import { persistSkillUniversalDecisionForSelection } from '@main/skill-universal-decisions';
 
 export interface MakeSkillCanonicalRequest {
@@ -31,6 +37,7 @@ export async function makeSkillCanonical(
   if (!skillName) {
     throw new Error('Choose a skill before using it as Universal.');
   }
+  assertSafeSkillPackageName(skillName);
 
   const paths = options.paths ?? resolveSkillIndexPaths(options);
   await ensureSkillIndexLayout(paths);
@@ -94,7 +101,13 @@ export async function makeSkillCanonical(
   const canonicalSource = resolveCanonicalSkillSource(beforeSnapshot, mutationScope, undefined, paths);
   const universalTargetPath = canonicalPath;
   const persistedUniversalLocation = createCanonicalDecisionLocation(selectedSource, canonicalPath, canonicalSource);
-  await assertSkillSymlinkTargetIsUniversal(universalTargetPath, beforeSnapshot.sources);
+  await assertSafeUniversalSkillMutation({
+    destinationPath: universalTargetPath,
+    universalRoot: canonicalSource.skillsDir,
+    scope: mutationScope,
+    sources: beforeSnapshot.sources,
+    allowDefaultUniversalRoot: selectedSource.provenance?.kind === 'plugin',
+  });
   const shouldLinkMissingAgentInstalls = options.linkMissingAgentInstalls !== false;
   const writableLinkedSkillsDirs = new Set(
     !shouldLinkMissingAgentInstalls
@@ -105,6 +118,10 @@ export async function makeSkillCanonical(
             && agent.scope === mutationScope
             && agent.writable
             && agent.skillsLocation.path
+            && !(selectedSource.provenance?.kind === 'plugin' && isAgentSatisfiedByNativePlugin(
+              agent.family,
+              beforeSnapshot.sources.flatMap((source) => source.kind === 'plugin' && source.plugin ? [source.plugin] : []),
+            ))
             && path.normalize(agent.skillsLocation.path) !== path.normalize(path.dirname(universalTargetPath)))
           .map((agent) => getSkillInstallPath(agent.skillsLocation.path as string, skill.name)),
   );
@@ -112,12 +129,10 @@ export async function makeSkillCanonical(
     canonicalPath,
     selectedSource,
     sources: beforeSnapshot.sources,
+    universalRoot: canonicalSource.skillsDir,
+    scope: mutationScope,
+    allowDefaultUniversalRoot: selectedSource.provenance?.kind === 'plugin',
   });
-  await persistSkillUniversalDecisionForSelection(skill, persistedUniversalLocation, {
-    ...options,
-    paths,
-  });
-
   // Build a deduplicated set of paths to symlink: existing real-file copies (by location)
   // plus all writable agent dirs. The location-based set catches sources that aren't
   // represented as agents, which would otherwise be left as real-file duplicates.
@@ -144,6 +159,10 @@ export async function makeSkillCanonical(
       beforeSnapshot,
     )),
   );
+  await persistSkillUniversalDecisionForSelection(skill, persistedUniversalLocation, {
+    ...options,
+    paths,
+  });
 
   return scanInventory({
     ...options,
@@ -188,23 +207,42 @@ async function materializeCanonicalFile({
   canonicalPath,
   selectedSource,
   sources,
+  universalRoot,
+  scope,
+  allowDefaultUniversalRoot,
 }: {
   canonicalPath: string;
   selectedSource: SkillLocationRecord;
   sources: SkillInventorySnapshot['sources'];
+  universalRoot: string;
+  scope: SkillLocationRecord['sourceScope'];
+  allowDefaultUniversalRoot: boolean;
 }) {
   if (selectedSource.path === canonicalPath && selectedSource.fileType === 'real-file') {
     return;
   }
 
-  await assertSkillSymlinkTargetIsUniversal(canonicalPath, sources);
-  await mkdir(path.dirname(canonicalPath), { recursive: true });
-  await rm(canonicalPath, { recursive: true, force: true });
-  await cp(selectedSource.path, canonicalPath, {
-    recursive: true,
-    dereference: true,
-    force: true,
-  });
+  await assertSafeUniversalSkillMutation({ destinationPath: canonicalPath, universalRoot, scope, sources, allowDefaultUniversalRoot });
+  const parentPath = path.dirname(canonicalPath);
+  const stagePath = path.join(parentPath, `.${path.basename(canonicalPath)}.stage-${randomUUID()}`);
+  const backupPath = path.join(parentPath, `.${path.basename(canonicalPath)}.backup-${randomUUID()}`);
+  await mkdir(parentPath, { recursive: true });
+  try {
+    await cp(selectedSource.path, stagePath, { recursive: true, dereference: true, force: true });
+    await rename(canonicalPath, backupPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    try {
+      await rename(stagePath, canonicalPath);
+    } catch (error) {
+      await rename(backupPath, canonicalPath).catch(() => undefined);
+      throw error;
+    }
+    await rm(backupPath, { recursive: true, force: true });
+  } catch (error) {
+    await rm(stagePath, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function replaceWithCanonicalSymlink(
@@ -212,7 +250,11 @@ async function replaceWithCanonicalSymlink(
   canonicalPath: string,
   snapshot: SkillInventorySnapshot,
 ): Promise<void> {
-  await assertSkillSymlinkTargetIsUniversal(canonicalPath, snapshot.sources);
+  await assertSafeWritableSkillLinkMutation(
+    locationPath,
+    snapshot.sources,
+    (snapshot.agents ?? []).flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []),
+  );
   await mkdir(path.dirname(locationPath), { recursive: true });
   await rm(locationPath, { recursive: true, force: true });
   await symlink(canonicalPath, locationPath);
