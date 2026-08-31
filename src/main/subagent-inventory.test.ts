@@ -527,6 +527,41 @@ describe('subagent inventory', () => {
     expect(universalDefinition).not.toContain('build-ios-apps:openai');
   });
 
+  it('promotes a plugin subagent into Universal and all non-native writable agents in one action', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(codexPath, [
+      'name = "reviewer"',
+      'description = "Local Codex reviewer."',
+      'developer_instructions = "Use local rules."',
+      'color = "blue"',
+      '',
+    ].join('\n'));
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }));
+
+    const repaired = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'alpha:reviewer',
+    }, scanOptions);
+
+    expect(await readFile(universalPath, 'utf8')).toContain('Use alpha rules.');
+    expect(await readFile(codexPath, 'utf8')).toContain('developer_instructions = "Use alpha rules."');
+    expect(await readFile(codexPath, 'utf8')).toContain('color = "blue"');
+    expect((await lstat(codexPath)).isSymbolicLink()).toBe(false);
+    await expect(lstat(claudePath)).rejects.toThrow();
+    expect(await realpath(universalPath)).not.toContain(path.join('.claude', 'plugins', 'cache'));
+    expect(repaired.subagents?.find((subagent) => subagent.name === 'alpha:reviewer')?.status).toBe('healthy');
+  });
+
   it('treats differing plugin subagent versions as managed source candidates instead of a mismatch', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const roots = [
@@ -560,6 +595,34 @@ describe('subagent inventory', () => {
     const cached = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'tools:reviewer');
     expect(cached?.issueReasons).toEqual(['missing-universal']);
     expect(cached?.managedSourceCandidates).toHaveLength(2);
+  });
+
+  it('reconciles cached plugin subagent enablement and removed assets exactly like a fresh scan', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+
+    const initial = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(initial?.managedSourceCandidates?.[0]?.evidence).toBe('cached-unknown');
+
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }));
+    const cachedEnabled = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    const freshEnabled = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(cachedEnabled?.managedSourceCandidates?.[0]?.evidence).toBe('enabled-installation');
+    expect(cachedEnabled?.expectedLocations?.some((location) => location.agentLabel === 'Claude Code')).toBe(false);
+    expect(cachedEnabled?.managedSourceCandidates).toEqual(freshEnabled?.managedSourceCandidates);
+    expect(cachedEnabled?.missingLocations).toEqual(freshEnabled?.missingLocations);
+
+    await rm(pluginPath);
+    const cachedRemoved = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    const freshRemoved = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(cachedRemoved).toBeUndefined();
+    expect(freshRemoved).toBeUndefined();
   });
 
   it('keeps plugin updates advisory when Universal matches one managed source', async () => {

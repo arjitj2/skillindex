@@ -37,6 +37,7 @@ import {
 import {
   getSubagentFileNameForFormat,
   isMarkdownSubagentSymlinkCompatible,
+  isSubagentFormatRenderableFromUniversal,
 } from '@shared/subagent-format-policy';
 import {
   parseTomlMcpServerArray,
@@ -52,6 +53,7 @@ import {
   assertSkillSourceAndDestinationDoNotOverlap,
   assertSafeUniversalSkillMutation,
   assertSafeWritableSkillLinkMutation,
+  isAgentSatisfiedByNativePlugin,
   isPluginManagedTargetThroughRealpath,
   isPluginManagedTarget,
 } from '@main/plugin-managed-sources';
@@ -800,14 +802,22 @@ async function resolveSubagentIssueIfCurrent(
       const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
         allowInvalid: true,
       });
-      const canonicalPath = isInvalidSubagentLocation(selectedLocation)
-        ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths)
-        : (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
-            preferExisting: false,
-          })).path;
+      const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
+        ? null
+        : await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+          preferExisting: false,
+        });
+      const canonicalPath = canonicalPackage
+        ? canonicalPackage.path
+        : await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths);
       const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
       await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
         replaceWithCanonicalSymlink(target.path, canonicalPath)));
+      if (canonicalPackage) {
+        const targets = collectWritableSubagentTargetsForNewCanonical(snapshot, subagent, canonicalPackage);
+        await Promise.all(dedupeSubagentTargets(targets).map((target) =>
+          writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+      }
       return;
     }
     case 'missing-from-agents': {
@@ -1097,6 +1107,46 @@ function collectWritableMissingSubagentTargets(
       format: location.format ?? 'markdown-frontmatter',
       path: location.path ?? '',
     }))
+    .filter((target) => target.path.length > 0);
+}
+
+function collectWritableSubagentTargetsForNewCanonical(
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+  canonicalPackage: CanonicalSubagentPackage,
+): SubagentWriteTarget[] {
+  const enabledPluginSources = (subagent.managedSourceCandidates ?? [])
+    .filter((candidate) => candidate.plugin.enabled === true)
+    .map((candidate) => candidate.plugin);
+
+  return (snapshot.agents ?? [])
+    .filter((agent) => {
+      const format = agent.subagentParserKind ?? 'unknown';
+      return agent.installState === 'installed'
+        && agent.writable
+        && agent.subagentsLocation?.state === 'available'
+        && Boolean(agent.subagentsLocation.path)
+        && isSubagentFormatRenderableFromUniversal(format, 'markdown-frontmatter')
+        && !isAgentSatisfiedByNativePlugin(agent.family, enabledPluginSources);
+    })
+    .map((agent) => {
+      const format = agent.subagentParserKind ?? 'markdown-frontmatter';
+      const directoryPath = agent.subagentsLocation?.path ?? '';
+      const existingLocation = subagent.locations.find((location) =>
+        location.agentId === agent.id && location.canonicalRole !== 'managed-source');
+      return {
+        agentId: agent.id,
+        family: agent.family,
+        format,
+        localExtrasKeys: existingLocation?.localExtrasKeys,
+        path: existingLocation?.path ?? path.join(directoryPath, getSubagentFileNameForFormat({
+          name: subagent.name,
+          format,
+          family: agent.family,
+          canonicalPath: canonicalPackage.path,
+        })),
+      };
+    })
     .filter((target) => target.path.length > 0);
 }
 

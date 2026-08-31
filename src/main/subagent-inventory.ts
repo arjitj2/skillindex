@@ -189,16 +189,29 @@ export function reconcileCachedSubagents(
 ): SubagentRecord[] {
   const expectedOwners = collectExpectedSubagentOwners(agents);
   const pluginByOwnerId = new Map(plugins.map((plugin) => [createPluginSubagentOwnerId(plugin), plugin]));
+  const pluginSubagentPathsByOwnerId = new Map(plugins.map((plugin) => [
+    createPluginSubagentOwnerId(plugin),
+    new Set((plugin.bundledSubagents ?? []).map((subagent) => path.normalize(subagent.path))),
+  ]));
 
   return cachedSubagents
     .map((subagent) => {
       const pluginSourceByLocationPath = new Map<string, PluginSourceRef>();
+      const hadPluginLocation = subagent.locations.some((location) => location.agentId.startsWith('plugin:'));
       const locations = subagent.locations.flatMap((location) => {
         if (!location.agentId.startsWith('plugin:')) {
           return [location];
         }
         const plugin = pluginByOwnerId.get(location.agentId);
-        if (!plugin) {
+        const bundledPaths = pluginSubagentPathsByOwnerId.get(location.agentId);
+        const provenance = location.provenance?.plugin;
+        if (
+          !plugin
+          || !bundledPaths?.has(path.normalize(location.path))
+          || provenance?.host !== plugin.host
+          || provenance.pluginId !== plugin.pluginId
+          || provenance.version !== plugin.version
+        ) {
           return [];
         }
         const source = createPluginSubagentSource(plugin);
@@ -211,6 +224,11 @@ export function reconcileCachedSubagents(
         }];
       });
       if (locations.length === 0) {
+        return null;
+      }
+      if (hadPluginLocation
+        && !locations.some((location) => location.agentId.startsWith('plugin:'))
+        && subagent.name.includes(':')) {
         return null;
       }
 
