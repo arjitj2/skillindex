@@ -1149,6 +1149,42 @@ describe('App shell inventory views', () => {
     connectivityDeferred.resolve(createReconciledInventorySnapshot());
   });
 
+  it('shows and copies the complete trace from a failed manual rescan', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+      },
+    });
+    const trace = [
+      'Error: Failed to parse Skill Index config.',
+      '    at scanInventory (src/main/scan-inventory.ts:42:7)',
+      '    at refreshInventory (src/main/inventory-runtime.ts:318:11)',
+    ].join('\n');
+    const failure = new Error('Failed to parse Skill Index config.');
+    failure.stack = trace;
+    rescanInventoryMock.mockRejectedValueOnce(failure);
+
+    render(<App />);
+
+    await screen.findByLabelText(/Home inventory metrics/i);
+    fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));
+
+    const toast = await screen.findByLabelText(/^Inventory refresh failed$/i);
+    expect(within(toast).getByText('Inventory refresh failed')).toBeInTheDocument();
+    expect(within(toast).getByText('Failed to parse Skill Index config.')).toBeInTheDocument();
+
+    fireEvent.click(within(toast).getByRole('button', { name: /^Show failure trace$/i }));
+
+    expect((await within(toast).findByText(/refreshInventory/)).textContent).toBe(trace);
+    fireEvent.click(within(toast).getByRole('button', { name: /^Copy failure trace$/i }));
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(trace);
+    });
+  });
+
   it('keeps issue actions enabled while MCP connectivity testing runs in the background', async () => {
     const rescanDeferred = createDeferred<SkillInventorySnapshot>();
     const connectivityDeferred = createDeferred<SkillInventorySnapshot>();

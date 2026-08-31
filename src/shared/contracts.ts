@@ -1,3 +1,5 @@
+import { unwrapIpcResponse } from '@shared/ipc-error';
+
 export const APP_NAME = 'Skill Index';
 
 export const IPC_CHANNELS = {
@@ -1016,7 +1018,19 @@ export interface SkillIndexDevApi {
 type InvokeLike = (channel: string, ...args: unknown[]) => Promise<unknown>;
 type SubscribeLike = (channel: string, listener: (...args: unknown[]) => void) => () => void;
 
-export function createSkillIndexDesktopApi(invoke: InvokeLike, subscribe: SubscribeLike): SkillIndexDesktopApi {
+interface CreateSkillIndexApiOptions {
+  unwrapIpcErrors?: boolean;
+}
+
+export function createSkillIndexDesktopApi(
+  invokeRaw: InvokeLike,
+  subscribe: SubscribeLike,
+  options: CreateSkillIndexApiOptions = {},
+): SkillIndexDesktopApi {
+  const invoke: InvokeLike = options.unwrapIpcErrors === false
+    ? invokeRaw
+    : async (channel, ...args) => unwrapIpcResponse(await invokeRaw(channel, ...args));
+
   return {
     async getShellState() {
       return invoke(IPC_CHANNELS.getShellState) as Promise<AppShellState>;
@@ -1132,7 +1146,14 @@ export function createSkillIndexDesktopApi(invoke: InvokeLike, subscribe: Subscr
   };
 }
 
-export function createSkillIndexDevApi(invoke: InvokeLike): SkillIndexDevApi {
+export function createSkillIndexDevApi(
+  invokeRaw: InvokeLike,
+  options: CreateSkillIndexApiOptions = {},
+): SkillIndexDevApi {
+  const invoke: InvokeLike = options.unwrapIpcErrors === false
+    ? invokeRaw
+    : async (channel, ...args) => unwrapIpcResponse(await invokeRaw(channel, ...args));
+
   return {
     async seedRepresentativeFixtures() {
       return invoke(IPC_CHANNELS.seedRepresentativeFixtures) as Promise<SeedRepresentativeFixturesResult>;

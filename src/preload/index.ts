@@ -17,12 +17,16 @@ const desktopApi = createSkillIndexDesktopApi(
       ipcRenderer.off(channel, wrappedListener);
     };
   },
+  { unwrapIpcErrors: false },
 );
 const bootstrapState = readInitialInventoryBootstrapState();
 
 contextBridge.exposeInMainWorld('skillIndex', desktopApi);
 if (isPreloadDevToolsEnabled()) {
-  const devApi = createSkillIndexDevApi((channel, ...args) => ipcRenderer.invoke(channel, ...args));
+  const devApi = createSkillIndexDevApi(
+    (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+    { unwrapIpcErrors: false },
+  );
   contextBridge.exposeInMainWorld('skillIndexDev', devApi);
 }
 contextBridge.exposeInMainWorld('skillIndexBootstrap', bootstrapState);

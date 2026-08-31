@@ -423,6 +423,36 @@ describe('registerIpcHandlers', () => {
     );
   });
 
+  it('returns the complete main-process trace when an IPC handler fails', async () => {
+    electronMocks.ipcHandle.mockClear();
+    const trace = [
+      'Error: Failed to parse Skill Index config.',
+      '    at scanInventory (src/main/scan-inventory.ts:42:7)',
+      '    at refreshInventory (src/main/inventory-runtime.ts:318:11)',
+    ].join('\n');
+    const failure = new Error('Failed to parse Skill Index config.');
+    failure.stack = trace;
+    inventoryRuntime.rescanInventory.mockRejectedValueOnce(failure);
+
+    registerIpcHandlers();
+
+    const rescanHandler = electronMocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === IPC_CHANNELS.rescanInventory,
+    )?.[1] as ((event: never) => Promise<unknown>) | undefined;
+
+    expect(rescanHandler).toBeTypeOf('function');
+
+    if (!rescanHandler) {
+      throw new Error('Expected the rescan IPC handler to be registered.');
+    }
+
+    await expect(rescanHandler({} as never)).resolves.toEqual({
+      __skillIndexIpcError: true,
+      message: 'Failed to parse Skill Index config.',
+      trace,
+    });
+  });
+
   it('registers a standalone MCP connectivity test handler', async () => {
     electronMocks.ipcHandle.mockClear();
     inventoryRuntime.testMcpConnectivity.mockResolvedValue({});
