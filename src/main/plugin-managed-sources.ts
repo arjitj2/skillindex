@@ -9,6 +9,15 @@ import type {
   SkillScanSource,
 } from '@shared/contracts';
 
+const pluginPathSeparators = new Set(['/','\\']);
+const pluginPathTextDelimiters = new Set([
+  ' ', '\t', '\n', '\r',
+  '"', "'", '`',
+  ',', ';', ':', '=',
+  '(', ')', '[', ']', '{', '}',
+  '<', '>', '|', '&',
+]);
+
 export function getOperationalLocations<T extends { canonicalRole?: CanonicalRole }>(locations: T[]): T[] {
   return locations.filter((location) => location.canonicalRole !== 'managed-source');
 }
@@ -144,8 +153,14 @@ function hasPluginRootPathReference(text: string, pluginRoot: string): boolean {
     if (index === -1) return false;
     const previous = text[index - 1];
     const next = text[index + normalizedRoot.length];
-    if ((!previous || !/[A-Za-z0-9_]/u.test(previous))
-      && (!next || !/[A-Za-z0-9_]/u.test(next))) {
+    const previousIsDelimiter = previous === undefined
+      || pluginPathSeparators.has(previous)
+      || pluginPathTextDelimiters.has(previous);
+    const nextIsDelimiter = next === undefined
+      || pluginPathSeparators.has(next)
+      || pluginPathTextDelimiters.has(next)
+      || normalizedRoot === path.parse(normalizedRoot).root;
+    if (previousIsDelimiter && nextIsDelimiter) {
       return true;
     }
     start = index + normalizedRoot.length;

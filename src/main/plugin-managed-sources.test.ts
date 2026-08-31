@@ -190,6 +190,10 @@ describe('plugin managed sources', () => {
       pluginRoot: '/cache/tools/1.0.0',
     })).toEqual([]);
     expect(detectPluginDependencyWarnings({
+      text: '/cache/tools/1.0.0-backup/data /cache/tools/1.0.0.old/data',
+      pluginRoot: '/cache/tools/1.0.0',
+    })).toEqual([]);
+    expect(detectPluginDependencyWarnings({
       text: '"/cache/tools/1.0.0"',
       pluginRoot: '/cache/tools/1.0.0',
     }).map((warning) => warning.kind)).toEqual(['plugin-contained-path']);
