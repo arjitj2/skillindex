@@ -58,7 +58,11 @@ import {
   isPluginManagedTargetThroughRealpath,
   isPluginManagedTarget,
 } from '@main/plugin-managed-sources';
-import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
+import {
+  scanInventory,
+  writeInventorySnapshotCache,
+  type ScanSkillInventoryOptions,
+} from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
   renderPortableSubagentDefinition,
@@ -87,6 +91,8 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   testFailMcpMutationAt?: number;
   /** Test-only failure immediately before an MCP config's atomic commit. */
   testFailMcpCommitAt?: number;
+  /** Test-only failure after MCP writes and rescan but before postcondition commit. */
+  testFailMcpPostcondition?: boolean;
 }
 
 export interface McpMutationTarget {
@@ -148,11 +154,16 @@ interface StagedSubagentMutation {
   symlinkTarget?: string;
 }
 
+interface McpResolutionTransaction {
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+}
+
 export async function resolveInventoryIssue(
   request: ResolveIssueRequest,
   options: ResolveIssueOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const { preparedSnapshot, ...scanOptions } = options;
+  const { preparedSnapshot, testFailMcpPostcondition, ...scanOptions } = options;
   const paths = scanOptions.paths ?? resolveSkillIndexPathsForScanOptions(scanOptions);
   await ensureSkillIndexLayout(paths);
 
@@ -164,29 +175,56 @@ export async function resolveInventoryIssue(
   assertResolutionIssueIsCurrent(snapshot, request);
   assertExplicitPluginPromotionSelection(snapshot, request);
 
-  if (request.entity === 'skill') {
-    await resolveSkillIssueIfCurrent(snapshot, request, {
-      ...scanOptions,
-      paths,
-    });
-  } else if (request.entity === 'mcp') {
-    await resolveMcpIssueIfCurrent(snapshot, request, {
-      ...scanOptions,
-      paths,
-    });
-  } else {
-    await resolveSubagentIssueIfCurrent(snapshot, request, {
-      ...scanOptions,
-      paths,
-    });
-  }
+  let mcpTransaction: McpResolutionTransaction | undefined;
+  try {
+    if (request.entity === 'skill') {
+      await resolveSkillIssueIfCurrent(snapshot, request, {
+        ...scanOptions,
+        paths,
+      });
+    } else if (request.entity === 'mcp') {
+      mcpTransaction = await resolveMcpIssueIfCurrent(snapshot, request, {
+        ...scanOptions,
+        paths,
+      });
+    } else {
+      await resolveSubagentIssueIfCurrent(snapshot, request, {
+        ...scanOptions,
+        paths,
+      });
+    }
 
-  const nextSnapshot = await scanInventory({
-    ...scanOptions,
-    paths,
-  });
-  assertResolutionIssueWasResolved(nextSnapshot, request);
-  return nextSnapshot;
+    const nextSnapshot = await scanInventory({
+      ...scanOptions,
+      paths,
+      ...(mcpTransaction ? { writeCache: false } : {}),
+    });
+    if (mcpTransaction && testFailMcpPostcondition) {
+      throw new Error('Forced MCP postcondition failure.');
+    }
+    assertResolutionIssueWasResolved(nextSnapshot, request);
+    if (mcpTransaction && scanOptions.writeCache !== false) {
+      await writeInventorySnapshotCache(nextSnapshot, {
+        ...scanOptions,
+        paths,
+      });
+    }
+    await mcpTransaction?.commit();
+    return nextSnapshot;
+  } catch (error) {
+    if (!mcpTransaction) {
+      throw error;
+    }
+    try {
+      await mcpTransaction.rollback();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'MCP issue resolution failed and rollback was incomplete.',
+      );
+    }
+    throw error;
+  }
 }
 
 function assertExplicitPluginPromotionSelection(
@@ -672,7 +710,7 @@ async function resolveMcpIssueIfCurrent(
   snapshot: SkillInventorySnapshot,
   request: Extract<ResolveIssueRequest, { entity: 'mcp' }>,
   options: ResolveIssueOptions & { paths: SkillIndexPaths },
-): Promise<void> {
+): Promise<McpResolutionTransaction> {
   const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
   if (!mcp) {
     throw new Error(`MCP "${request.mcpName}" was not found in the current inventory.`);
@@ -684,7 +722,7 @@ async function resolveMcpIssueIfCurrent(
 
   assertMcpResolutionScopeAllowed(mcp);
 
-  await applyMcpResolution(snapshot, mcp, request.issue, request.selectedVariantPath, options);
+  return applyMcpResolution(snapshot, mcp, request.issue, request.selectedVariantPath, options);
 }
 
 export async function updateMcpUniversalFromPluginSource(
@@ -698,7 +736,8 @@ export async function updateMcpUniversalFromPluginSource(
   if (selected.canonicalRole !== 'managed-source') {
     throw new Error('Choose a current readable managed plugin source before updating Universal.');
   }
-  await applyMcpResolution(snapshot, mcp, 'missing-universal', selectedVariantPath, options);
+  const transaction = await applyMcpResolution(snapshot, mcp, 'missing-universal', selectedVariantPath, options);
+  await transaction.commit();
 }
 
 async function applyMcpResolution(
@@ -707,7 +746,7 @@ async function applyMcpResolution(
   issue: Extract<ResolveIssueRequest, { entity: 'mcp' }>['issue'],
   selectedVariantPath: string | undefined,
   options: ResolveIssueOptions & { paths: SkillIndexPaths },
-): Promise<void> {
+): Promise<McpResolutionTransaction> {
 
   const selectedVariant = pickMcpSelection(mcp.locations, selectedVariantPath, {
     preferUniversal: issue === 'missing-from-agents',
@@ -744,7 +783,7 @@ async function applyMcpResolution(
       agentLocalDefinitions,
     );
   }
-  await writeMcpResolutionTransaction(updates, options);
+  return writeMcpResolutionTransaction(updates, options);
 }
 
 function assertMcpPromotionIdentityIsUnambiguous(
@@ -912,20 +951,22 @@ export async function writeMcpDefinitionsTransaction(
   options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'> = {},
 ): Promise<void> {
   const targets = await coalesceMcpMutationTargets(updates);
-  await writeMcpResolutionTransaction(
+  const transaction = await writeMcpResolutionTransaction(
     await Promise.all(targets.map(async (target) => ({
       ...target,
       originalContents: await readMcpConfigContents(target.configPath),
     }))),
     options,
   );
+  await transaction.commit();
 }
 
 async function writeMcpResolutionTransaction(
   updates: Array<McpMutationTarget & { definitions: McpServerDefinitions; originalContents: string | undefined }>,
   options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'>,
-): Promise<void> {
+): Promise<McpResolutionTransaction> {
   const written: Array<McpMutationTarget & { originalContents: string | undefined }> = [];
+  const transaction = createMcpResolutionTransaction(written);
   try {
     for (const [index, target] of updates.entries()) {
       if (options.testFailMcpMutationAt === index) {
@@ -936,24 +977,51 @@ async function writeMcpResolutionTransaction(
       });
       written.push(target);
     }
+    return transaction;
   } catch (error) {
-    const rollbackErrors: unknown[] = [];
-    for (const target of written.reverse()) {
-      try {
-        if (target.originalContents === undefined) {
-          await rm(target.configPath, { force: true });
-        } else {
-          await writeMcpConfigAtomically(target.configPath, target.originalContents);
-        }
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError);
-      }
-    }
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError([error, ...rollbackErrors], 'MCP resolution failed and rollback was incomplete.');
+    try {
+      await transaction.rollback();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'MCP resolution failed and rollback was incomplete.',
+      );
     }
     throw error;
   }
+}
+
+function createMcpResolutionTransaction(
+  written: Array<McpMutationTarget & { originalContents: string | undefined }>,
+): McpResolutionTransaction {
+  let finalized = false;
+  return {
+    async commit(): Promise<void> {
+      if (finalized) return;
+      finalized = true;
+      written.length = 0;
+    },
+    async rollback(): Promise<void> {
+      if (finalized) return;
+      finalized = true;
+      const rollbackErrors: unknown[] = [];
+      for (const target of [...written].reverse()) {
+        try {
+          if (target.originalContents === undefined) {
+            await rm(target.configPath, { force: true });
+          } else {
+            await writeMcpConfigAtomically(target.configPath, target.originalContents);
+          }
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      written.length = 0;
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(rollbackErrors, 'MCP resolution rollback was incomplete.');
+      }
+    },
+  };
 }
 
 function collectAgentLocalDefinitionsForMcp(

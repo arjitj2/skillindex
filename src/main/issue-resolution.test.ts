@@ -3880,6 +3880,58 @@ describe('resolveInventoryIssue', () => {
     await expect(readFile(factoryConfigPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('rolls back plugin MCP promotion when postcondition verification fails', async () => {
+    const paths = await createPaths('skillindex-plugin-mcp-postcondition-rollback-');
+    const pluginRoot = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'postcondition-mcp',
+      '1.0.0',
+    );
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const pluginConfig = `${JSON.stringify({
+      mcpServers: { shared: { command: 'node', args: ['plugin.js'] } },
+    }, null, 2)}\n`;
+    const universalBefore = `${JSON.stringify({
+      servers: { keepUniversal: { command: 'node', args: ['keep-universal.js'] } },
+    }, null, 2)}\n`;
+    const factoryBefore = `${JSON.stringify({
+      mcpServers: { keepFactory: { command: 'node', args: ['keep-factory.js'] } },
+      telemetry: { enabled: false },
+    }, null, 2)}\n`;
+
+    await writeSkillFile(
+      path.join(pluginRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'postcondition-mcp', version: '1.0.0' }),
+    );
+    await writeSkillFile(pluginConfigPath, pluginConfig);
+    await writeSkillFile(universalConfigPath, universalBefore);
+    await writeSkillFile(factoryConfigPath, factoryBefore);
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    await expect(resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: 'postcondition-mcp:shared',
+      selectedVariantPath: pluginConfigPath,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+      testFailMcpPostcondition: true,
+    })).rejects.toThrow('Forced MCP postcondition failure.');
+
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+    expect(await readFile(universalConfigPath, 'utf8')).toBe(universalBefore);
+    expect(await readFile(factoryConfigPath, 'utf8')).toBe(factoryBefore);
+  });
+
   it('resolves the representative parser-shape matrix MCP across sandbox agent config formats', async () => {
     const paths = await createPaths('skillindex-resolve-parser-shape-matrix-');
     const matrixEnv = {
