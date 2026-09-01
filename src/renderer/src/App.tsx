@@ -1469,6 +1469,7 @@ export default function App() {
     };
   }, [blurActiveSearch, focusActiveSearch, navigateActiveInventoryList]);
 
+  const hasInventorySnapshot = inventorySnapshot !== null;
   const navItems = useMemo(
     () => [
       { tab: 'home' as const, label: 'Home', icon: 'home' as const },
@@ -1477,7 +1478,7 @@ export default function App() {
         label: 'Skills',
         icon: 'skills' as const,
         badge: inventorySnapshot?.counts.driftedSkills ?? 0,
-        meta: inventorySnapshot ? inventorySnapshot.counts.totalSkills : undefined,
+        meta: hasInventorySnapshot ? inventorySnapshot.counts.totalSkills : undefined,
         tone: 'attention' as const,
       },
       {
@@ -1485,7 +1486,7 @@ export default function App() {
         label: 'MCPs',
         icon: 'mcps' as const,
         badge: inventorySnapshot?.mcpCounts?.attentionMcps ?? 0,
-        meta: inventorySnapshot ? inventorySnapshot.mcpCounts?.totalMcps ?? 0 : undefined,
+        meta: hasInventorySnapshot ? inventorySnapshot.mcpCounts?.totalMcps ?? 0 : undefined,
         tone: 'attention' as const,
       },
       {
@@ -1493,17 +1494,18 @@ export default function App() {
         label: 'Subagents',
         icon: 'subagents' as const,
         badge: inventorySnapshot?.subagentCounts?.attentionSubagents ?? 0,
-        meta: inventorySnapshot ? inventorySnapshot.subagentCounts?.totalSubagents ?? 0 : undefined,
+        meta: hasInventorySnapshot ? inventorySnapshot.subagentCounts?.totalSubagents ?? 0 : undefined,
         tone: 'attention' as const,
       },
       {
         tab: 'plugins' as const,
         label: 'Plugins',
         icon: 'plugins' as const,
-        meta: inventorySnapshot ? inventorySnapshot.plugins?.length ?? 0 : undefined,
+        meta: hasInventorySnapshot ? inventorySnapshot.plugins?.length ?? 0 : undefined,
       },
     ],
     [
+      hasInventorySnapshot,
       inventorySnapshot?.counts.driftedSkills,
       inventorySnapshot?.counts.totalSkills,
       inventorySnapshot?.mcpCounts?.attentionMcps,

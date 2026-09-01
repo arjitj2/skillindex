@@ -6982,9 +6982,7 @@ body {
   flex: 1 1 auto;
 }
 
-.inventory-skeleton__shape,
-.inventory-skeleton__metric,
-.inventory-skeleton__status-icon {
+.inventory-skeleton__shape {
   background-image: linear-gradient(
     100deg,
     #efefeb 20%,
@@ -7198,8 +7196,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .inventory-skeleton__shape,
-  .inventory-skeleton__metric,
-  .inventory-skeleton__status-icon,
   .nav-secondary-count--loading {
     animation: none;
   }
