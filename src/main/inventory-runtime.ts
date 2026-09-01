@@ -21,6 +21,7 @@ import {
 import { reconcileWatchedSkillInventoryEvent } from '@main/skill-inventory';
 import {
   addMcpServer as addMcpServerToInventory,
+  buildWritableMcpMutationTarget,
   resolveCanonicalSkillPath,
   resolveInventoryIssue,
   resolveSafeMcpConfigWritePath,
@@ -1066,8 +1067,8 @@ function getMcpResolutionAffectedPaths(
     [
       ...(shouldIncludeUniversal ? universalConfigPaths : []),
       ...locations
-        .map((location) => location.configPath)
-        .filter((configPath): configPath is string => typeof configPath === 'string' && configPath.length > 0),
+        .map((location) => buildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath))
+        .flatMap((target) => target ? [target.configPath] : []),
     ],
   );
 }
