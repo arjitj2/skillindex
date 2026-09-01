@@ -536,6 +536,46 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
   });
 
+  it('promotes plugin skills into .agents even when a preferred canonical source is configured', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-preferred-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({
+      env: { SKILL_INDEX_DATA_DIR: root },
+      homeDir,
+    });
+    const preferredSkillsDir = path.join(homeDir, 'repos', 'preferred-skills');
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const incorrectlyPreferredPath = path.join(preferredSkillsDir, 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await mkdir(preferredSkillsDir, { recursive: true });
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: preferredSkillsDir,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+
+    const snapshot = await makeSkillCanonical({
+      skillName: 'tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    await expect(readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).resolves.toBe('# Plugin foo\n');
+    await expect(lstat(incorrectlyPreferredPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(snapshot.skills.find((skill) => skill.name === 'tools:foo')?.detailDiagnostics.universalDecision?.universal)
+      .toMatchObject({ kind: 'path', sourceId: 'live-agents', path: universalPath });
+  });
+
   it.each([
     { kind: 'file' as const, leakedRelativePath: 'assets/leak.txt' },
     { kind: 'directory' as const, leakedRelativePath: 'resources/leak/secret.txt' },
