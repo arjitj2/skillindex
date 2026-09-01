@@ -25,11 +25,11 @@ export interface SkillAccessState {
 }
 
 export function getSkillSections(snapshot: SkillInventorySnapshot): InventorySection<SkillRecord>[] {
-  const driftedRows = snapshot.skills.filter((skill) => skill.driftPresentation === 'active').sort(compareIssueDenseSkillRows);
-  const dismissedRows = snapshot.skills.filter((skill) => skill.driftPresentation === 'dismissed').sort(compareIssueDenseSkillRows);
+  const driftedRows = snapshot.skills.filter((skill) => skill.driftPresentation === 'active').sort(compareAlphabeticallyBySkillName);
+  const dismissedRows = snapshot.skills.filter((skill) => skill.driftPresentation === 'dismissed').sort(compareAlphabeticallyBySkillName);
   const healthyRows = snapshot.skills
     .filter((skill) => skill.driftPresentation === 'none')
-    .sort(compareStableRows);
+    .sort(compareAlphabeticallyBySkillName);
 
   const sections: InventorySection<SkillRecord>[] = [
     {
@@ -75,13 +75,13 @@ export function getMcpSections(snapshot: SkillInventorySnapshot): InventorySecti
   const mcps = snapshot.mcps ?? [];
   const attentionRows = mcps
     .filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'active')
-    .sort(compareIssueDenseMcpRows);
+    .sort(compareAlphabeticallyByMcpName);
   const mutedRows = mcps
     .filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'dismissed')
-    .sort(compareIssueDenseMcpRows);
+    .sort(compareAlphabeticallyByMcpName);
   const healthyRows = mcps
     .filter((mcp) => mcp.status === 'healthy')
-    .sort(compareAlphabeticallyByName);
+    .sort(compareAlphabeticallyByMcpName);
 
   const sections: InventorySection<McpRecord>[] = [
     {
@@ -115,13 +115,13 @@ export function getSubagentSections(snapshot: SkillInventorySnapshot): Inventory
   const subagents = snapshot.subagents ?? [];
   const attentionRows = subagents
     .filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'active')
-    .sort(compareIssueDenseSubagentRows);
+    .sort(compareAlphabeticallyBySubagentName);
   const mutedRows = subagents
     .filter((subagent) => subagent.status === 'needs-attention' && subagent.presentation === 'dismissed')
-    .sort(compareIssueDenseSubagentRows);
+    .sort(compareAlphabeticallyBySubagentName);
   const healthyRows = subagents
     .filter((subagent) => subagent.status === 'healthy')
-    .sort(compareAlphabeticallyByName);
+    .sort(compareAlphabeticallyBySubagentName);
 
   const sections: InventorySection<SubagentRecord>[] = [
     {
@@ -318,19 +318,6 @@ export function getSkillAccessState(
   };
 }
 
-function compareIssueDenseSkillRows(left: SkillRecord, right: SkillRecord): number {
-  const issueCountDifference = getSkillIssueCount(right) - getSkillIssueCount(left);
-  if (issueCountDifference !== 0) {
-    return issueCountDifference;
-  }
-
-  return compareAlphabeticallyBySkillName(left, right);
-}
-
-function compareAlphabeticallyByName<T extends { name: string }>(left: T, right: T): number {
-  return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
-}
-
 function compareAlphabeticallyByMcpName(left: McpRecord, right: McpRecord): number {
   return getMcpDisplayName(left).localeCompare(getMcpDisplayName(right), undefined, { sensitivity: 'base' })
     || left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
@@ -370,35 +357,19 @@ function stripPluginQualifierFromName(
     : displayName;
 }
 
-function compareStableRows(left: SkillRecord, right: SkillRecord): number {
-  return getStableRank(left) - getStableRank(right) || compareAlphabeticallyBySkillName(left, right);
-}
-
 function compareSkillTableRows(left: SkillRecord, right: SkillRecord): number {
   const presentationRank = getSkillTablePresentationRank(left) - getSkillTablePresentationRank(right);
   if (presentationRank !== 0) {
     return presentationRank;
   }
 
-  if (left.driftPresentation !== 'none') {
-    return compareIssueDenseSkillRows(left, right);
-  }
-
-  return compareStableRows(left, right);
+  return compareAlphabeticallyBySkillName(left, right);
 }
 
 function compareMcpTableRows(left: McpRecord, right: McpRecord): number {
   const presentationRank = getMcpTablePresentationRank(left) - getMcpTablePresentationRank(right);
   if (presentationRank !== 0) {
     return presentationRank;
-  }
-
-  if (left.presentation === 'active' && right.presentation === 'active') {
-    return compareIssueDenseMcpRows(left, right);
-  }
-
-  if (left.presentation === 'dismissed' && right.presentation === 'dismissed') {
-    return compareIssueDenseMcpRows(left, right);
   }
 
   return compareAlphabeticallyByMcpName(left, right);
@@ -408,32 +379,6 @@ function compareSubagentTableRows(left: SubagentRecord, right: SubagentRecord): 
   const presentationRank = getSubagentTablePresentationRank(left) - getSubagentTablePresentationRank(right);
   if (presentationRank !== 0) {
     return presentationRank;
-  }
-
-  if (left.presentation === 'active' && right.presentation === 'active') {
-    return compareIssueDenseSubagentRows(left, right);
-  }
-
-  if (left.presentation === 'dismissed' && right.presentation === 'dismissed') {
-    return compareIssueDenseSubagentRows(left, right);
-  }
-
-  return compareAlphabeticallyBySubagentName(left, right);
-}
-
-function compareIssueDenseMcpRows(left: McpRecord, right: McpRecord): number {
-  const issueCountDifference = getMcpIssueCount(right) - getMcpIssueCount(left);
-  if (issueCountDifference !== 0) {
-    return issueCountDifference;
-  }
-
-  return compareAlphabeticallyByMcpName(left, right);
-}
-
-function compareIssueDenseSubagentRows(left: SubagentRecord, right: SubagentRecord): number {
-  const issueCountDifference = right.issueReasons.length - left.issueReasons.length;
-  if (issueCountDifference !== 0) {
-    return issueCountDifference;
   }
 
   return compareAlphabeticallyBySubagentName(left, right);
@@ -484,59 +429,6 @@ export function getSubagentDisplayName(subagent: Pick<SubagentRecord, 'name' | '
 function stripPluginQualifier(value: string): string {
   const qualifierEnd = value.indexOf(':');
   return qualifierEnd > 0 ? value.slice(qualifierEnd + 1) : value;
-}
-
-function getStableRank(skill: SkillRecord): number {
-  if (skill.driftPresentation === 'dismissed') {
-    return 2;
-  }
-
-  if (skill.structuralState === 'single-source-noncanonical') {
-    return 1;
-  }
-
-  if (skill.structuralState === 'missing-symlinks') {
-    return 1;
-  }
-
-  return 0;
-}
-
-function getSkillIssueCount(skill: SkillRecord): number {
-  const reasons = new Set(skill.issueReasons ?? []);
-
-  if ((skill.detailDiagnostics.definitionIssues?.length ?? 0) > 0) {
-    reasons.add('invalid-definition');
-  }
-
-  if ((skill.detailDiagnostics.missingInstallSources?.length ?? 0) > 0) {
-    reasons.add('missing-symlinks');
-  }
-
-  if (reasons.size === 0) {
-    switch (skill.structuralState) {
-      case 'missing-symlinks':
-        reasons.add('missing-symlinks');
-        break;
-      case 'single-source-noncanonical':
-        reasons.add('missing-canonical');
-        break;
-      case 'identical-drift':
-        reasons.add('identical-copies');
-        break;
-      case 'diverged-drift':
-        reasons.add('diverged-copies');
-        break;
-      case 'healthy':
-        break;
-    }
-  }
-
-  return reasons.size;
-}
-
-function getMcpIssueCount(mcp: McpRecord): number {
-  return mcp.issueReasons.length;
 }
 
 function getSourceById(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { McpRecord, SkillInventorySnapshot, SkillRecord, SkillScanSource } from '@shared/contracts';
+import type { McpRecord, SkillInventorySnapshot, SkillRecord, SkillScanSource, SubagentRecord } from '@shared/contracts';
 
 import { representativeInventorySnapshot } from './representative-preview-data';
 import {
@@ -14,10 +14,12 @@ import {
   getSkillDisplayName,
   getSkillSections,
   getSkillTableRows,
+  getSubagentSections,
+  getSubagentTableRows,
 } from './inventory-view-model';
 
 describe('inventory view ordering', () => {
-  it('orders attention skills by issue count, then displayed title', () => {
+  it('orders attention skills alphabetically by displayed title regardless of issue count', () => {
     const base = structuredClone(representativeInventorySnapshot);
     const missingSymlink = base.skills.find((skill) => skill.name === 'missing-symlink-skill');
     const diverged = base.skills.find((skill) => skill.name === 'diverged-drift-skill');
@@ -37,7 +39,7 @@ describe('inventory view ordering', () => {
           ...diverged!,
           name: 'alpha-skill',
           displayName: 'Zulu Skill',
-          issueReasons: ['diverged-copies'],
+          issueReasons: ['diverged-copies', 'invalid-definition'],
         },
       ],
     };
@@ -53,7 +55,35 @@ describe('inventory view ordering', () => {
     ]);
   });
 
-  it('orders MCP table rows by issue count, then title', () => {
+  it('orders healthy skills alphabetically by displayed title regardless of structural state', () => {
+    const base = structuredClone(representativeInventorySnapshot);
+    const healthy = base.skills.find((skill) => skill.name === 'healthy-skill');
+    const singleSource = base.skills.find((skill) => skill.name === 'single-source-skill');
+    expect(healthy).toBeDefined();
+    expect(singleSource).toBeDefined();
+
+    const snapshot: SkillInventorySnapshot = {
+      ...base,
+      skills: [
+        {
+          ...healthy!,
+          name: 'healthy-zulu-skill',
+          displayName: 'Zulu Skill',
+        },
+        {
+          ...singleSource!,
+          name: 'healthy-alpha-skill',
+          displayName: 'Alpha Skill',
+        },
+      ],
+    };
+
+    const healthyRows = getSkillSections(snapshot).find((section) => section.title === 'Healthy')?.rows ?? [];
+    expect(healthyRows.map((skill) => skill.displayName)).toEqual(['Alpha Skill', 'Zulu Skill']);
+    expect(getSkillTableRows(snapshot).map((skill) => skill.displayName)).toEqual(['Alpha Skill', 'Zulu Skill']);
+  });
+
+  it('orders attention MCPs alphabetically by displayed title regardless of issue count', () => {
     const base = structuredClone(representativeInventorySnapshot);
     const broken = base.mcps?.find((mcp) => mcp.name === 'broken-mcp');
     const diagnostic = base.mcps?.find((mcp) => mcp.name === 'diagnostic-rich-mcp');
@@ -83,14 +113,47 @@ describe('inventory view ordering', () => {
       ],
     };
 
-    expect(getMcpTableRows(snapshot).slice(0, 3).map((mcp) => mcp.name)).toEqual([
-      'middle-mcp',
+    const attentionRows = getMcpSections(snapshot).find((section) => section.title === 'Needs attention')?.rows ?? [];
+    expect(attentionRows.map((mcp) => mcp.name)).toEqual([
       'alpha-mcp',
+      'middle-mcp',
       'zulu-mcp',
+    ]);
+    expect(getMcpTableRows(snapshot).map((mcp) => mcp.name)).toEqual(['alpha-mcp', 'middle-mcp', 'zulu-mcp']);
+  });
+
+  it('orders attention subagents alphabetically by displayed title regardless of issue count', () => {
+    const base = structuredClone(representativeInventorySnapshot);
+    const reviewer = base.subagents?.find((subagent) => subagent.name === 'reviewer');
+    expect(reviewer).toBeDefined();
+
+    const snapshot: SkillInventorySnapshot = {
+      ...base,
+      subagents: [
+        {
+          ...reviewer!,
+          name: 'zeta-subagent',
+          displayName: 'Alpha Subagent',
+          issueReasons: ['missing-from-agents'],
+        } satisfies SubagentRecord,
+        {
+          ...reviewer!,
+          name: 'alpha-subagent',
+          displayName: 'Zulu Subagent',
+          issueReasons: ['missing-from-agents', 'definition-mismatch'],
+        } satisfies SubagentRecord,
+      ],
+    };
+
+    const attentionRows = getSubagentSections(snapshot).find((section) => section.title === 'Needs attention')?.rows ?? [];
+    expect(attentionRows.map((subagent) => subagent.displayName)).toEqual(['Alpha Subagent', 'Zulu Subagent']);
+    expect(getSubagentTableRows(snapshot).map((subagent) => subagent.displayName)).toEqual([
+      'Alpha Subagent',
+      'Zulu Subagent',
     ]);
   });
 
-  it('orders dismissed skills from most issues to fewest issues', () => {
+  it('orders dismissed skills alphabetically regardless of issue count', () => {
     const base = structuredClone(representativeInventorySnapshot);
     const dismissed = base.skills.find((skill) => skill.name === 'dismissed-drift-skill');
     expect(dismissed).toBeDefined();
@@ -100,12 +163,12 @@ describe('inventory view ordering', () => {
       skills: [
         {
           ...dismissed!,
-          name: 'dismissed-two-issues-skill',
+          name: 'zulu-dismissed-skill',
           issueReasons: ['identical-copies', 'invalid-definition'],
         },
         {
           ...dismissed!,
-          name: 'dismissed-one-issue-skill',
+          name: 'alpha-dismissed-skill',
           issueReasons: ['identical-copies'],
         },
         ...base.skills.filter((skill) => skill.name !== 'dismissed-drift-skill'),
@@ -114,12 +177,16 @@ describe('inventory view ordering', () => {
 
     const dismissedRows = getSkillSections(snapshot).find((section) => section.title === 'Dismissed issues')?.rows ?? [];
     expect(dismissedRows.slice(0, 2).map((skill) => skill.name)).toEqual([
-      'dismissed-two-issues-skill',
-      'dismissed-one-issue-skill',
+      'alpha-dismissed-skill',
+      'zulu-dismissed-skill',
     ]);
+    expect(getSkillTableRows(snapshot)
+      .filter((skill) => skill.driftPresentation === 'dismissed')
+      .slice(0, 2)
+      .map((skill) => skill.name)).toEqual(['alpha-dismissed-skill', 'zulu-dismissed-skill']);
   });
 
-  it('orders dismissed MCPs from most issues to fewest issues', () => {
+  it('orders dismissed MCPs alphabetically regardless of issue count', () => {
     const base = structuredClone(representativeInventorySnapshot);
     const dismissed = base.mcps?.find((mcp) => mcp.name === 'muted-mcp');
     expect(dismissed).toBeDefined();
@@ -129,12 +196,12 @@ describe('inventory view ordering', () => {
       mcps: [
         {
           ...dismissed!,
-          name: 'dismissed-two-issues-mcp',
+          name: 'zulu-dismissed-mcp',
           issueReasons: ['definition-mismatch', 'invalid-definition'],
         } satisfies McpRecord,
         {
           ...dismissed!,
-          name: 'dismissed-one-issue-mcp',
+          name: 'alpha-dismissed-mcp',
           issueReasons: ['definition-mismatch'],
         } satisfies McpRecord,
         ...(base.mcps ?? []).filter((mcp) => mcp.name !== 'muted-mcp'),
@@ -143,9 +210,48 @@ describe('inventory view ordering', () => {
 
     const dismissedRows = getMcpSections(snapshot).find((section) => section.title === 'Dismissed issues')?.rows ?? [];
     expect(dismissedRows.slice(0, 2).map((mcp) => mcp.name)).toEqual([
-      'dismissed-two-issues-mcp',
-      'dismissed-one-issue-mcp',
+      'alpha-dismissed-mcp',
+      'zulu-dismissed-mcp',
     ]);
+    expect(getMcpTableRows(snapshot)
+      .filter((mcp) => mcp.presentation === 'dismissed')
+      .slice(0, 2)
+      .map((mcp) => mcp.name)).toEqual(['alpha-dismissed-mcp', 'zulu-dismissed-mcp']);
+  });
+
+  it('orders dismissed subagents alphabetically regardless of issue count', () => {
+    const base = structuredClone(representativeInventorySnapshot);
+    const reviewer = base.subagents?.find((subagent) => subagent.name === 'reviewer');
+    expect(reviewer).toBeDefined();
+
+    const snapshot: SkillInventorySnapshot = {
+      ...base,
+      subagents: [
+        {
+          ...reviewer!,
+          name: 'zulu-dismissed-subagent',
+          displayName: 'Zulu Dismissed Subagent',
+          presentation: 'dismissed',
+          issueReasons: ['missing-from-agents', 'definition-mismatch'],
+        } satisfies SubagentRecord,
+        {
+          ...reviewer!,
+          name: 'alpha-dismissed-subagent',
+          displayName: 'Alpha Dismissed Subagent',
+          presentation: 'dismissed',
+          issueReasons: ['missing-from-agents'],
+        } satisfies SubagentRecord,
+      ],
+    };
+
+    const dismissedRows = getSubagentSections(snapshot).find((section) => section.title === 'Dismissed issues')?.rows ?? [];
+    expect(dismissedRows.map((subagent) => subagent.displayName)).toEqual([
+      'Alpha Dismissed Subagent',
+      'Zulu Dismissed Subagent',
+    ]);
+    expect(getSubagentTableRows(snapshot)
+      .filter((subagent) => subagent.presentation === 'dismissed')
+      .map((subagent) => subagent.displayName)).toEqual(['Alpha Dismissed Subagent', 'Zulu Dismissed Subagent']);
   });
 
   it('uses universal wording for plugin-managed skill access guidance', () => {
