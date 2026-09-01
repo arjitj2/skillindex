@@ -97,21 +97,9 @@ export interface InspectorProblemSectionModel {
 export type InspectorLocationTone = 'healthy' | 'warning' | 'danger' | 'muted';
 
 export interface InspectorLocationAction {
-  kind: 'choose-skill-universal-version' | 'update-universal-from-plugin';
+  kind: 'choose-skill-universal-version';
   label: string;
   path: string;
-}
-
-export interface InspectorPluginUpdateCandidate {
-  path: string;
-  evidenceLabel: string;
-  warnings: Array<{ label: 'Detected dependency'; detail: string }>;
-  action: InspectorLocationAction;
-}
-
-export interface InspectorPluginUpdateAdvisory {
-  title: 'Plugin Update Available';
-  candidates: InspectorPluginUpdateCandidate[];
 }
 
 export interface InspectorLocationRow {
@@ -276,7 +264,6 @@ export interface InspectorModel {
   selectedVariantPath: string | null;
   provenanceRows: InspectorProvenanceRow[];
   provenanceSummary: InspectorProvenanceSummaryRow[];
-  pluginUpdateAdvisory?: InspectorPluginUpdateAdvisory;
 }
 
 interface SkillVariantGroup {
@@ -304,39 +291,12 @@ type InternalSkillDiffFileRecord = SkillDiffFileRecord & {
   __displayKind?: InspectorChangedFileModel['displayKind'];
 };
 
-function buildPluginUpdateAdvisory(
-  candidates: PluginManagedSourceCandidate[] | undefined,
-): InspectorPluginUpdateAdvisory | undefined {
-  const updateCandidates = (candidates ?? []).filter((candidate) =>
-    candidate.relationship === 'differs-from-universal');
-  if (updateCandidates.length === 0) {
-    return undefined;
-  }
-
-  return {
-    title: 'Plugin Update Available',
-    candidates: updateCandidates.map((candidate) => ({
-      path: candidate.path,
-      evidenceLabel: formatPluginCandidateEvidence(candidate),
-      warnings: candidate.dependencyWarnings.map((warning) => ({
-        label: 'Detected dependency' as const,
-        detail: warning.detail,
-      })),
-      action: {
-        kind: 'update-universal-from-plugin',
-        label: 'Update Universal from this version',
-        path: candidate.path,
-      },
-    })),
-  };
-}
-
 function formatPluginCandidateEvidence(candidate: PluginManagedSourceCandidate): string {
   switch (candidate.evidence) {
     case 'enabled-installation':
       return `Currently used in ${candidate.plugin.host === 'codex' ? 'Codex' : 'Claude'}`;
     case 'newer-comparable-version':
-      return 'Newer comparable plugin version';
+      return 'Usage unknown';
     case 'cached-unknown':
       return 'Usage unknown';
   }
@@ -421,7 +381,6 @@ export function buildSkillInspectorModel(
     selectedVariantPath,
     provenanceRows,
     provenanceSummary,
-    pluginUpdateAdvisory: buildPluginUpdateAdvisory(skill.managedSourceCandidates),
   };
 }
 
@@ -475,7 +434,6 @@ export function buildMcpInspectorModel(
     selectedVariantPath,
     provenanceRows,
     provenanceSummary,
-    pluginUpdateAdvisory: buildPluginUpdateAdvisory(mcp.managedSourceCandidates),
   };
 }
 
@@ -526,7 +484,6 @@ export function buildSubagentInspectorModel(
     selectedVariantPath,
     provenanceRows,
     provenanceSummary,
-    pluginUpdateAdvisory: buildPluginUpdateAdvisory(subagent.managedSourceCandidates),
   };
 }
 
@@ -1354,7 +1311,7 @@ function getSkillProblemSummary(
 ): string {
   switch (key) {
     case 'diverged-copies': {
-      const groupedCount = groupSkillVariants(skill.detailDiagnostics.duplicateCandidates).length;
+      const groupedCount = groupSkillVariants(getSkillVariantCandidates(skill, key, sourceIndex)).length;
       const count = groupedCount || skill.locations.filter((location) => location.fileType === 'real-file').length;
       return `${count} version${count === 1 ? '' : 's'}`;
     }
@@ -2773,7 +2730,12 @@ function groupSkillVariants(candidates: SkillDuplicateCandidate[]): SkillVariant
 
   return [...groups.entries()]
     .map(([id, locations]) => {
-      const sortedLocations = locations.slice().sort(compareNewestCandidate);
+      const sortedLocations = locations.slice().sort((left, right) => {
+        if (left.canonical !== right.canonical) {
+          return left.canonical ? -1 : 1;
+        }
+        return compareNewestCandidate(left, right);
+      });
       const representative = sortedLocations[0];
       if (!representative) {
         throw new Error(`Expected a representative location for skill variant group ${id}.`);
@@ -2804,6 +2766,21 @@ function getSkillVariantCandidates(
   problemKey: SkillIssueReason,
   sourceIndex: Map<string, SkillScanSource>,
 ): SkillDuplicateCandidate[] {
+  if (problemKey === 'diverged-copies') {
+    const candidatesByPath = new Map(
+      skill.detailDiagnostics.duplicateCandidates.map((candidate) => [candidate.path, candidate]),
+    );
+    for (const location of skill.locations.filter((candidate) => candidate.fileType === 'real-file')) {
+      if (!candidatesByPath.has(location.path)) {
+        candidatesByPath.set(location.path, {
+          ...location,
+          installSource: buildInstallSourceFromLocation(location, sourceIndex),
+        });
+      }
+    }
+    return [...candidatesByPath.values()];
+  }
+
   if (skill.detailDiagnostics.duplicateCandidates.length > 0 || problemKey !== 'missing-canonical') {
     return skill.detailDiagnostics.duplicateCandidates;
   }

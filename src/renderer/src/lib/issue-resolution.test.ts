@@ -8,7 +8,6 @@ import {
   getAutoResolvableSkillRequests,
   getAutoResolvableSubagentRequests,
   getMcpResolveActionState,
-  getPluginUpdateActionRequest,
   getSkillResolveActionState,
   getSubagentResolveActionState,
 } from './issue-resolution';
@@ -33,43 +32,6 @@ function findRepresentativeSubagent(name: string): SubagentRecord {
 }
 
 describe('issue resolution request builder', () => {
-  it('builds an explicit plugin update request without making the advisory auto-resolvable', () => {
-    const skill: SkillRecord = {
-      ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'healthy-skill')!,
-      managedSourceCandidates: [{
-        path: '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill',
-        plugin: {
-          host: 'codex', pluginId: 'tools@official', pluginName: 'tools', version: '1.1.0',
-          rootPath: '/Users/tester/.codex/plugins/cache/tools/1.1.0', enabled: true,
-        },
-        evidence: 'enabled-installation',
-        relationship: 'differs-from-universal',
-        dependencyWarnings: [],
-      }],
-    };
-    const inspector = buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex);
-    const pluginPath = skill.managedSourceCandidates?.[0]?.path ?? '';
-
-    expect(getAutoResolvableSkillRequests({ ...representativeInventorySnapshot, skills: [skill] }, sourceIndex)).toEqual([]);
-    expect(getPluginUpdateActionRequest({
-      entity: 'skill',
-      capabilityName: skill.name,
-      inspectorModel: inspector,
-      selectedVariantPath: pluginPath,
-    })).toEqual({
-      entity: 'skill',
-      action: 'update-universal-from-plugin',
-      capabilityName: skill.name,
-      selectedVariantPath: pluginPath,
-    });
-    expect(getPluginUpdateActionRequest({
-      entity: 'mcp', capabilityName: 'tools:server', inspectorModel: inspector, selectedVariantPath: pluginPath,
-    })).toMatchObject({ entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'tools:server' });
-    expect(getPluginUpdateActionRequest({
-      entity: 'subagent', capabilityName: 'tools:reviewer', inspectorModel: inspector, selectedVariantPath: pluginPath,
-    })).toMatchObject({ entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer' });
-  });
-
   it('keeps plugin-owned missing symlink repairs out of Home auto-resolve batches', () => {
     const skill: SkillRecord = {
       name: 'tools:foo',
@@ -888,7 +850,7 @@ describe('issue resolution request builder', () => {
     });
   });
 
-  it('allows repairing Universal links to a read-only plugin skill', () => {
+  it('requires exporting a read-only plugin skill before repairing its links', () => {
     const skill: SkillRecord = {
       ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'plugin-readonly-skill')!,
       name: 'tools:foo',
@@ -962,17 +924,12 @@ describe('issue resolution request builder', () => {
     }, agentIndex);
 
     expect(getSkillResolveActionState(skill, model, pluginSourceIndex)).toEqual({
-      disabledReason: null,
-      request: {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'tools:foo',
-        selectedVariantPath: '/Users/tester/.claude/plugins/cache/official/tools/1.0.0/skills/foo',
-      },
+      disabledReason: 'Choose a Universal version first. Symlink repairs need a Universal target.',
+      request: null,
     });
   });
 
-  it('selects a deterministic plugin location when the same plugin skill exists in multiple hosts', () => {
+  it('does not use a deterministic plugin location as a Universal symlink repair target', () => {
     const skill: SkillRecord = {
       ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'plugin-readonly-skill')!,
       name: 'example-workflow-kit:idea-shaping',
@@ -1049,13 +1006,8 @@ describe('issue resolution request builder', () => {
     }, agentIndex);
 
     expect(getSkillResolveActionState(skill, model, sourceIndex)).toEqual({
-      disabledReason: null,
-      request: {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'example-workflow-kit:idea-shaping',
-        selectedVariantPath: '/Users/tester/.claude/plugins/cache/sandbox-gallery/example-workflow-kit/5.1.0/skills/idea-shaping',
-      },
+      disabledReason: 'Choose a Universal version first. Symlink repairs need a Universal target.',
+      request: null,
     });
   });
 

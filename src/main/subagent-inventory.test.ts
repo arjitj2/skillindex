@@ -844,7 +844,7 @@ describe('subagent inventory', () => {
     ]));
     expect(reviewer?.managedSourceCandidates).toHaveLength(2);
     expect(reviewer?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')).toMatchObject({
-      evidence: 'newer-comparable-version',
+      evidence: 'cached-unknown',
       relationship: 'universal-missing',
     });
 
@@ -937,7 +937,7 @@ describe('subagent inventory', () => {
     expect(cached).toEqual(fresh);
   });
 
-  it('keeps plugin updates advisory when Universal matches one managed source', async () => {
+  it('classifies a plugin source that differs from Universal as a definition mismatch', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const universalPath = path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md');
     const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
@@ -956,7 +956,7 @@ describe('subagent inventory', () => {
 
     const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
 
-    expect(reviewer).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(reviewer).toMatchObject({ status: 'needs-attention', issueReasons: ['definition-mismatch'] });
     expect(reviewer?.managedSourceCandidates?.map((candidate) => ({
       version: candidate.plugin.version,
       relationship: candidate.relationship,
@@ -1045,7 +1045,7 @@ describe('subagent inventory', () => {
     expect(reviewer?.locations[0]?.invalidDetails).toContain('Missing required field: description');
   });
 
-  it('does not classify legacy plugin source differences as structural mismatch', async () => {
+  it('classifies legacy plugin source differences by current definition content', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const universalPath = path.join(homeDir, '.agents', 'agents', 'github-tools-reviewer.md');
     const pluginPath = path.join(
@@ -1077,7 +1077,7 @@ describe('subagent inventory', () => {
 
     const inventory = await scanInventory(scanOptions);
     expect(inventory.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer')?.issueReasons)
-      .not.toContain('definition-mismatch');
+      .toContain('definition-mismatch');
   });
 
   it('auto-selects the Universal definition for ambiguous subagent mismatch repair', async () => {
@@ -1302,8 +1302,8 @@ describe('subagent inventory', () => {
       expect(await readFile(candidatePath, 'utf8')).toBe(selectedBefore);
       expect(await readFile(otherCandidatePath, 'utf8')).toBe(otherBefore);
       expect(resolved.subagents?.find((subagent) => subagent.name === subagentName)).toMatchObject({
-        status: 'healthy',
-        issueReasons: [],
+        status: 'needs-attention',
+        issueReasons: ['definition-mismatch'],
       });
     }
   });

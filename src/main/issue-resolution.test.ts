@@ -1506,6 +1506,32 @@ describe('resolveInventoryIssue', () => {
     expect(repaired.skills.find((skill) => skill.name === skillName)?.issueReasons).not.toContain('broken-symlink');
   });
 
+  it('blocks non-plugin symlink repair until its missing Universal is resolved', async () => {
+    const paths = await createPaths('skillindex-resolve-nonplugin-link-order-');
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const skillName = 'nonplugin-missing-universal-broken-link';
+    const sourcePath = path.join(paths.sandboxRoot, '.claude', 'skills', skillName);
+    const brokenPath = path.join(paths.sandboxRoot, '.cursor', 'skills', skillName);
+    const missingTarget = path.join(paths.sandboxRoot, '.agents', 'skills', skillName);
+    await writeSkillFile(path.join(sourcePath, 'SKILL.md'), '# Non-plugin source\n');
+    await mkdir(path.dirname(brokenPath), { recursive: true });
+    await symlink(missingTarget, brokenPath);
+
+    const before = await scanInventory(scanOptions);
+    expect(before.skills.find((skill) => skill.name === skillName)?.issueReasons)
+      .toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
+
+    await expect(resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'broken-symlink',
+      skillName,
+      selectedVariantPath: sourcePath,
+    }, scanOptions)).rejects.toThrow('Resolve Missing Universal before repairing symlinks');
+
+    await expect(realpath(brokenPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(missingTarget)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('exports the seeded plugin-bound MCP despite dependency warnings without changing the plugin cache', async () => {
     const paths = await createPaths('skillindex-resolve-bound-plugin-mcp-');
     const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
@@ -1582,7 +1608,7 @@ describe('resolveInventoryIssue', () => {
 
     await expect(resolveInventoryIssue({
       entity: 'skill',
-      issue: 'broken-symlink',
+      issue: 'missing-canonical',
       skillName: 'tools:foo',
       selectedVariantPath: pluginPath,
     }, {
@@ -1599,7 +1625,7 @@ describe('resolveInventoryIssue', () => {
     expect(await readlink(brokenPath)).toBe(beforeLink);
   });
 
-  it('preserves unrelated dismissed plugin drift while resolving a broken plugin symlink', async () => {
+  it('preserves unrelated dismissed plugin drift while creating Universal before repairing a plugin symlink', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-preserve-dismissal-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -1668,7 +1694,7 @@ describe('resolveInventoryIssue', () => {
     const resolvedSnapshot = await resolveInventoryIssue(
       {
         entity: 'skill',
-        issue: 'broken-symlink',
+        issue: 'missing-canonical',
         skillName: buildSkillName,
         selectedVariantPath: buildSkillPath,
       },
@@ -1883,9 +1909,9 @@ describe('resolveInventoryIssue', () => {
     expect(await readlink(claudePath)).toBe(agentsPath);
     expect(await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
       detailDiagnostics: {
         acceptedAlternates: [
           expect.objectContaining({
@@ -1953,7 +1979,7 @@ describe('resolveInventoryIssue', () => {
     });
     const afterDivergedSkill = afterDivergedResolution.skills.find((skill) => skill.name === 'tools:foo');
     expect(afterDivergedSkill).toMatchObject({
-      issueReasons: [],
+      issueReasons: ['diverged-copies'],
       detailDiagnostics: {
         acceptedAlternates: [
           expect.objectContaining({
@@ -1970,9 +1996,9 @@ describe('resolveInventoryIssue', () => {
 
     expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
       detailDiagnostics: {
         acceptedAlternates: [
           expect.objectContaining({
@@ -2018,10 +2044,10 @@ describe('resolveInventoryIssue', () => {
 
     const resolvedSkill = resolvedSnapshot.skills.find((skill) => skill.name === skillName);
     expect(resolvedSkill).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
-      issueReasons: [],
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['diverged-copies'],
     });
     await expect(lstat(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readlink(factoryPath)).toBe(agentsPath);
@@ -2034,7 +2060,7 @@ describe('resolveInventoryIssue', () => {
       ]);
   });
 
-  it('updates Universal from the exact selected plugin advisory candidate without changing the cache', async () => {
+  it('uses the selected plugin divergence as Universal without changing the cache', async () => {
     const paths = await createPaths('skillindex-switch-handoff-alternate-');
     await seedRepresentativeFixtures({ paths });
     const skillName = 'example-workflow-kit:handoff-notes-with-static';
@@ -2063,11 +2089,11 @@ describe('resolveInventoryIssue', () => {
       relationship: 'differs-from-universal',
     }));
 
-    const switchedSnapshot = await applyCapabilityAction(
+    const switchedSnapshot = await resolveInventoryIssue(
       {
         entity: 'skill',
-        action: 'update-universal-from-plugin',
-        capabilityName: skillName,
+        issue: 'diverged-copies',
+        skillName,
         selectedVariantPath: claudePluginPath as string,
       },
       {
@@ -2089,7 +2115,7 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(path.join(claudePluginPath as string, 'SKILL.md'), 'utf8')).toBe(pluginBefore);
     expect(switchedSkill?.managedSourceCandidates?.find((candidate) => candidate.path === claudePluginPath)?.relationship)
       .toBe('matches-universal');
-    expect(switchedSkill?.issueReasons).not.toContain('diverged-copies');
+    expect(switchedSkill?.issueReasons).toContain('diverged-copies');
     expect(switchedSkill?.issueReasons).not.toContain('identical-copies');
     expect(switchedSkill?.locations.find((location) => location.path === agentsPath)).toMatchObject({
       fileType: 'real-file',
@@ -2395,9 +2421,9 @@ describe('resolveInventoryIssue', () => {
     expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(await readFile(path.join(claudeSkillPath, 'SKILL.md'), 'utf8')).toBe(beforeClaude);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      driftPresentation: 'none',
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
       detailDiagnostics: {
         acceptedAlternates: [
           expect.objectContaining({
@@ -2411,7 +2437,7 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
-  it('repairs a deleted plugin-cache symlink by copying a live candidate into Universal without mutating that cache', async () => {
+  it('resolves Missing Universal before repairing a deleted plugin-cache symlink without mutating that cache', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-cache-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -2473,7 +2499,7 @@ describe('resolveInventoryIssue', () => {
     const resolvedSnapshot = await resolveInventoryIssue(
       {
         entity: 'skill',
-        issue: 'broken-symlink',
+        issue: 'missing-canonical',
         skillName: 'tools:foo',
         selectedVariantPath: newSkillPath,
       },
@@ -2517,7 +2543,7 @@ describe('resolveInventoryIssue', () => {
 
     await expect(resolveInventoryIssue({
       entity: 'skill',
-      issue: 'broken-symlink',
+      issue: 'missing-canonical',
       skillName: 'tools:foo',
     }, {
       paths,
@@ -2585,7 +2611,7 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(skillText);
   });
 
-  it('rejects a user-confirmed Universal path for another skill before changing its victim package', async () => {
+  it('blocks symlink repair when the configured Universal points to another skill', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-cross-skill-destination-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
@@ -2637,7 +2663,7 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: false,
       includeLiveSources: true,
       writeCache: false,
-    })).rejects.toThrow(/current writable Universal destination/i);
+    })).rejects.toThrow(/Resolve Missing Universal before repairing symlinks/i);
 
     expect(await readFile(path.join(victimPath, 'SKILL.md'), 'utf8')).toBe(beforeVictim);
     expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
@@ -2668,7 +2694,7 @@ describe('resolveInventoryIssue', () => {
     const beforeCache = await readFile(paths.cacheFile, 'utf8');
 
     await expect(resolveInventoryIssue({
-      entity: 'skill', issue: 'wrong-symlink-target', skillName: 'tools:foo', selectedVariantPath: pluginPath,
+      entity: 'skill', issue: 'missing-canonical', skillName: 'tools:foo', selectedVariantPath: pluginPath,
     }, {
       paths, homeDir, includeSandboxSources: false, includeLiveSources: true, writeCache: false,
       testFailSkillDecisionPersist: true,
@@ -3690,8 +3716,8 @@ describe('resolveInventoryIssue', () => {
     await expect(lstat(path.join(paths.sandboxRoot, '.agents', 'servers', 'promoted.js'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(lstat(path.join(paths.sandboxRoot, '.codex', 'servers', 'promoted.js'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(resolvedSnapshot.mcps?.find((mcp) => mcp.name === 'plugin-mcp:promoted')).toMatchObject({
-      status: 'healthy',
-      issueReasons: [],
+      status: 'needs-attention',
+      issueReasons: ['definition-mismatch'],
     });
 
     const updatedSnapshot = await applyCapabilityAction({

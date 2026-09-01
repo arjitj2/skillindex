@@ -183,54 +183,6 @@ export function DetailInspectorPanel({
         </section>
       ) : null}
 
-      {model.pluginUpdateAdvisory ? (
-        <section
-          aria-label={model.pluginUpdateAdvisory.title}
-          className="detail-inspector-panel__detail-block detail-inspector-panel__detail-block--plugin-update"
-        >
-          <div className="detail-inspector-panel__section-header">
-            <span className="detail-inspector-panel__section-label">{model.pluginUpdateAdvisory.title}</span>
-            <span className="detail-inspector-panel__section-rule" aria-hidden="true" />
-          </div>
-          <div className="detail-inspector-panel__plugin-update-list" role="list">
-            {model.pluginUpdateAdvisory.candidates.map((candidate) => (
-              <div key={candidate.path} role="listitem">
-                <div
-                  aria-label={`Plugin update candidate: ${candidate.evidenceLabel}`}
-                  className="detail-inspector-panel__plugin-update-card"
-                  role="group"
-                >
-                  <span className="detail-inspector-panel__plugin-update-copy">
-                    <span className="detail-inspector-panel__plugin-update-path" title={formatDisplayPath(candidate.path)}>
-                      {formatPath(candidate.path, 72)}
-                    </span>
-                    <em className="detail-inspector-panel__plugin-update-evidence">
-                      {candidate.evidenceLabel}
-                    </em>
-                    {candidate.warnings.map((warning, index) => (
-                      <span className="detail-inspector-panel__plugin-update-warning" key={`${warning.label}-${index}`}>
-                        {warning.label}: {warning.detail}
-                      </span>
-                    ))}
-                  </span>
-                  <button
-                    aria-label={isLocationActionPending
-                      ? `Applying plugin update: ${candidate.evidenceLabel}, ${formatDisplayPath(candidate.path)}`
-                      : `${candidate.action.label}: ${candidate.evidenceLabel}, ${formatDisplayPath(candidate.path)}`}
-                    className="detail-inspector-panel__footer-action detail-inspector-panel__footer-action--secondary detail-inspector-panel__plugin-update-action"
-                    disabled={isLocationActionPending}
-                    type="button"
-                    onClick={() => onLocationAction?.(candidate.action)}
-                  >
-                    {isLocationActionPending ? 'Applying...' : 'Update Universal'}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
       <section className="detail-inspector-panel__tab-block" aria-label={`${ariaLabel} views`}>
         <div className="detail-inspector-panel__tab-list" role="tablist" aria-label={`${ariaLabel} views`}>
           <button

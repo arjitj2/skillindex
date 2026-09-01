@@ -20,7 +20,7 @@ import {
   type SkillStatusFilter,
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
-import { getPluginUpdateActionRequest, getSkillResolveActionState } from '../lib/issue-resolution';
+import { getSkillResolveActionState } from '../lib/issue-resolution';
 import type { InspectorLocationAction, InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
@@ -387,22 +387,12 @@ function SkillDetailPanel({
       isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
       onLocationAction={(action: InspectorLocationAction) => {
-        if (action.kind === 'choose-skill-universal-version') {
-          void onApplyCapabilityAction({
-            entity: 'skill',
-            action: 'choose-universal-version',
-            skillName: selectedSkill.name,
-            selectedVariantPath: action.path,
-          });
-        } else if (action.kind === 'update-universal-from-plugin') {
-          const request = getPluginUpdateActionRequest({
-            entity: 'skill',
-            capabilityName: selectedSkill.name,
-            inspectorModel,
-            selectedVariantPath: action.path,
-          });
-          if (request) void onApplyCapabilityAction(request);
-        }
+        void onApplyCapabilityAction({
+          entity: 'skill',
+          action: 'choose-universal-version',
+          skillName: selectedSkill.name,
+          selectedVariantPath: action.path,
+        });
       }}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => {

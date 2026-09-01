@@ -242,7 +242,7 @@ describe('plugin managed sources', () => {
       .toContain('Injected skill link restore failure at 1');
   });
 
-  it('annotates only the greatest comparable version when no candidate is enabled', () => {
+  it('does not infer recency from comparable cached versions when none is enabled', () => {
     const candidates = [
       { version: '1.0.0', evidence: 'cached-unknown' as const },
       { version: '1.10.0', evidence: 'cached-unknown' as const },
@@ -251,7 +251,7 @@ describe('plugin managed sources', () => {
 
     expect(annotateComparableVersionEvidence(candidates)).toEqual([
       candidates[0],
-      { version: '1.10.0', evidence: 'newer-comparable-version' },
+      { version: '1.10.0', evidence: 'cached-unknown' },
       candidates[2],
     ]);
     expect(candidates[1].evidence).toBe('cached-unknown');
@@ -310,7 +310,7 @@ describe('plugin managed sources', () => {
     expect(annotateComparableVersionEvidence(singleton)).toEqual(singleton);
     expect(annotateComparableVersionEvidence(leadingZero)).toEqual(leadingZero);
     expect(annotateComparableVersionEvidence(huge)).toEqual([
-      { ...huge[0], evidence: 'newer-comparable-version' },
+      huge[0],
       huge[1],
     ]);
     expect(annotateComparableVersionEvidence(tied)).toEqual(tied);

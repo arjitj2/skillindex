@@ -2657,26 +2657,32 @@ describe('App shell inventory views', () => {
     if (!pluginSkill) {
       throw new Error('Missing representative plugin skill fixture: plugin-readonly-skill');
     }
-    pluginSkill.structuralState = 'missing-symlinks';
+    pluginSkill.structuralState = 'single-source-noncanonical';
     pluginSkill.isDrifted = true;
     pluginSkill.driftPresentation = 'active';
-    pluginSkill.issueReasons = ['missing-symlinks'];
+    pluginSkill.issueReasons = ['missing-canonical'];
     pluginSkill.locations = pluginSkill.locations.map((location) => ({
       ...location,
-      canonical: true,
+      canonical: false,
+      canonicalRole: 'managed-source',
+    }));
+    pluginSkill.managedSourceCandidates = pluginSkill.locations.map((location) => ({
+      path: location.path,
+      plugin: {
+        host: 'claude',
+        pluginId: 'sandbox-plugin-pack',
+        pluginName: 'sandbox-plugin-pack',
+        version: '0.1.0',
+        rootPath: '~/.skillindex/sandbox/plugins',
+        enabled: true,
+      },
+      evidence: 'enabled-installation',
+      relationship: 'universal-missing',
+      dependencyWarnings: [],
     }));
     pluginSkill.detailDiagnostics = {
       ...pluginSkill.detailDiagnostics,
-      missingInstallSources: [
-        {
-          sourceId: 'sandbox-agents',
-          label: 'Sandbox .agents',
-          kind: 'canonical',
-          scope: 'sandbox',
-          writable: true,
-          canonical: false,
-        },
-      ],
+      missingInstallSources: [],
     };
     readCachedInventoryMock.mockResolvedValue(snapshot);
     scanInventoryMock.mockResolvedValue(snapshot);
@@ -2692,7 +2698,7 @@ describe('App shell inventory views', () => {
     fireEvent.click(getSkillRow('plugin-readonly-skill'));
     expect(await screen.findByRole('heading', { name: /^plugin-readonly-skill/i, level: 3 })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Create Missing Symlinks$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Use as Universal$/i }));
 
     expect(await screen.findByRole('button', { name: /^Applying/i })).toBeDisabled();
 
@@ -2715,7 +2721,7 @@ describe('App shell inventory views', () => {
       vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
-    expect(screen.getByRole('button', { name: /^Create Missing Symlinks$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Use as Universal$/i })).toBeEnabled();
   });
 
   it('routes missing-symlink skill repairs through the shared canonicalization action', async () => {
@@ -2767,6 +2773,22 @@ describe('App shell inventory views', () => {
         selectedVariantPath: '~/.skillindex/sandbox/.agents/skills/missing-symlink-skill',
       });
     });
+  });
+
+  it('disables broken symlink repair until a missing Universal is created', async () => {
+    const snapshot = createRepresentativeBrokenSymlinkWithoutUniversalSnapshot();
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+
+    render(<App />);
+    await openSkills();
+
+    fireEvent.click(getSkillRow('broken-symlink-without-universal'));
+    expect(await screen.findByRole('heading', { name: 'broken-symlink-without-universal', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Broken Symlink 1 issue/i }));
+
+    expect(screen.getByRole('button', { name: /^Repair Symlinks$/i })).toBeDisabled();
+    expect(screen.getByText('Choose a Universal version first. Symlink repairs need a Universal target.')).toBeVisible();
   });
 
   it('routes wrong symlink target repairs through the shared canonicalization action', async () => {
@@ -4679,6 +4701,36 @@ function createRepresentativeWrongSymlinkTargetSkillSnapshot(): SkillInventorySn
           resolvedPath: '~/.skillindex/sandbox/.agents/skills/healthy-skill.md',
           symlinkTarget: '~/.skillindex/sandbox/.agents/skills/healthy-skill.md',
         },
+      ],
+    };
+  });
+
+  return snapshot;
+}
+
+function createRepresentativeBrokenSymlinkWithoutUniversalSnapshot(): SkillInventorySnapshot {
+  const snapshot = createRepresentativeBrokenSymlinkSkillSnapshot();
+
+  snapshot.skills = snapshot.skills.map((skill) => {
+    if (skill.name !== 'broken-symlink-skill') {
+      return skill;
+    }
+
+    return {
+      ...skill,
+      name: 'broken-symlink-without-universal',
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical', 'broken-symlink'],
+      locations: [
+        {
+          ...skill.locations[0],
+          path: '~/.skillindex/sandbox/.factory/skills/broken-symlink-without-universal',
+          sourceId: 'sandbox-factory',
+          sourceLabel: 'Sandbox Factory',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.factory/skills/broken-symlink-without-universal',
+        },
+        ...skill.locations.filter((location) => !location.canonical),
       ],
     };
   });

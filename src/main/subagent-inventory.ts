@@ -523,13 +523,16 @@ function classifySubagentLocations(
     }
   }
 
-  const issueReasonsList = [...issueReasons].sort(compareSubagentIssueReasons);
-  const status = issueReasonsList.length > 0 ? 'needs-attention' : 'healthy';
   const managedSourceCandidates = buildManagedSourceCandidates(
     sortedLocations,
     pluginSourceByLocationPath,
     canonicalLocation?.definitionComparisonKey ?? null,
   );
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')) {
+    issueReasons.add('definition-mismatch');
+  }
+  const issueReasonsList = [...issueReasons].sort(compareSubagentIssueReasons);
+  const status = issueReasonsList.length > 0 ? 'needs-attention' : 'healthy';
 
   return {
     name,
@@ -589,7 +592,6 @@ function buildManagedSourceCandidates(
   for (const indexes of candidateIndexesByPlugin.values()) {
     const annotatedGroup = annotateComparableVersionEvidence(
       indexes.map((index) => candidates[index]),
-      (candidate) => candidate.plugin.version,
     );
     for (const [groupIndex, candidateIndex] of indexes.entries()) {
       annotatedCandidates[candidateIndex] = annotatedGroup[groupIndex]!;

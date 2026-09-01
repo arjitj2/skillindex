@@ -281,12 +281,18 @@ function classifySkillLocations(
     : []);
   const missingInstallSources = detailDiagnostics.missingInstallSources ?? [];
   const definitionIssues = detailDiagnostics.definitionIssues ?? [];
+  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const issueReasons = getSkillIssueReasons({
     canonicalPaths,
     definitionIssues,
     locations: issueLocations,
     missingInstallSources,
   });
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')
+    && !issueReasons.includes('diverged-copies')) {
+    issueReasons.push('diverged-copies');
+    issueReasons.sort(compareSkillIssueReasons);
+  }
   const structuralState = determineSkillStructuralState({
     issueReasons,
     locations: issueLocations,
@@ -302,8 +308,6 @@ function classifySkillLocations(
 
       return location.resolvedPath !== undefined && canonicalTargets.has(location.resolvedPath);
     });
-  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
-
   if (isHealthy) {
     return {
       name,
@@ -1301,7 +1305,6 @@ function buildManagedSourceCandidates(
   for (const indexes of candidateIndexesByPlugin.values()) {
     const annotatedGroup = annotateComparableVersionEvidence(
       indexes.map((index) => candidates[index]),
-      (candidate) => candidate.plugin.version,
     );
     for (const [groupIndex, candidateIndex] of indexes.entries()) {
       annotatedCandidates[candidateIndex] = annotatedGroup[groupIndex]!;
@@ -2055,12 +2058,18 @@ function reconcileCachedSkill(
       .map((candidate) => applyCanonicalStateToDuplicateCandidate(candidate, canonicalPaths))
     : [];
   const canonicalizedDefinitionIssues = definitionIssues.map((issue) => applyCanonicalStateToDefinitionIssue(issue, canonicalPaths));
+  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const issueReasons = getSkillIssueReasons({
     canonicalPaths,
     definitionIssues: canonicalizedDefinitionIssues,
     locations: issueLocations,
     missingInstallSources,
   });
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')
+    && !issueReasons.includes('diverged-copies')) {
+    issueReasons.push('diverged-copies');
+    issueReasons.sort(compareSkillIssueReasons);
+  }
   const structuralState = determineSkillStructuralState({
     issueReasons,
     locations: issueLocations,
@@ -2076,7 +2085,6 @@ function reconcileCachedSkill(
       ? { acceptedAlternates: universalDecisionContext?.decision.acceptedAlternates ?? [] }
       : {}),
   };
-  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const diff = issueReasons.includes('diverged-copies')
     ? buildSkillDiff(issueLocations)
     : undefined;

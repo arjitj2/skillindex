@@ -476,7 +476,7 @@ describe('plugin inventory', () => {
     expect(pluginMcp?.locations[0]?.definitionText).toContain('@upstash/context7-mcp');
   });
 
-  it('treats differing cached plugin MCP versions as managed alternatives, not a definition mismatch', async () => {
+  it('treats differing cached plugin MCP versions as ordinary definition alternatives', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-versions-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -506,7 +506,7 @@ describe('plugin inventory', () => {
     });
     inventory = await scanInventory({ paths, homeDir, env, includeLiveSources: true, includeSandboxSources: false });
     const synchronized = inventory.mcps?.find((mcp) => mcp.name === 'repeat-tools:repeat');
-    expect(synchronized).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(synchronized).toMatchObject({ status: 'needs-attention', issueReasons: ['definition-mismatch'] });
     expect(synchronized?.managedSourceCandidates).toEqual(expect.arrayContaining([
       expect.objectContaining({ relationship: 'matches-universal' }),
       expect.objectContaining({ relationship: 'differs-from-universal' }),

@@ -317,7 +317,9 @@ function assertResolutionIssueIsCurrent(snapshot: SkillInventorySnapshot, reques
 function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, request: ResolveIssueRequest): void {
   if (request.entity === 'skill') {
     const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
-    if (skill && (skill.issueReasons ?? []).includes(request.issue)) {
+    if (skill
+      && (skill.issueReasons ?? []).includes(request.issue)
+      && hasWritableSkillResolutionWorkRemaining(request, skill)) {
       throw new Error(`Skill "${request.skillName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
     }
     return;
@@ -332,9 +334,47 @@ function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, requ
   }
 
   const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
-  if (subagent && subagent.issueReasons.includes(request.issue)) {
+  if (subagent
+    && subagent.issueReasons.includes(request.issue)
+    && hasWritableSubagentResolutionWorkRemaining(request, subagent)) {
     throw new Error(`Subagent "${request.subagentName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
   }
+}
+
+function hasWritableSkillResolutionWorkRemaining(
+  request: Extract<ResolveIssueRequest, { entity: 'skill' }>,
+  skill: SkillRecord,
+): boolean {
+  if (request.issue !== 'diverged-copies') {
+    return true;
+  }
+  const selected = request.selectedVariantPath
+    ? skill.locations.find((location) => location.path === request.selectedVariantPath)
+    : null;
+  const selectedKey = selected?.contentHash ?? selected?.definitionText ?? null;
+  return skill.locations.some((location) =>
+    location.fileType === 'real-file'
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin'
+    && (!selectedKey || (location.contentHash ?? location.definitionText ?? null) !== selectedKey));
+}
+
+function hasWritableSubagentResolutionWorkRemaining(
+  request: Extract<ResolveIssueRequest, { entity: 'subagent' }>,
+  subagent: SubagentRecord,
+): boolean {
+  if (request.issue !== 'definition-mismatch') {
+    return true;
+  }
+  const selected = request.selectedVariantPath
+    ? subagent.locations.find((location) => location.path === request.selectedVariantPath)
+    : null;
+  const selectedKey = selected?.definitionComparisonKey ?? selected?.definitionText ?? null;
+  return subagent.locations.some((location) =>
+    location.fileType === 'real-file'
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin'
+    && (!selectedKey || (location.definitionComparisonKey ?? location.definitionText ?? null) !== selectedKey));
 }
 
 function hasWritableMcpResolutionWorkRemaining(
@@ -407,24 +447,16 @@ async function resolveSkillIssueIfCurrent(
 
   assertSkillResolutionScopeAllowed(skill);
 
-  const selectedManagedPluginSource = request.selectedVariantPath
-    ? skill.locations.find((location) =>
-        location.path === request.selectedVariantPath
-        && location.fileType === 'real-file'
-        && location.provenance?.kind === 'plugin')
-    : undefined;
   const hasUniversalPackage = skill.locations.some((location) =>
-    location.canonical && location.fileType === 'real-file');
-  if (selectedManagedPluginSource
-    && !hasUniversalPackage
+    location.canonical
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin'
+    && location.fileType === 'real-file');
+  if (!hasUniversalPackage
     && (request.issue === 'broken-symlink'
       || request.issue === 'wrong-symlink-target'
       || request.issue === 'missing-symlinks')) {
-    await makeSkillCanonical({
-      skillName: request.skillName,
-      selectedSourcePath: selectedManagedPluginSource.path,
-    }, { ...options, preparedSnapshot: snapshot });
-    return;
+    throw new Error(`Resolve Missing Universal before repairing symlinks for skill "${request.skillName}".`);
   }
 
   switch (request.issue) {

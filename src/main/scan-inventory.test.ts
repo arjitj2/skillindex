@@ -902,7 +902,7 @@ describe('representative-agent scan foundation', () => {
     });
     expect(pluginVersionChoiceSkill?.managedSourceCandidates).toEqual(arrayContaining([
       objectContaining({ plugin: objectContaining({ version: '1.0.0' }), evidence: 'cached-unknown' }),
-      objectContaining({ plugin: objectContaining({ version: '1.1.0' }), evidence: 'newer-comparable-version' }),
+      objectContaining({ plugin: objectContaining({ version: '1.1.0' }), evidence: 'cached-unknown' }),
     ]));
     expect(pluginVersionChoiceSkill?.managedSourceCandidates).toHaveLength(2);
     expect(pluginVersionChoiceSkill?.issueReasons).not.toContain('diverged-copies');
@@ -918,8 +918,8 @@ describe('representative-agent scan foundation', () => {
     });
     expect(incomparableVersionSkill?.managedSourceCandidates).toHaveLength(2);
     expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')).toMatchObject({
-      structuralState: 'healthy',
-      issueReasons: [],
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies'],
       managedSourceCandidates: arrayContaining([
         objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
         objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
@@ -932,7 +932,7 @@ describe('representative-agent scan foundation', () => {
       evidence: candidate.evidence,
     }))).toEqual([
       { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
-      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'newer-comparable-version' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'cached-unknown' },
     ]);
     const legacyPluginLinkSkill = inventory.skills.find((skill) => skill.name === 'legacy-plugin-link-skill');
     expect(legacyPluginLinkSkill?.issueReasons).toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
@@ -941,7 +941,7 @@ describe('representative-agent scan foundation', () => {
       objectContaining({ relationship: 'universal-missing', plugin: objectContaining({ version: '2.0.0' }) }),
     ]);
     const nativePluginSkill = inventory.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill');
-    expect(nativePluginSkill).toMatchObject({ structuralState: 'healthy', issueReasons: [] });
+    expect(nativePluginSkill).toMatchObject({ structuralState: 'diverged-drift', issueReasons: ['diverged-copies'] });
     expect(nativePluginSkill?.detailDiagnostics.missingInstallSources?.map((source) => source.sourceId)).not.toContain('sandbox-claude');
     expect(inventory.skills.find((skill) => skill.name === 'mixed-plugin-skill')).toMatchObject({
       structuralState: 'single-source-noncanonical',
@@ -977,8 +977,8 @@ describe('representative-agent scan foundation', () => {
     });
     const twoPluginsOneStaticSkill = inventory.skills.find((skill) => skill.name === 'example-workflow-kit:handoff-notes-with-static');
     expect(twoPluginsOneStaticSkill).toMatchObject({
-      structuralState: 'missing-symlinks',
-      issueReasons: ['missing-symlinks'],
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies', 'missing-symlinks'],
     });
     expect(twoPluginsOneStaticSkill?.locations).toHaveLength(3);
     expect(twoPluginsOneStaticSkill?.locations.map((location) => location.sourceId)).toEqual(expect.arrayContaining([
@@ -1022,24 +1022,24 @@ describe('representative-agent scan foundation', () => {
     });
     expect(inventory.counts).toEqual({
       totalSkills: 95,
-      driftedSkills: 54,
-      healthySkills: 41,
-      missingSymlinkSkills: 17,
+      driftedSkills: 56,
+      healthySkills: 39,
+      missingSymlinkSkills: 16,
       singleSourceSkills: 15,
       identicalDriftSkills: 9,
-      divergedDriftSkills: 13,
+      divergedDriftSkills: 16,
       dismissedDriftSkills: 0,
     });
     expect(inventory.mcpCounts).toEqual({
       totalMcps: 32,
-      attentionMcps: 28,
-      healthyMcps: 4,
+      attentionMcps: 29,
+      healthyMcps: 3,
       dismissedAttentionMcps: 0,
     });
     expect(inventory.subagentCounts).toEqual({
       totalSubagents: 23,
-      attentionSubagents: 19,
-      healthySubagents: 4,
+      attentionSubagents: 20,
+      healthySubagents: 3,
       dismissedAttentionSubagents: 0,
     });
     expect((inventory.mcps ?? []).map((mcp) => mcp.name)).toEqual(expect.arrayContaining([
@@ -1094,8 +1094,8 @@ describe('representative-agent scan foundation', () => {
       'provider-specific-field',
     ]);
     expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')).toMatchObject({
-      status: 'healthy',
-      issueReasons: [],
+      status: 'needs-attention',
+      issueReasons: ['definition-mismatch'],
       managedSourceCandidates: arrayContaining([
         objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
         objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
@@ -1108,7 +1108,7 @@ describe('representative-agent scan foundation', () => {
       evidence: candidate.evidence,
     }))).toEqual([
       { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
-      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'newer-comparable-version' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'cached-unknown' },
     ]);
     const nativePluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp');
     expect(nativePluginMcp?.missingLocations).toEqual([]);
@@ -1125,8 +1125,8 @@ describe('representative-agent scan foundation', () => {
     });
     expect(versionChoiceSubagent?.managedSourceCandidates).toHaveLength(2);
     expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')).toMatchObject({
-      status: 'healthy',
-      issueReasons: [],
+      status: 'needs-attention',
+      issueReasons: ['definition-mismatch'],
       managedSourceCandidates: arrayContaining([
         objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
         objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
@@ -1139,7 +1139,7 @@ describe('representative-agent scan foundation', () => {
       evidence: candidate.evidence,
     }))).toEqual([
       { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
-      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'newer-comparable-version' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'cached-unknown' },
     ]);
     const nativePluginSubagent = inventory.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent');
     expect(nativePluginSubagent).toMatchObject({ status: 'healthy', issueReasons: [] });
@@ -1546,7 +1546,7 @@ describe('representative-agent scan foundation', () => {
       ?.map((location) => location.agentId)).toContain('sandbox-claude');
   });
 
-  it('removes the plugin update advisory when its cache candidate disappears', async () => {
+  it('removes plugin divergence when the differing cache candidate disappears', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-update-removal-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
     const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
@@ -1647,7 +1647,7 @@ describe('representative-agent scan foundation', () => {
         const record = collection.find((entry) => entry.name === name);
         expect(record?.managedSourceCandidates?.map((candidate) => `${candidate.plugin.version}:${candidate.evidence}`)).toEqual([
           '1.0.0:cached-unknown',
-          '1.1.0:newer-comparable-version',
+          '1.1.0:cached-unknown',
         ]);
       }
     }
@@ -3985,7 +3985,7 @@ describe('representative-agent scan foundation', () => {
     expect(skill?.detailDiagnostics.duplicateCandidates).toEqual([]);
     expect(skill?.managedSourceCandidates).toHaveLength(2);
     expect(skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')?.evidence)
-      .toBe('newer-comparable-version');
+      .toBe('cached-unknown');
   });
 
   it('keeps differing plugin cache versions as noncanonical managed candidates', async () => {
@@ -4028,7 +4028,7 @@ describe('representative-agent scan foundation', () => {
     expect(skill?.issueReasons).not.toEqual(expect.arrayContaining(['identical-copies', 'diverged-copies']));
     expect(skill?.managedSourceCandidates).toHaveLength(2);
     expect(skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')?.evidence)
-      .toBe('newer-comparable-version');
+      .toBe('cached-unknown');
   });
 
   it('reconciles cached managed-source evidence when plugin enablement changes', async () => {
@@ -4154,7 +4154,7 @@ describe('representative-agent scan foundation', () => {
     expect(sync?.mcps?.find((mcp) => mcp.name === 'ordinaryServer')).toBeDefined();
   });
 
-  it('annotates comparable plugin versions within each host and marketplace group', async () => {
+  it('keeps comparable cached plugin versions usage-unknown within each host and marketplace group', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-evidence-groups-'));
     const homeDir = path.join(root, 'home');
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
@@ -4196,7 +4196,7 @@ describe('representative-agent scan foundation', () => {
     expect(candidates?.find((candidate) => candidate.plugin.host === 'claude' && candidate.plugin.version === '1.0.0')?.evidence)
       .toBe('cached-unknown');
     expect(candidates?.find((candidate) => candidate.plugin.host === 'claude' && candidate.plugin.version === '1.1.0')?.evidence)
-      .toBe('newer-comparable-version');
+      .toBe('cached-unknown');
   });
 
   it('does not claim that every cached version is current when only the plugin id is enabled', async () => {
@@ -4358,7 +4358,7 @@ describe('representative-agent scan foundation', () => {
       .toEqual(expect.arrayContaining([expect.objectContaining({ sourceId: 'live-claude' })]));
   });
 
-  it('keeps a differing same-slug plugin skill out of structural copy classification', async () => {
+  it('classifies a differing same-slug plugin skill as a current-state divergence', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-self-named-plugin-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4420,9 +4420,9 @@ describe('representative-agent scan foundation', () => {
     expect(inventory.skills.find((entry) => entry.name === 'frontend-design:frontend-design')).toBeUndefined();
     expect(inventory.skills.find((entry) => entry.name === 'frontend-design')).toMatchObject({
       displayName: 'frontend-design',
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      issueReasons: ['diverged-copies'],
       locations: arrayContaining([
         objectContaining({
           provenance: objectContaining({
@@ -5140,8 +5140,8 @@ describe('representative-agent scan foundation', () => {
     const skill = snapshot.skills.find((candidate) => candidate.name === skillName);
 
     expect(skill).toMatchObject({
-      structuralState: 'missing-symlinks',
-      issueReasons: ['missing-symlinks'],
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies', 'missing-symlinks'],
     });
     expect(skill?.locations).toEqual(arrayContaining([
       objectContaining({

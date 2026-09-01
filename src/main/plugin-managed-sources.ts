@@ -302,53 +302,12 @@ export function buildPluginManagedSourceCandidate({
 
 export function annotateComparableVersionEvidence<T extends { evidence: PluginSourceEvidence }>(
   candidates: T[],
-  getVersion: (candidate: T) => string | undefined = (candidate) => {
-    const value = (candidate as { version?: unknown }).version;
-    return typeof value === 'string' ? value : undefined;
-  },
 ): T[] {
   const enabledCandidateCount = candidates.filter((candidate) => candidate.evidence === 'enabled-installation').length;
   if (enabledCandidateCount > 1) {
     return candidates.map((candidate) => ({ ...candidate, evidence: 'cached-unknown' }));
   }
-  if (enabledCandidateCount === 1) return candidates;
-
-  const parsed = candidates.map((candidate) => ({
-    candidate,
-    version: parseComparableVersion(getVersion(candidate)),
-  }));
-  if (parsed.length < 2 || parsed.some((entry) => entry.version === null)) return candidates;
-
-  const greatestVersion = parsed.reduce<[string, string, string] | null>((greatest, entry) => {
-    if (!entry.version || greatest === null || compareVersionParts(entry.version, greatest) > 0) {
-      return entry.version;
-    }
-    return greatest;
-  }, null);
-  if (greatestVersion === null
-    || parsed.filter((entry) => compareVersionParts(entry.version!, greatestVersion) === 0).length !== 1) {
-    return candidates;
-  }
-  const greatest = parsed.find((entry) => compareVersionParts(entry.version!, greatestVersion) === 0);
-
-  return candidates.map((candidate) => candidate === greatest?.candidate
-    ? { ...candidate, evidence: 'newer-comparable-version' }
-    : candidate);
-}
-
-function parseComparableVersion(value: string | undefined): [string, string, string] | null {
-  const match = value?.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u);
-  return match ? [match[1], match[2], match[3]] : null;
-}
-
-function compareVersionParts(left: [string, string, string], right: [string, string, string]): number {
-  return compareDecimalStrings(left[0], right[0])
-    || compareDecimalStrings(left[1], right[1])
-    || compareDecimalStrings(left[2], right[2]);
-}
-
-function compareDecimalStrings(left: string, right: string): number {
-  return left.length - right.length || left.localeCompare(right);
+  return candidates;
 }
 
 export function detectPluginDependencyWarnings({

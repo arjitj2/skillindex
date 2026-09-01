@@ -441,12 +441,16 @@ function classifyMcpLocations(
     issueReasons.push('missing-from-agents');
   }
 
-  const status = issueReasons.length > 0 ? 'needs-attention' : 'healthy';
   const managedSourceCandidates = buildMcpManagedSourceCandidates(
     sortedLocations,
     pluginSourcesByLocation,
     universalLocation ? getMcpCoreDefinitionComparisonKey(universalLocation) : null,
   );
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')
+    && !issueReasons.includes('definition-mismatch')) {
+    issueReasons.push('definition-mismatch');
+  }
+  const status = issueReasons.length > 0 ? 'needs-attention' : 'healthy';
 
   return {
     name,
@@ -503,7 +507,6 @@ function buildMcpManagedSourceCandidates(
   for (const indexes of candidateIndexesByPlugin.values()) {
     const annotated = annotateComparableVersionEvidence(
       indexes.map((index) => candidates[index]),
-      (candidate) => candidate.plugin.version,
     );
     for (const [groupIndex, candidateIndex] of indexes.entries()) {
       annotatedCandidates[candidateIndex] = annotated[groupIndex]!;

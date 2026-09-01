@@ -19,7 +19,7 @@ import {
   type McpStatusFilter,
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
-import { getMcpResolveActionState, getPluginUpdateActionRequest } from '../lib/issue-resolution';
+import { getMcpResolveActionState } from '../lib/issue-resolution';
 import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
@@ -100,6 +100,7 @@ export function McpWorkspaceView({
   searchQuery: string;
   statusFilter: McpStatusFilter;
 }) {
+  void onApplyCapabilityAction;
   const sections = filterVisibleSections(inventorySnapshot ? getMcpSections(inventorySnapshot) : [], rows);
   const filters = inventorySnapshot?.mcpCounts
     ? [
@@ -212,7 +213,6 @@ export function McpWorkspaceView({
                 sandboxRoot={sandboxRoot}
                 onClearSelection={onClearSelection}
               onDismissDrift={onDismissDrift}
-              onApplyCapabilityAction={onApplyCapabilityAction}
                 onOpenPluginSource={onOpenPluginSource}
                 onRequestRemove={onRequestRemove}
                 onResolveIssue={onResolveIssue}
@@ -521,7 +521,6 @@ function McpDetailPanel({
   sandboxRoot,
   onClearSelection,
   onDismissDrift,
-  onApplyCapabilityAction,
   onOpenPluginSource,
   onRequestRemove,
   onResolveIssue,
@@ -538,7 +537,6 @@ function McpDetailPanel({
   sandboxRoot: string | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
-  onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
   onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
@@ -612,17 +610,6 @@ function McpDetailPanel({
       sandboxRoot={sandboxRoot}
       isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
-      onLocationAction={(action) => {
-        if (action.kind === 'update-universal-from-plugin') {
-          const request = getPluginUpdateActionRequest({
-            entity: 'mcp',
-            capabilityName: mcp.name,
-            inspectorModel: mcpInspectorModel,
-            selectedVariantPath: action.path,
-          });
-          if (request) void onApplyCapabilityAction(request);
-        }
-      }}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => onSelectProblem(problemKey as McpIssueReason)}
       onVariantSelect={(path: string) => onSelectVariant(path)}

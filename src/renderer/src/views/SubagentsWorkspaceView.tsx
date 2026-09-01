@@ -23,7 +23,7 @@ import {
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
-import { getPluginUpdateActionRequest, getSubagentResolveActionState } from '../lib/issue-resolution';
+import { getSubagentResolveActionState } from '../lib/issue-resolution';
 import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
@@ -105,6 +105,7 @@ export function SubagentsWorkspaceView({
   selectedSubagentProblemKey: SubagentIssueReason | null;
   statusFilter: SubagentStatusFilter;
 }) {
+  void onApplyCapabilityAction;
   const sections = filterVisibleSections(inventorySnapshot ? getSubagentSections(inventorySnapshot) : [], rows);
   const filters = inventorySnapshot?.subagentCounts
     ? [
@@ -215,7 +216,6 @@ export function SubagentsWorkspaceView({
               inventorySnapshot={inventorySnapshot}
               onClearSelection={onClearSelection}
               onDismissDrift={onDismissDrift}
-              onApplyCapabilityAction={onApplyCapabilityAction}
               onOpenPluginSource={onOpenPluginSource}
               onRequestRemove={onRequestRemove}
               onSelectProblem={onSelectProblem}
@@ -241,7 +241,6 @@ function SubagentDetailPanel({
   inventorySnapshot,
   onClearSelection,
   onDismissDrift,
-  onApplyCapabilityAction,
   onOpenPluginSource,
   onRequestRemove,
   onSelectProblem,
@@ -259,7 +258,6 @@ function SubagentDetailPanel({
   inventorySnapshot: SkillInventorySnapshot | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
-  onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
   onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onSelectProblem: (problemKey: SubagentIssueReason | null) => void;
@@ -335,17 +333,6 @@ function SubagentDetailPanel({
       sandboxRoot={sandboxRoot}
       isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
-      onLocationAction={(action) => {
-        if (action.kind === 'update-universal-from-plugin') {
-          const request = getPluginUpdateActionRequest({
-            entity: 'subagent',
-            capabilityName: subagent.name,
-            inspectorModel: selectedSubagentInspectorModel,
-            selectedVariantPath: action.path,
-          });
-          if (request) void onApplyCapabilityAction(request);
-        }
-      }}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => {
         onSelectProblem(problemKey as SubagentIssueReason);

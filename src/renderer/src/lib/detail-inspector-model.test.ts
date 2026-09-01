@@ -139,7 +139,7 @@ describe('buildSkillInspectorModel', () => {
         buildManagedCandidate({
           path: secondPath,
           version: '1.1.0',
-          evidence: 'newer-comparable-version',
+          evidence: 'cached-unknown',
           warnings: [{ kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' }],
         }),
       ],
@@ -155,7 +155,7 @@ describe('buildSkillInspectorModel', () => {
     expect(unselectedProblem.primaryActionLabel).toBe('Use as Universal');
     expect(unselectedProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
       'Usage unknown',
-      'Newer comparable plugin version',
+      'Usage unknown',
     ]);
 
     const selected = buildSkillInspectorModel(skill, sourceIndex, {
@@ -223,11 +223,69 @@ describe('buildSkillInspectorModel', () => {
     expect(explicitlySelectedProblem.selectedVariant?.evidenceLabel).toBe('Usage unknown');
   });
 
-  it('shows a non-problem plugin update advisory for a healthy skill', () => {
+  it('shows a differing plugin source as an ordinary diverged version', () => {
+    const matchingPluginPath = '/Users/tester/.codex/plugins/cache/tools/1.0.0/skills/healthy-skill';
+    const pluginPath = '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill';
+    const universal = findRepresentativeSkill('healthy-skill').locations[0];
+    const matchingPluginLocation: SkillLocationRecord = {
+      ...universal,
+      path: matchingPluginPath,
+      entrypointPath: `${matchingPluginPath}/SKILL.md`,
+      sourceId: 'plugin-tools-old',
+      sourceLabel: 'Codex Plugin tools',
+      canonical: false,
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+      modifiedAt: '2026-12-01T00:00:00.000Z',
+    };
+    const pluginLocation: SkillLocationRecord = {
+      ...universal,
+      path: pluginPath,
+      entrypointPath: `${pluginPath}/SKILL.md`,
+      sourceId: 'plugin-tools',
+      sourceLabel: 'Codex Plugin tools',
+      canonical: false,
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+      contentHash: 'plugin-version',
+      definitionText: '# Plugin version',
+    };
     const skill: SkillRecord = {
       ...findRepresentativeSkill('healthy-skill'),
+      structuralState: 'diverged-drift',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['diverged-copies'],
+      locations: [universal, matchingPluginLocation, pluginLocation],
+      detailDiagnostics: {
+        ...findRepresentativeSkill('healthy-skill').detailDiagnostics,
+        duplicateCandidates: [universal, pluginLocation].map((location) => ({
+          ...location,
+          installSource: {
+            sourceId: location.sourceId,
+            label: location.sourceLabel,
+            kind: location.canonical ? 'custom' : 'plugin',
+            scope: location.sourceScope,
+            writable: location.canonical,
+            canonical: location.canonical,
+          },
+        })),
+      },
       managedSourceCandidates: [{
-        path: '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill',
+        path: matchingPluginPath,
+        plugin: {
+          host: 'codex',
+          pluginId: 'tools@official',
+          pluginName: 'tools',
+          version: '1.0.0',
+          rootPath: '/Users/tester/.codex/plugins/cache/tools/1.0.0',
+          enabled: 'unknown',
+        },
+        evidence: 'cached-unknown',
+        relationship: 'matches-universal',
+        dependencyWarnings: [],
+      }, {
+        path: pluginPath,
         plugin: {
           host: 'codex',
           pluginId: 'tools@official',
@@ -247,19 +305,24 @@ describe('buildSkillInspectorModel', () => {
 
     const model = buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex);
 
-    expect(model.problems).toEqual([]);
-    expect(model.problemCountLabel).toBe('0 problems');
-    expect(model.pluginUpdateAdvisory).toEqual({
-      title: 'Plugin Update Available',
-      candidates: [objectContaining({
-        evidenceLabel: 'Currently used in Codex',
-        action: objectContaining({
-          kind: 'update-universal-from-plugin',
-          label: 'Update Universal from this version',
-        }),
-        warnings: [objectContaining({ label: 'Detected dependency' })],
-      })],
-    });
+    expect(model).not.toHaveProperty('pluginUpdateAdvisory');
+    expect(model.problems).toEqual([objectContaining({ key: 'diverged-copies' })]);
+    expect(model.problemCountLabel).toBe('1 problem');
+    const problem = expectVariantResolution(model.activeProblem);
+    expect(problem.variants).toHaveLength(2);
+    expect(problem.variants.find((variant) => variant.isBaseline)).toEqual(objectContaining({
+      path: universal.path,
+      badge: 'Universal',
+      locations: arrayContaining([
+        objectContaining({ path: universal.path }),
+        objectContaining({ path: matchingPluginPath }),
+      ]),
+    }));
+    expect(problem.variants.find((variant) => variant.path === pluginPath)).toEqual(objectContaining({
+      evidenceLabel: 'Currently used in Codex',
+      dependencyWarnings: [objectContaining({ kind: 'plugin-contained-path' })],
+    }));
+    expect(problem.primaryActionLabel).toBe('Use as Universal');
   });
 
   it('builds definition files for a healthy skill without needing an active problem', () => {
@@ -3344,7 +3407,7 @@ describe('buildMcpInspectorModel', () => {
       })),
       managedSourceCandidates: [
         buildManagedCandidate({ path: firstPath, version: '1.0.0', evidence: 'cached-unknown' }),
-        buildManagedCandidate({ path: secondPath, version: '1.1.0', evidence: 'newer-comparable-version' }),
+        buildManagedCandidate({ path: secondPath, version: '1.1.0', evidence: 'cached-unknown' }),
       ],
     };
 
@@ -3359,7 +3422,7 @@ describe('buildMcpInspectorModel', () => {
     expect(activeProblem.primaryActionLabel).toBe('Promote to Universal');
     expect(activeProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
       'Usage unknown',
-      'Newer comparable plugin version',
+      'Usage unknown',
     ]);
   });
 

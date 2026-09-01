@@ -907,16 +907,16 @@ describe('inventory runtime', () => {
     });
     const afterDivergedSkill = afterDivergedResolution.skills.find((skill) => skill.name === skillName);
 
-    expect(afterDivergedSkill).toMatchObject({ issueReasons: [] });
+    expect(afterDivergedSkill).toMatchObject({ issueReasons: ['diverged-copies'] });
     expect(afterDivergedSkill?.detailDiagnostics.acceptedAlternates).toHaveLength(2);
 
     const afterMissingResolution = afterDivergedResolution;
     const afterMissingSkill = afterMissingResolution.skills.find((skill) => skill.name === skillName);
 
     expect(afterMissingSkill).toMatchObject({
-      structuralState: 'healthy',
-      issueReasons: [],
-      driftPresentation: 'none',
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies'],
+      driftPresentation: 'active',
     });
     expect(afterMissingSkill?.detailDiagnostics.acceptedAlternates).toHaveLength(2);
 
@@ -1371,8 +1371,8 @@ describe('inventory runtime', () => {
       expect(await readlink(linkPath)).toBe(universalPath);
     }
     expect(promoted.skills.find((entry) => entry.name === skillName)).toMatchObject({
-      structuralState: 'healthy',
-      issueReasons: [],
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies'],
     });
     for (const candidate of pluginCacheContents) {
       expect(await readFile(path.join(candidate.path, 'SKILL.md'), 'utf8')).toBe(candidate.contents);
@@ -1423,7 +1423,10 @@ describe('inventory runtime', () => {
     const promoted = await runtime.resolveIssue({
       entity: 'skill', issue: 'missing-canonical', skillName, selectedVariantPath: candidate!.path,
     });
-    expect(promoted.skills.find((entry) => entry.name === skillName)).toMatchObject({ structuralState: 'healthy', issueReasons: [] });
+    expect(promoted.skills.find((entry) => entry.name === skillName)).toMatchObject({
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies'],
+    });
     expect({
       skills: promoted.counts.dismissedDriftSkills,
       mcps: promoted.mcpCounts?.dismissedAttentionMcps,
@@ -1511,23 +1514,21 @@ describe('inventory runtime', () => {
     await expect(pathExists(factoryPath)).resolves.toBe(false);
   });
 
-  it.each([
-    { skillName: 'plugin-single-source-skill', issue: 'missing-canonical' as const },
-    { skillName: 'legacy-plugin-link-skill', issue: 'broken-symlink' as const },
-  ])('uses the complete managed-source promotion route for $skillName', async ({ skillName, issue }) => {
+  it('uses the complete managed-source promotion route for an explicit Missing Universal resolution', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-route-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
     const runtime = createInventoryRuntime();
     runtimes.push(runtime);
     const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
     await seedRepresentativeFixtures({ paths });
+    const skillName = 'plugin-single-source-skill';
     const before = await runtime.scanInventory(scanOptions);
     const candidate = before.skills.find((entry) => entry.name === skillName)?.managedSourceCandidates?.[0];
     expect(candidate).toBeDefined();
 
     const after = await runtime.resolveIssue({
       entity: 'skill',
-      issue,
+      issue: 'missing-canonical',
       skillName,
       selectedVariantPath: candidate!.path,
     });
@@ -1544,6 +1545,33 @@ describe('inventory runtime', () => {
       structuralState: 'healthy',
       issueReasons: [],
     });
+  });
+
+  it('rejects a stale Broken Symlink request until Missing Universal is resolved', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-link-order-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    await seedRepresentativeFixtures({ paths });
+    const skillName = 'legacy-plugin-link-skill';
+    const before = await runtime.scanInventory(scanOptions);
+    const skill = before.skills.find((entry) => entry.name === skillName);
+    const candidate = skill?.managedSourceCandidates?.[0];
+    expect(skill?.issueReasons).toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
+    expect(candidate).toBeDefined();
+
+    await expect(runtime.resolveIssue({
+      entity: 'skill',
+      issue: 'broken-symlink',
+      skillName,
+      selectedVariantPath: candidate!.path,
+    })).rejects.toThrow('Resolve Missing Universal before repairing symlinks');
+
+    await expect(pathExists(path.join(paths.sandboxAgentsSkillsDir, skillName))).resolves.toBe(false);
+    const after = await runtime.scanInventory(scanOptions);
+    expect(after.skills.find((entry) => entry.name === skillName)?.issueReasons)
+      .toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
   });
 
   it('excludes only the exact enabled native plugin host when promoting a plugin skill', async () => {
