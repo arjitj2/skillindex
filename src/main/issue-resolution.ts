@@ -205,12 +205,10 @@ export async function addMcpServer(
     throw new Error(`MCP Server "${request.name.trim()}" already exists in ${existingTargets.length} writable config${existingTargets.length === 1 ? '' : 's'}.`);
   }
 
-  await Promise.all(
-    updates.map(async (target) => {
-      target.definitions[request.name.trim()] = definition;
-      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
-    }),
-  );
+  for (const target of updates) {
+    target.definitions[request.name.trim()] = definition;
+  }
+  await writeMcpDefinitionsTransaction(updates, options);
 
   return scanInventory({
     ...options,
@@ -683,8 +681,8 @@ function dedupeMcpMutationTargets(targets: McpMutationTarget[]): McpMutationTarg
   });
 }
 
-async function coalesceMcpMutationTargets(targets: McpMutationTarget[]): Promise<McpMutationTarget[]> {
-  const byPhysicalPath = new Map<string, McpMutationTarget>();
+async function coalesceMcpMutationTargets<T extends McpMutationTarget>(targets: T[]): Promise<T[]> {
+  const byPhysicalPath = new Map<string, T>();
   for (const target of targets) {
     const physicalPath = await resolveSafeMcpConfigWritePath(target.configPath);
     const existing = byPhysicalPath.get(physicalPath);
@@ -726,6 +724,20 @@ async function readMcpConfigContents(configPath: string): Promise<string | undef
     if (isFileNotFoundError(error)) return undefined;
     throw error;
   }
+}
+
+export async function writeMcpDefinitionsTransaction(
+  updates: Array<McpMutationTarget & { definitions: McpServerDefinitions }>,
+  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt'> = {},
+): Promise<void> {
+  const targets = await coalesceMcpMutationTargets(updates);
+  await writeMcpResolutionTransaction(
+    await Promise.all(targets.map(async (target) => ({
+      ...target,
+      originalContents: await readMcpConfigContents(target.configPath),
+    }))),
+    options,
+  );
 }
 
 async function writeMcpResolutionTransaction(
@@ -2301,6 +2313,14 @@ async function resolveSafeMcpConfigWritePath(configPath: string): Promise<string
   const physicalPath = await resolvePathThroughNearestExistingParent(lexicalPath);
   if (isConventionalPluginCachePath(physicalPath)) {
     throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+  }
+  try {
+    if ((await stat(physicalPath)).nlink > 1) {
+      throw new Error('MCP mutations cannot replace a hard-linked config file.');
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('hard-linked config')) throw error;
+    if (!isFileNotFoundError(error)) throw error;
   }
   return physicalPath;
 }

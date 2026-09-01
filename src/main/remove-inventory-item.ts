@@ -16,7 +16,7 @@ import {
   getDefaultMcpWriteDialect,
   isSupportedWritableMcpParser,
   readWritableMcpDefinitions,
-  writeMcpDefinitions,
+  writeMcpDefinitionsTransaction,
   type McpMutationTarget,
 } from '@main/issue-resolution';
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
@@ -123,7 +123,7 @@ async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpNa
     throw new Error(`MCP "${mcpName}" has no removable config locations.`);
   }
 
-  await Promise.all(targets.map(async (target) => {
+  const updates = await Promise.all(targets.map(async (target) => {
     const definitions = await readWritableMcpDefinitions(target);
     let changed = false;
 
@@ -134,10 +134,10 @@ async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpNa
       }
     }
 
-    if (changed) {
-      await writeMcpDefinitions(target.configPath, target.parserKind, definitions, target.writeDialect);
-    }
+    return changed ? { ...target, definitions } : null;
   }));
+  const mutationUpdates = updates.filter((target) => target !== null);
+  await writeMcpDefinitionsTransaction(mutationUpdates);
 }
 
 function collectMcpRemovalTargets(

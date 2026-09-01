@@ -183,12 +183,27 @@ export function readCachedInventorySync(
   const activeRegisteredSources = mergeCachedPluginSources(registeredSources, cachedPluginSources);
   const activeSources = mergeCachedPluginSources(sources, cachedPluginSources);
 
+  // Sync bootstrap cannot safely discover current plugin config/enablement.
+  // Omit plugin-managed MCP evidence rather than presenting cache history as
+  // current native delivery; the async scan repopulates it immediately.
+  const syncSafeSnapshot: SkillInventorySnapshot = {
+    ...cachedSnapshot,
+    mcps: (cachedSnapshot.mcps ?? [])
+      .map((mcp) => ({
+        ...mcp,
+        locations: mcp.locations.filter((location) => location.canonicalRole !== 'managed-source'
+          && location.provenance?.kind !== 'plugin'
+          && !location.agentId.startsWith('plugin:')),
+        managedSourceCandidates: undefined,
+      }))
+      .filter((mcp) => mcp.locations.length > 0),
+  };
   return reconcileSkillInventorySnapshot(
-    cachedSnapshot,
+    syncSafeSnapshot,
     activeRegisteredSources,
     activeSources,
     agents,
-    cachedSnapshot.plugins ?? [],
+    [],
     config.skillUniversalDecisions ?? [],
     config.dismissedDriftSignatures,
     config.dismissedMcpSignatures,

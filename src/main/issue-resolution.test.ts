@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -127,6 +127,19 @@ describe('resolveInventoryIssue', () => {
       .rejects.toThrow('plugin-managed cache path');
     await expect(writeMcpDefinitions(aliasPath, 'json-servers', {}, 'json-type-url'))
       .rejects.toThrow('plugin-managed cache path');
+  });
+
+  it('rejects hard-linked MCP configs rather than splitting their identity on atomic replacement', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-hardlink-write-'));
+    const configPath = path.join(root, 'mcp.json');
+    const aliasPath = path.join(root, 'mcp-alias.json');
+    await writeFile(configPath, JSON.stringify({ servers: {} }), 'utf8');
+    await link(configPath, aliasPath);
+
+    await expect(writeMcpDefinitions(configPath, 'json-servers', {
+      server: { command: 'node', args: ['server.js'] },
+    }, 'json-type-url')).rejects.toThrow('hard-linked config file');
+    expect((await stat(configPath)).ino).toBe((await stat(aliasPath)).ino);
   });
 
   it('adds a new MCP Server definition to selected writable configs', async () => {

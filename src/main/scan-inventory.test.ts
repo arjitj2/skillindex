@@ -3787,6 +3787,7 @@ describe('representative-agent scan foundation', () => {
 
     await writeFile(pluginConfigPath, JSON.stringify({ mcpServers: {} }), 'utf8');
     expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
+    expect(readCachedInventorySync(scanOptions)?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
 
     await rm(pluginRoot, { recursive: true, force: true });
     expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
@@ -5138,7 +5139,8 @@ describe('representative-agent scan foundation', () => {
     const asyncSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const syncSnapshot = readCachedInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
 
-    expect(asyncSnapshot).toEqual(syncSnapshot);
+    expect(syncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(false);
+    expect(asyncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(true);
     expect(syncSnapshot).not.toBeNull();
     expect(syncSnapshot?.sourceIds).not.toContain('sandbox-windsurf');
     expect(syncSnapshot?.skills.some((skill) => skill.name === 'single-source-skill')).toBe(false);
@@ -5170,7 +5172,8 @@ describe('representative-agent scan foundation', () => {
     const asyncSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const syncSnapshot = readCachedInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
 
-    expect(syncSnapshot).toEqual(asyncSnapshot);
+    expect(syncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(false);
+    expect(asyncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(true);
     expect(syncSnapshot?.sourceIds).toEqual(expect.arrayContaining(['sandbox-agents', 'sandbox-claude', 'sandbox-windsurf', 'sandbox-plugin-pack']));
     expect(syncSnapshot?.counts.driftedSkills).toBeGreaterThan(0);
   });
