@@ -80,6 +80,8 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   testFailSubagentStageAt?: number;
   /** Test-only failure after a subagent stage entry has been created. */
   testFailSubagentStageAfterCreateAt?: number;
+  /** Test-only deterministic failure point for staged MCP config mutations. */
+  testFailMcpMutationAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -574,29 +576,26 @@ async function resolveMcpIssueIfCurrent(
     throw new Error(`MCP "${request.mcpName}" has no writable supported targets for ${request.issue}.`);
   }
 
-  const updates = await Promise.all(
-    mutationTargets.map(async (target) => ({
-      ...target,
-      definitions: await readWritableMcpDefinitions(target),
-    })),
-  );
-
-  await Promise.all(
-    updates.map(async (target) => {
-      const definitionName = getMcpDefinitionNameForWrite(request.mcpName, selectedVariant);
-      if (definitionName !== request.mcpName) {
-        delete target.definitions[request.mcpName];
-      }
-      target.definitions[definitionName] = buildMcpDefinitionForTarget(
-        snapshot,
-        target,
-        target.definitions[definitionName],
-        selectedDefinition,
-        agentLocalDefinitions,
-      );
-      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
-    }),
-  );
+  await assertSafeMcpMutationTargets(mutationTargets, snapshot);
+  const updates = await Promise.all(mutationTargets.map(async (target) => ({
+    ...target,
+    definitions: await readWritableMcpDefinitions(target),
+    originalContents: await readMcpConfigContents(target.configPath),
+  })));
+  const definitionName = getMcpDefinitionNameForWrite(request.mcpName, selectedVariant);
+  for (const target of updates) {
+    if (definitionName !== request.mcpName) {
+      delete target.definitions[request.mcpName];
+    }
+    target.definitions[definitionName] = buildMcpDefinitionForTarget(
+      snapshot,
+      target,
+      target.definitions[definitionName],
+      selectedDefinition,
+      agentLocalDefinitions,
+    );
+  }
+  await writeMcpResolutionTransaction(updates, options);
 }
 
 function collectMcpResolutionTargets(
@@ -607,7 +606,15 @@ function collectMcpResolutionTargets(
   options: ResolveIssueOptions & { paths: SkillIndexPaths },
 ): McpMutationTarget[] {
   const targets = issue === 'missing-universal'
-    ? buildWritableUniversalMcpTargets(snapshot, selectedVariant.scope, options)
+    ? [
+        ...buildWritableUniversalMcpTargets(snapshot, selectedVariant.scope, options),
+        ...(selectedVariant.canonicalRole === 'managed-source'
+          ? (mcp.expectedLocations ?? [])
+            .filter((location) => location.supportStatus !== 'unsupported')
+            .map((location) => buildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath))
+            .filter((target): target is McpMutationTarget => target !== null)
+          : []),
+      ]
     : issue === 'definition-mismatch'
       ? [
           ...mcp.locations
@@ -672,6 +679,68 @@ function dedupeMcpMutationTargets(targets: McpMutationTarget[]): McpMutationTarg
     seen.add(key);
     return true;
   });
+}
+
+async function assertSafeMcpMutationTargets(
+  targets: McpMutationTarget[],
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  const pluginRoots = (snapshot.plugins ?? []).map((plugin) => plugin.rootPath);
+  const resolvedPluginRoots = await Promise.all(pluginRoots.map((root) =>
+    resolvePathThroughNearestExistingParent(root)));
+  await Promise.all(targets.map(async (target) => {
+    const lexicalPath = path.normalize(target.configPath);
+    if (pluginRoots.some((root) => isPathWithin(root, lexicalPath))) {
+      throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+    }
+    const resolvedPath = await resolvePathThroughNearestExistingParent(lexicalPath);
+    if (pluginRoots.some((root) => isPathWithin(root, resolvedPath))
+      || resolvedPluginRoots.some((root) => isPathWithin(root, resolvedPath))) {
+      throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+    }
+  }));
+}
+
+async function readMcpConfigContents(configPath: string): Promise<string | undefined> {
+  try {
+    return await readFile(configPath, 'utf8');
+  } catch (error) {
+    if (isFileNotFoundError(error)) return undefined;
+    throw error;
+  }
+}
+
+async function writeMcpResolutionTransaction(
+  updates: Array<McpMutationTarget & { definitions: McpServerDefinitions; originalContents: string | undefined }>,
+  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt'>,
+): Promise<void> {
+  const written: Array<McpMutationTarget & { originalContents: string | undefined }> = [];
+  try {
+    for (const [index, target] of updates.entries()) {
+      if (options.testFailMcpMutationAt === index) {
+        throw new Error(`MCP mutation failed at staged target ${index}.`);
+      }
+      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
+      written.push(target);
+    }
+  } catch (error) {
+    const rollbackErrors: unknown[] = [];
+    for (const target of written.reverse()) {
+      try {
+        if (target.originalContents === undefined) {
+          await rm(target.configPath, { force: true });
+        } else {
+          await writeMcpConfigAtomically(target.configPath, target.originalContents);
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([error, ...rollbackErrors], 'MCP resolution failed and rollback was incomplete.');
+    }
+    throw error;
+  }
 }
 
 function collectAgentLocalDefinitionsForMcp(
@@ -2037,12 +2106,7 @@ export async function writeMcpDefinitions(
     }
 
     const tomlDefinitions = mapRecordValue(definitions, (definition) => toTomlMcpDefinition(definition, writeDialect === 'toml-transport-array' ? 'transport-array' : 'codex'));
-    await mkdir(path.dirname(configPath), { recursive: true });
-    await writeFile(
-      configPath,
-      updateTomlMcpServers(raw, tomlDefinitions),
-      'utf8',
-    );
+    await writeMcpConfigAtomically(configPath, updateTomlMcpServers(raw, tomlDefinitions));
     return;
   }
 
@@ -2056,13 +2120,11 @@ export async function writeMcpDefinitions(
       }
     }
 
-    await mkdir(path.dirname(configPath), { recursive: true });
     const tomlDefinitions = mapRecordValue(definitions, (definition) => toTomlMcpDefinition(definition, writeDialect === 'toml-codex' ? 'codex' : 'transport-array'));
     const sortedDefinitions = sortRecordValue(tomlDefinitions);
-    await writeFile(
+    await writeMcpConfigAtomically(
       configPath,
       updateTomlMcpServerArray(raw, isMcpServerDefinitions(sortedDefinitions) ? sortedDefinitions : tomlDefinitions),
-      'utf8',
     );
     return;
   }
@@ -2080,14 +2142,12 @@ export async function writeMcpDefinitions(
     const preservedConfig = { ...parsedConfig };
     delete preservedConfig.mcp;
     delete preservedConfig.mcpServers;
-    await mkdir(path.dirname(configPath), { recursive: true });
-    await writeFile(
+    await writeMcpConfigAtomically(
       configPath,
       `${JSON.stringify({
         ...preservedConfig,
         mcp: sortRecordValue(mapRecordValue(definitions, (definition) => mapMcpDefinitionForWriteDialect(definition, 'json-opencode'))),
       }, null, 2)}\n`,
-      'utf8',
     );
     return;
   }
@@ -2174,8 +2234,7 @@ async function writeJsoncMcpDefinitions(
     setNestedRecordValue(parsedConfig, target.fieldPath, sortRecordValue(definitions));
   }
 
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, 'utf8');
+  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`);
 }
 
 async function writeJsonMcpDefinitions(
@@ -2189,8 +2248,42 @@ async function writeJsonMcpDefinitions(
   }
   parsedConfig[target.field] = sortRecordValue(definitions);
 
+  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`);
+}
+
+async function writeMcpConfigAtomically(configPath: string, contents: string): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, 'utf8');
+  const stagedPath = `${configPath}.skillindex-${randomUUID()}.tmp`;
+  try {
+    await writeFile(stagedPath, contents, 'utf8');
+    await rename(stagedPath, configPath);
+  } finally {
+    await rm(stagedPath, { force: true });
+  }
+}
+
+function isPathWithin(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function resolvePathThroughNearestExistingParent(targetPath: string): Promise<string> {
+  const normalizedTarget = path.normalize(targetPath);
+  let candidate = normalizedTarget;
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      return path.join(await realpath(candidate), ...missingSegments.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`Unable to verify filesystem safety for ${normalizedTarget}.`);
+      }
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return normalizedTarget;
+    missingSegments.push(path.basename(candidate));
+    candidate = parent;
+  }
 }
 
 function getJsonMcpDefinitionTarget(

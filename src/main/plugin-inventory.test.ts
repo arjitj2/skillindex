@@ -410,7 +410,7 @@ describe('plugin inventory', () => {
     expect(pluginMcp?.locations[0]).toMatchObject({
       agentId: 'plugin:codex:github-tools@openai-curated:abc123',
       mutability: 'read-only-managed',
-      canonicalRole: 'canonical',
+      canonicalRole: 'managed-source',
       provenance: {
         kind: 'plugin',
         plugin: {
@@ -420,6 +420,14 @@ describe('plugin inventory', () => {
         },
       },
     });
+    expect(pluginMcp?.managedSourceCandidates).toEqual([
+      expect.objectContaining({
+        path: path.join(pluginRoot, '.mcp.json'),
+        relationship: 'universal-missing',
+      }),
+    ]);
+    expect(pluginMcp?.managedSourceCandidates?.[0]?.dependencyWarnings
+      .some((warning) => warning.kind === 'plugin-root-variable')).toBe(true);
     expect(pluginMcp?.missingLocations?.every((location) => !location.agentId.startsWith('plugin:'))).toBe(true);
   });
 
@@ -466,6 +474,43 @@ describe('plugin inventory', () => {
       ],
     });
     expect(pluginMcp?.locations[0]?.definitionText).toContain('@upstash/context7-mcp');
+  });
+
+  it('treats differing cached plugin MCP versions as managed alternatives, not a definition mismatch', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-versions-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: dataDir }, homeDir });
+    const oldRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'repeat-tools', '1.0.0');
+    const newRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'repeat-tools', '1.1.0');
+
+    await writeJson(path.join(oldRoot, '.codex-plugin', 'plugin.json'), { name: 'repeat-tools', version: '1.0.0' });
+    await writeJson(path.join(newRoot, '.codex-plugin', 'plugin.json'), { name: 'repeat-tools', version: '1.1.0' });
+    await writeJson(path.join(oldRoot, '.mcp.json'), { mcpServers: { repeat: { command: 'node', args: ['old.js'] } } });
+    await writeJson(path.join(newRoot, '.mcp.json'), { mcpServers: { repeat: { command: 'node', args: ['new.js'] } } });
+
+    const env = { SKILL_INDEX_AGENT_SUBSET: 'codex' };
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), [
+      '[plugins."repeat-tools@openai-curated"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+    let inventory = await scanInventory({ paths, homeDir, env, includeLiveSources: true, includeSandboxSources: false });
+    const pluginOnly = inventory.mcps?.find((mcp) => mcp.name === 'repeat-tools:repeat');
+    expect(pluginOnly).toMatchObject({ issueReasons: ['missing-universal'] });
+    expect(pluginOnly?.managedSourceCandidates).toHaveLength(2);
+    expect(pluginOnly?.issueReasons).not.toContain('definition-mismatch');
+
+    await writeJson(path.join(homeDir, '.agents', 'mcp.json'), {
+      servers: { repeat: { command: 'node', args: ['old.js'] } },
+    });
+    inventory = await scanInventory({ paths, homeDir, env, includeLiveSources: true, includeSandboxSources: false });
+    const synchronized = inventory.mcps?.find((mcp) => mcp.name === 'repeat-tools:repeat');
+    expect(synchronized).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(synchronized?.managedSourceCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relationship: 'matches-universal' }),
+      expect.objectContaining({ relationship: 'differs-from-universal' }),
+    ]));
   });
 
   it('groups plugin MCPs with same-name agent config entries without requiring normal MCPs in plugin configs', async () => {
@@ -624,7 +669,7 @@ describe('plugin inventory', () => {
       agentId: 'plugin:sandbox:codex:signal-tools@sandbox-curated:abc123',
       scope: 'sandbox',
       mutability: 'read-only-managed',
-      canonicalRole: 'canonical',
+      canonicalRole: 'managed-source',
     });
   });
 

@@ -35,6 +35,13 @@ import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
 
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
 import { verifyMcpConnection } from '@main/mcp-connectivity';
+import {
+  annotateComparableVersionEvidence,
+  buildPluginManagedSourceCandidate,
+  detectPluginDependencyWarnings,
+  getOperationalLocations,
+  isAgentSatisfiedByNativePlugin,
+} from '@main/plugin-managed-sources';
 
 export interface McpConnectivityProbeTarget {
   name: string;
@@ -85,6 +92,8 @@ interface PluginMcpIndexEntry {
   coreDefinitionComparisonKey?: string;
 }
 
+type PluginMcpSourcesByLocation = Map<string, PluginSourceRef>;
+
 interface ResolvedMcpConnection {
   command?: string;
   url?: string;
@@ -123,6 +132,7 @@ export async function collectMcpRecords(
   }
 
   const pluginMcpIndex = buildPluginMcpIndex(parsedConfigs);
+  const pluginSourcesByLocation = buildPluginMcpSourcesByLocation(parsedConfigs);
   for (const result of parsedConfigs) {
     for (const entry of result.entries) {
       const inventoryMcpName = createInventoryMcpName(entry, result.owner, pluginMcpIndex);
@@ -130,7 +140,7 @@ export async function collectMcpRecords(
       existing.push(entry.location);
       groupedLocations.set(inventoryMcpName, existing);
 
-      if ((entry.location.invalidDetails?.length ?? 0) === 0) {
+      if (entry.location.canonicalRole !== 'managed-source' && (entry.location.invalidDetails?.length ?? 0) === 0) {
         probeTargets.push({
           name: inventoryMcpName,
           location: entry.location,
@@ -144,7 +154,7 @@ export async function collectMcpRecords(
 
   const parsedOwners = scannedOwners.filter((owner) => owner.parseable);
   const records = [...groupedLocations.entries()].map(([name, locations]) =>
-    classifyMcpLocations(name, locations, parsedOwners));
+    classifyMcpLocations(name, locations, parsedOwners, pluginSourcesByLocation));
 
   return [...configIssueRecords, ...records];
 }
@@ -201,6 +211,7 @@ export function reconcileCachedMcps(
   const activeOwners = collectMcpOwners(agents, sources, plugins);
   const activeOwnerIds = new Set(activeOwners.map((owner) => owner.agentId));
   const parseableOwners = activeOwners.filter((owner) => owner.parseable);
+  const pluginSourcesByLocation = buildPluginMcpSourcesByOwner(activeOwners);
 
   return cachedMcps
     .map((mcp) => {
@@ -220,10 +231,35 @@ export function reconcileCachedMcps(
         };
       }
 
-      return classifyMcpLocations(mcp.name, locations, parseableOwners);
+      return classifyMcpLocations(mcp.name, locations, parseableOwners, pluginSourcesByLocation);
     })
     .filter((mcp): mcp is McpRecord => mcp !== null)
     .sort(compareMcps);
+}
+
+function buildPluginMcpSourcesByLocation(results: ParsedMcpConfigResult[]): PluginMcpSourcesByLocation {
+  const sources = new Map<string, PluginSourceRef>();
+  for (const result of results) {
+    if (!result.owner.plugin) continue;
+    for (const entry of result.entries) {
+      sources.set(getPluginMcpLocationKey(entry.location), result.owner.plugin);
+    }
+  }
+  return sources;
+}
+
+function buildPluginMcpSourcesByOwner(owners: McpOwnerRecord[]): PluginMcpSourcesByLocation {
+  const sources = new Map<string, PluginSourceRef>();
+  for (const owner of owners) {
+    if (owner.plugin && owner.configPath) {
+      sources.set(getPluginMcpLocationKey({ agentId: owner.agentId, configPath: owner.configPath }), owner.plugin);
+    }
+  }
+  return sources;
+}
+
+function getPluginMcpLocationKey(location: Pick<McpLocationRecord, 'agentId' | 'configPath'>): string {
+  return `${location.agentId}\u0000${path.normalize(location.configPath)}`;
 }
 
 export function compareMcps(left: McpRecord, right: McpRecord): number {
@@ -358,26 +394,33 @@ function classifyMcpLocations(
   name: string,
   locations: McpLocationRecord[],
   expectedOwners: McpOwnerRecord[],
+  pluginSourcesByLocation: PluginMcpSourcesByLocation,
 ): McpRecord {
   const sortedLocations = [...locations].sort((left, right) =>
     left.configPath.localeCompare(right.configPath) || left.agentId.localeCompare(right.agentId));
+  const operationalLocations = getOperationalLocations(sortedLocations);
   const ownersByAgentId = new Map(expectedOwners.map((owner) => [owner.agentId, owner]));
-  const supportedLocations = sortedLocations.filter((location) => {
+  const supportedLocations = operationalLocations.filter((location) => {
     const owner = ownersByAgentId.get(location.agentId);
     return !owner || isMcpTransportSupportedByOwner(owner, location.transport);
   });
-  const issueLocations = supportedLocations.length > 0 ? supportedLocations : sortedLocations;
+  const issueLocations = supportedLocations.length > 0 ? supportedLocations : operationalLocations;
   const universalLocation = issueLocations.find(isUniversalMcpLocation) ?? null;
   const invalidDefinition = issueLocations.some((location) => (location.invalidDetails?.length ?? 0) > 0);
   const connectionFailed = issueLocations.some((location) => location.connectivity?.status === 'failed');
   const pluginConfigName = getPluginConfigNameForRecord(name, sortedLocations);
-  const presentAgentIds = new Set(sortedLocations
+  const presentAgentIds = new Set(operationalLocations
     .filter((location) =>
       !pluginConfigName
       || location.agentId.startsWith('plugin:')
       || location.configName === pluginConfigName)
     .map((location) => location.agentId));
-  const expectedOwnersForRecord = expectedOwners.filter((owner) => !owner.plugin && !owner.universal);
+  const enabledPluginSources = sortedLocations.flatMap((location) => {
+    const plugin = pluginSourcesByLocation.get(getPluginMcpLocationKey(location));
+    return plugin ? [plugin] : [];
+  });
+  const expectedOwnersForRecord = expectedOwners.filter((owner) =>
+    !owner.plugin && !owner.universal && !isAgentSatisfiedByNativePlugin(owner.family, enabledPluginSources));
   const recordTransport = getMcpRecordTransport(issueLocations);
   const expectedLocations = expectedOwnersForRecord.map((owner) => buildMcpExpectedLocation(owner, recordTransport));
   const missingLocations = universalLocation
@@ -407,6 +450,11 @@ function classifyMcpLocations(
   }
 
   const status = issueReasons.length > 0 ? 'needs-attention' : 'healthy';
+  const managedSourceCandidates = buildMcpManagedSourceCandidates(
+    sortedLocations,
+    pluginSourcesByLocation,
+    universalLocation ? getMcpCoreDefinitionComparisonKey(universalLocation) : null,
+  );
 
   return {
     name,
@@ -416,6 +464,7 @@ function classifyMcpLocations(
     expectedLocations,
     missingLocations,
     issueReasons,
+    managedSourceCandidates,
     signature: status === 'needs-attention'
       ? createMcpSignature(
         name,
@@ -425,6 +474,50 @@ function classifyMcpLocations(
       )
       : undefined,
   };
+}
+
+function buildMcpManagedSourceCandidates(
+  locations: McpLocationRecord[],
+  pluginSourcesByLocation: PluginMcpSourcesByLocation,
+  universalComparisonKey: string | null,
+): McpRecord['managedSourceCandidates'] {
+  const candidates = locations.flatMap((location) => {
+    if (location.canonicalRole !== 'managed-source') return [];
+    const plugin = pluginSourcesByLocation.get(getPluginMcpLocationKey(location));
+    const comparisonKey = getMcpCoreDefinitionComparisonKey(location);
+    if (!plugin || !comparisonKey) return [];
+    return [buildPluginManagedSourceCandidate({
+      path: location.configPath,
+      plugin,
+      comparisonKey,
+      universalComparisonKey,
+      dependencyWarnings: detectPluginDependencyWarnings({
+        text: location.definitionText ?? '',
+        pluginRoot: plugin.rootPath,
+        providerSpecificFields: Object.keys(location.nativeDefinition ?? {}),
+      }),
+    })];
+  });
+  if (candidates.length === 0) return undefined;
+
+  const annotatedCandidates = [...candidates];
+  const candidateIndexesByPlugin = new Map<string, number[]>();
+  for (const [index, candidate] of candidates.entries()) {
+    const key = `${candidate.plugin.host}\u0000${candidate.plugin.pluginId}`;
+    const indexes = candidateIndexesByPlugin.get(key) ?? [];
+    indexes.push(index);
+    candidateIndexesByPlugin.set(key, indexes);
+  }
+  for (const indexes of candidateIndexesByPlugin.values()) {
+    const annotated = annotateComparableVersionEvidence(
+      indexes.map((index) => candidates[index]),
+      (candidate) => candidate.plugin.version,
+    );
+    for (const [groupIndex, candidateIndex] of indexes.entries()) {
+      annotatedCandidates[candidateIndex] = annotated[groupIndex]!;
+    }
+  }
+  return annotatedCandidates;
 }
 
 function hasMcpDefinitionMismatch(
@@ -806,7 +899,7 @@ function buildMcpEntry(name: string, definition: McpDefinitionValue, owner: McpO
             sourcePath: owner.configPath,
             discoveredAt: new Date().toISOString(),
           },
-      canonicalRole: owner.plugin || owner.universal ? 'canonical' : 'materialized-copy',
+      canonicalRole: owner.plugin ? 'managed-source' : owner.universal ? 'canonical' : 'materialized-copy',
       mutability: owner.plugin ? 'read-only-managed' : 'writable',
     },
   };

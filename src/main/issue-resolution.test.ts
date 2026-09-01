@@ -3286,6 +3286,86 @@ describe('resolveInventoryIssue', () => {
     expectVerifiedSignalMapTarget(finalSignalMapChecks, 'sandbox-factory');
   }, 20_000);
 
+  it('promotes a selected plugin MCP config into Universal and compatible non-native agents without mutating the cache', async () => {
+    const paths = await createPaths('skillindex-promote-plugin-mcp-');
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'plugin-mcp', '1.0.0');
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const pluginConfig = `${JSON.stringify({
+      mcpServers: {
+        promoted: {
+          command: 'node',
+          args: ['${CODEX_PLUGIN_ROOT}/servers/promoted.js'],
+        },
+      },
+    }, null, 2)}\n`;
+
+    await writeSkillFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'plugin-mcp', version: '1.0.0' }));
+    await writeSkillFile(pluginConfigPath, pluginConfig);
+    await writeSkillFile(path.join(pluginRoot, 'servers', 'promoted.js'), 'plugin executable');
+    await writeSkillFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."plugin-mcp@openai-curated"]\nenabled = true\n');
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    const resolvedSnapshot = await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'plugin-mcp:promoted',
+        selectedVariantPath: pluginConfigPath,
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+      },
+    );
+
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+    expect(await readFile(universalConfigPath, 'utf8')).toContain('${CODEX_PLUGIN_ROOT}/servers/promoted.js');
+    expect(await readFile(factoryConfigPath, 'utf8')).toContain('${CODEX_PLUGIN_ROOT}/servers/promoted.js');
+    await expect(lstat(path.join(paths.sandboxRoot, '.agents', 'servers', 'promoted.js'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(path.join(paths.sandboxRoot, '.codex', 'servers', 'promoted.js'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(resolvedSnapshot.mcps?.find((mcp) => mcp.name === 'plugin-mcp:promoted')).toMatchObject({
+      status: 'healthy',
+      issueReasons: [],
+    });
+  });
+
+  it('rolls back staged plugin MCP promotion writes when a later target fails', async () => {
+    const paths = await createPaths('skillindex-plugin-mcp-rollback-');
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'rollback-mcp', '1.0.0');
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const pluginConfig = `${JSON.stringify({ mcpServers: { rollback: { command: 'node', args: ['plugin.js'] } } }, null, 2)}\n`;
+
+    await writeSkillFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'rollback-mcp', version: '1.0.0' }));
+    await writeSkillFile(pluginConfigPath, pluginConfig);
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    await expect(resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'rollback-mcp:rollback',
+        selectedVariantPath: pluginConfigPath,
+      },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+        testFailMcpMutationAt: 1,
+      },
+    )).rejects.toThrow('MCP mutation failed at staged target 1.');
+
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+    await expect(readFile(universalConfigPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(factoryConfigPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('resolves the representative parser-shape matrix MCP across sandbox agent config formats', async () => {
     const paths = await createPaths('skillindex-resolve-parser-shape-matrix-');
     const matrixEnv = {
