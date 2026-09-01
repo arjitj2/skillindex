@@ -728,6 +728,8 @@ describe('subagent inventory', () => {
     const pluginPath = path.join(root, 'agents', 'reviewer.md');
     const sandboxConfig = path.join(paths.sandboxRoot, '.claude', 'settings.json');
     const sandboxUniversal = path.join(paths.sandboxRoot, '.agents', 'agents', 'alpha-reviewer.md');
+    const sandboxClaude = path.join(paths.sandboxRoot, '.claude', 'agents', 'alpha-reviewer.md');
+    const sandboxCodex = path.join(paths.sandboxRoot, '.codex', 'agents', 'alpha-reviewer.toml');
     await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use live alpha rules.');
     await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
     await writeRawFile(sandboxConfig, '{"sandbox":"unchanged"}\n');
@@ -741,6 +743,8 @@ describe('subagent inventory', () => {
     expect(await readFile(path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md'), 'utf8')).toContain('Use live alpha rules.');
     expect(await readFile(sandboxConfig, 'utf8')).toBe(sandboxBefore);
     await expect(lstat(sandboxUniversal)).rejects.toThrow();
+    await expect(lstat(sandboxClaude)).rejects.toThrow();
+    await expect(lstat(sandboxCodex)).rejects.toThrow();
   });
 
   it('replaces a stale cache-linked agent subagent through Universal using a surviving managed candidate', async () => {
@@ -757,12 +761,38 @@ describe('subagent inventory', () => {
     await writeRawFile(path.join(currentRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha","version":"1.1.0"}\n');
     await mkdir(path.dirname(claudePath), { recursive: true });
     await symlink(oldPath, claudePath);
+    await rm(oldRoot, { recursive: true, force: true });
+    await expect(realpath(claudePath)).rejects.toThrow();
+
+    const freshBroken = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    const cachedBroken = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(freshBroken?.locations.some((location) => location.path === claudePath)).toBe(true);
+    expect(cachedBroken?.locations.some((location) => location.path === claudePath)).toBe(true);
 
     await resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: currentPath, subagentName: 'alpha:reviewer' }, scanOptions);
 
     expect(await readFile(universalPath, 'utf8')).toContain('Use current rules.');
     expect(await realpath(claudePath)).toBe(await realpath(universalPath));
     expect(await realpath(claudePath)).not.toContain(path.join('.codex', 'plugins', 'cache'));
+  });
+
+  it('does not regroup a broken sanitized link when more than one managed alias matches its filename', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const secondRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha-reviewer', '1.0.0');
+    const stalePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer-one.md');
+
+    await writeMarkdownSubagent(path.join(firstRoot, 'agents', 'reviewer.md'), 'reviewer:one', 'First reviewer.', 'Use first rules.');
+    await writeMarkdownSubagent(path.join(secondRoot, 'agents', 'one.md'), 'one', 'Second reviewer.', 'Use second rules.');
+    await writeRawFile(path.join(firstRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(path.join(secondRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha-reviewer","version":"1.0.0"}\n');
+    await mkdir(path.dirname(stalePath), { recursive: true });
+    await symlink(path.join(firstRoot, 'agents', 'removed.md'), stalePath);
+
+    const inventory = await scanInventory(scanOptions);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha:reviewer:one')?.locations.some((location) => location.path === stalePath)).toBe(false);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha-reviewer:one')?.locations.some((location) => location.path === stalePath)).toBe(false);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha-reviewer-one')?.locations.some((location) => location.path === stalePath)).toBe(true);
   });
 
   it('treats differing plugin subagent versions as managed source candidates instead of a mismatch', async () => {

@@ -263,7 +263,11 @@ function getCachedGroupedSubagentName(
   if (plugin) {
     return `${plugin.pluginName}:${baseName}`;
   }
-  return pluginSubagentAliases.get(getPluginSubagentAliasKey(location.scope, location.path, parsed.name)) ?? baseName;
+  return pluginSubagentAliases.get(getPluginSubagentAliasKey(location.scope, location.path, parsed.name))
+    ?? (location.fileType === 'symlink' && isBrokenSubagentSymlink(location.path)
+      ? getUnambiguousPluginSubagentAliasByFilename(location.scope, location.path, pluginSubagentAliases)
+      : undefined)
+    ?? baseName;
 }
 
 function collectSubagentOwners({
@@ -1391,7 +1395,11 @@ function getGroupedSubagentName(
     return `${owner.plugin.pluginName}:${baseName}`;
   }
 
-  return pluginSubagentAliases.get(getPluginSubagentAliasKey(owner.scope, filePath, parsed.name)) ?? baseName;
+  return pluginSubagentAliases.get(getPluginSubagentAliasKey(owner.scope, filePath, parsed.name))
+    ?? (isBrokenSubagentSymlink(filePath)
+      ? getUnambiguousPluginSubagentAliasByFilename(owner.scope, filePath, pluginSubagentAliases)
+      : undefined)
+    ?? baseName;
 }
 
 function getSubagentNameFromPath(filePath: string): string {
@@ -1412,6 +1420,20 @@ function buildPluginSubagentAliases(plugins: PluginRecord[]): Map<string, string
 
 function getPluginSubagentAliasKey(scope: SkillSourceScope, filePath: string, definitionName: string): string {
   return buildPluginSubagentAliasKey(scope, getSubagentNameFromPath(filePath), definitionName);
+}
+
+function getUnambiguousPluginSubagentAliasByFilename(
+  scope: SkillSourceScope,
+  filePath: string,
+  aliases: Map<string, string>,
+): string | undefined {
+  const prefix = `${scope}:${getSubagentNameFromPath(filePath)}:`;
+  const matches = [...new Set(
+    [...aliases.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, scopedName]) => scopedName),
+  )];
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function buildPluginSubagentAliasKey(scope: SkillSourceScope, fileBaseName: string, definitionName: string): string {
