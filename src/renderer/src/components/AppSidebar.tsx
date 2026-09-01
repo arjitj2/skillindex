@@ -78,6 +78,9 @@ export function AppSidebar({
                 <span className="nav-button-trailing">
                   {item.badge ? <span className={`nav-badge nav-badge--${item.tone}`}>{item.badge}</span> : null}
                   {typeof item.meta === 'number' ? <span className="nav-secondary-count">{item.meta}</span> : null}
+                  {item.tab !== 'home' && typeof item.meta !== 'number' ? (
+                    <span aria-hidden="true" className="nav-secondary-count nav-secondary-count--loading" />
+                  ) : null}
                 </span>
               </button>
             </li>
@@ -138,7 +141,11 @@ export function AppSidebar({
                   <span>Agent Directory</span>
                 </span>
                 <span className="nav-button-trailing">
-                  <span className="nav-secondary-count">{inventorySnapshot?.agentCounts?.installedAgents ?? 0}</span>
+                  {inventorySnapshot ? (
+                    <span className="nav-secondary-count">{inventorySnapshot.agentCounts?.installedAgents ?? 0}</span>
+                  ) : (
+                    <span aria-hidden="true" className="nav-secondary-count nav-secondary-count--loading" />
+                  )}
                 </span>
               </button>
             </li>
@@ -172,7 +179,7 @@ export function AppSidebar({
         <div className={`sidebar-meta${updateButton ? ' sidebar-meta--with-update' : ''}`}>
           <div>
             <p className="sidebar-meta-label">Last scan</p>
-            <p className="sidebar-meta-copy">{inventorySnapshot ? lastScanLabel : 'Not scanned yet'}</p>
+            <p className="sidebar-meta-copy">{inventorySnapshot ? lastScanLabel : 'Scanning...'}</p>
           </div>
           {updateButton ? (
             <button

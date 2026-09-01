@@ -5366,6 +5366,17 @@ body {
   color: var(--text-tertiary);
 }
 
+.nav-secondary-count--loading {
+  align-self: center;
+  width: 14px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background-image: linear-gradient(100deg, #dcdbd5 20%, #efeee9 45%, #dcdbd5 70%);
+  background-size: 220% 100%;
+  animation: inventory-skeleton-shimmer 1.65s ease-in-out infinite;
+}
+
 .sidebar-footer {
   margin-top: auto;
   gap: 12px;
@@ -7188,7 +7199,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .inventory-skeleton__shape,
   .inventory-skeleton__metric,
-  .inventory-skeleton__status-icon {
+  .inventory-skeleton__status-icon,
+  .nav-secondary-count--loading {
     animation: none;
   }
 }
