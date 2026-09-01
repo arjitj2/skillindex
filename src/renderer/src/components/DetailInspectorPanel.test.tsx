@@ -53,6 +53,7 @@ function createPluginBoundMcp(): McpRecord {
       dependencyWarnings: [
         { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
         { kind: 'plugin-contained-path', detail: `References a path inside ${pluginRoot}.` },
+        { kind: 'provider-specific-field', detail: 'Uses provider-specific fields: oauth_resource.' },
       ],
     }],
   };
@@ -109,7 +110,7 @@ describe('DetailInspectorPanel', () => {
     expect(evidence).not.toHaveClass('detail-inspector-panel__badge');
   });
 
-  it('shows selected plugin MCP dependency warnings without disabling promotion', () => {
+  it('shows actionable plugin MCP dependency warnings without duplicating agent-specific settings', () => {
     const mcp = createPluginBoundMcp();
     const model = buildMcpInspectorModel(mcp, {
       selectedProblemKey: 'missing-universal',
@@ -136,6 +137,9 @@ describe('DetailInspectorPanel', () => {
     expect(within(warnings).getByText('References a plugin-root environment variable.')).toBeVisible();
     expect(within(warnings).getByText('Plugin cache path')).toBeVisible();
     expect(within(warnings).getByText(/References a path inside .*plugin-bound-mcp\/1\.0\.0/)).toBeVisible();
+    expect(within(warnings).queryByText('Provider-specific field')).not.toBeInTheDocument();
+    expect(within(warnings).queryByText('Uses provider-specific fields: oauth_resource.')).not.toBeInTheDocument();
+    expect(screen.getByText('Agent-specific settings')).toBeVisible();
     expect(screen.getByRole('button', { name: /Promote to Universal/i })).toBeEnabled();
   });
 

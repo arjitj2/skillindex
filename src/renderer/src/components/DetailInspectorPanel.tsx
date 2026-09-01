@@ -81,6 +81,10 @@ export function DetailInspectorPanel({
     </div>
   );
   const activeProblem = model.activeProblem;
+  const selectedVariantDependencyWarnings = activeProblem.kind === 'variant-resolution'
+    ? (activeProblem.selectedVariant?.dependencyWarnings ?? []).filter((warning) =>
+        warning.kind !== 'provider-specific-field' || !activeProblem.definitionBreakdown)
+    : [];
   const diffStats = activeProblem.kind === 'variant-resolution'
     ? getDiffStats(activeProblem.diffLines)
     : null;
@@ -323,13 +327,13 @@ export function DetailInspectorPanel({
                 ))}
               </div>
 
-              {(activeProblem.selectedVariant?.dependencyWarnings?.length ?? 0) > 0 ? (
+              {selectedVariantDependencyWarnings.length > 0 ? (
                 <div
                   aria-label="Selected plugin candidate dependency warnings"
                   className="detail-inspector-panel__structural-list"
                   role="list"
                 >
-                  {activeProblem.selectedVariant?.dependencyWarnings?.map((warning) => (
+                  {selectedVariantDependencyWarnings.map((warning) => (
                     <div
                       className="detail-inspector-panel__structural-item"
                       key={`${warning.kind}:${warning.detail}`}
