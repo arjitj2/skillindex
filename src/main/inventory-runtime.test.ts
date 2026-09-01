@@ -947,7 +947,7 @@ describe('inventory runtime', () => {
     expect(undoResult.inventorySnapshot?.skills.some((skill) => skill.name === skillName)).toBe(true);
   });
 
-  it('audits Universal decision config writes when resolving plugin-backed skills', async () => {
+  it('audits and undoes plugin Universal skill updates without capturing plugin caches', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-audit-'));
     const paths = resolveSkillIndexPaths({
       env: {
@@ -968,18 +968,34 @@ describe('inventory runtime', () => {
     const skillName = 'example-workflow-kit:handoff-notes-with-static';
     const agentsPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
 
-    await runtime.applyCapabilityAction({
+    const initialized = await runtime.applyCapabilityAction({
       entity: 'skill',
       action: 'choose-universal-version',
       skillName,
       selectedVariantPath: agentsPath,
     });
 
+    const pluginPath = initialized.skills.find((skill) => skill.name === skillName)
+      ?.managedSourceCandidates?.find((candidate) => candidate.relationship === 'differs-from-universal')?.path;
+    expect(pluginPath).toBeDefined();
+    const universalPath = path.join(agentsPath, 'SKILL.md');
+    const beforeUpdate = await readFile(universalPath, 'utf8');
+
+    await runtime.applyCapabilityAction({
+      entity: 'skill',
+      action: 'update-universal-from-plugin',
+      capabilityName: skillName,
+      selectedVariantPath: pluginPath!,
+    });
+
     const [operation] = await runtime.readAuditLog();
     expect(operation).toMatchObject({
       kind: 'capability-action',
     });
-    expect(operation.actions.some((action) => action.path === paths.configFile && action.kind === 'update-app-config')).toBe(true);
+    expect(operation.actions.some((action) => action.path === agentsPath)).toBe(true);
+    expect(operation.actions.some((action) => action.path === pluginPath)).toBe(false);
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(universalPath, 'utf8')).toBe(beforeUpdate);
   });
 
   it('writes sandbox audit operations to the sandbox app-state log', async () => {

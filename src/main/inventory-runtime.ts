@@ -16,6 +16,7 @@ import {
 } from '@main/scan-inventory';
 import { reconcileWatchedSkillInventoryEvent } from '@main/skill-inventory';
 import { addMcpServer as addMcpServerToInventory, resolveInventoryIssue } from '@main/issue-resolution';
+import { isAgentSatisfiedByNativePlugin } from '@main/plugin-managed-sources';
 import type {
   AddMcpServerRequest,
   AddSkillRequest,
@@ -483,18 +484,9 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       }
 
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
+      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
-        buildConfigAuditRequest({
-          kind: 'capability-action',
-          title: buildCapabilityActionAuditTitle(request),
-          summary: 'Skill Index capability metadata changed.',
-          sourceMode: resolveAuditSourceMode(lastScanOptions),
-          entity: request.action === 'choose-universal-version'
-            ? { type: 'skill', name: request.skillName }
-            : { type: request.entity, name: request.capabilityName },
-          paths: resolveAuditPaths(lastScanOptions),
-          includeCache: false,
-        }),
+        buildCapabilityActionAuditRequest(request, beforeSnapshot, lastScanOptions),
         () => applyCapabilityActionToInventory(request, lastScanOptions),
       );
       commitSnapshot(nextSnapshot);
@@ -591,6 +583,123 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       auditSubscribers.clear();
     },
   };
+}
+
+function buildCapabilityActionAuditRequest(
+  request: CapabilityActionRequest,
+  snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
+): AuditOperationRequest {
+  if (request.action === 'choose-universal-version') {
+    const paths = resolveAuditPathsForOptions(options);
+    const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
+    const selectedLocation = skill?.locations.find((location) => location.path === request.selectedVariantPath);
+    if (selectedLocation?.provenance?.kind === 'plugin') {
+      const affectedPaths = getPluginUpdateAffectedPaths({
+        entity: 'skill',
+        action: 'update-universal-from-plugin',
+        capabilityName: request.skillName,
+        selectedVariantPath: request.selectedVariantPath,
+      }, snapshot, options);
+      return {
+        kind: 'capability-action',
+        title: buildCapabilityActionAuditTitle(request),
+        summary: `${affectedPaths.length} ${affectedPaths.length === 1 ? 'path' : 'paths'} changed.`,
+        sourceMode: resolveAuditSourceMode(options),
+        entity: { type: 'skill', name: request.skillName },
+        affectedPaths,
+        undoable: affectedPaths.length > 0,
+      };
+    }
+    return buildConfigAuditRequest({
+      kind: 'capability-action',
+      title: buildCapabilityActionAuditTitle(request),
+      summary: 'Skill Index capability metadata changed.',
+      sourceMode: resolveAuditSourceMode(options),
+      entity: { type: 'skill', name: request.skillName },
+      paths,
+      includeCache: false,
+    });
+  }
+
+  const affectedPaths = getPluginUpdateAffectedPaths(request, snapshot, options);
+  return {
+    kind: 'capability-action',
+    title: buildCapabilityActionAuditTitle(request),
+    summary: `${affectedPaths.length} ${affectedPaths.length === 1 ? 'path' : 'paths'} changed.`,
+    sourceMode: resolveAuditSourceMode(options),
+    entity: { type: request.entity, name: request.capabilityName },
+    affectedPaths,
+    undoable: affectedPaths.length > 0,
+  };
+}
+
+function getPluginUpdateAffectedPaths(
+  request: Extract<CapabilityActionRequest, { action: 'update-universal-from-plugin' }>,
+  snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
+): string[] {
+  if (request.entity === 'mcp') {
+    const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.capabilityName);
+    const selected = mcp?.locations.find((location) => location.configPath === request.selectedVariantPath);
+    return dedupePaths([
+      ...getWritableUniversalMcpConfigPaths(snapshot, selected?.scope, options),
+      ...(mcp?.expectedLocations ?? [])
+        .filter((location) => location.supportStatus !== 'unsupported')
+        .map((location) => location.configPath)
+        .filter((targetPath): targetPath is string => Boolean(targetPath)),
+    ]);
+  }
+  if (request.entity === 'subagent') {
+    const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.capabilityName);
+    if (!subagent) return [];
+    const selected = subagent.locations.find((location) => location.path === request.selectedVariantPath);
+    const canonicalPath = resolveCanonicalSubagentPathForAudit(subagent, request.selectedVariantPath, options);
+    const enabledPlugins = (subagent.managedSourceCandidates ?? [])
+      .filter((candidate) => candidate.plugin.enabled === true)
+      .map((candidate) => candidate.plugin);
+    return dedupePaths([
+      canonicalPath,
+      ...(snapshot.agents ?? []).filter((agent) =>
+        agent.scope === selected?.scope
+        && agent.installState === 'installed'
+        && agent.writable
+        && agent.subagentsLocation?.state === 'available'
+        && Boolean(agent.subagentsLocation.path)
+        && isSubagentFormatRenderableFromUniversal(agent.subagentParserKind ?? 'unknown', 'markdown-frontmatter')
+        && !isAgentSatisfiedByNativePlugin(agent.family, enabledPlugins))
+        .map((agent) => subagent.locations.find((location) =>
+          location.agentId === agent.id && location.canonicalRole !== 'managed-source')?.path
+          ?? path.join(agent.subagentsLocation?.path as string, getSubagentFileNameForFormat({
+            name: subagent.name,
+            format: agent.subagentParserKind ?? 'markdown-frontmatter',
+            family: agent.family,
+            canonicalPath,
+          }))),
+    ]);
+  }
+  const skill = snapshot.skills.find((entry) => entry.name === request.capabilityName);
+  if (!skill) return [];
+  const selected = skill.locations.find((location) => location.path === request.selectedVariantPath);
+  const canonicalSource = snapshot.sources.find((source) =>
+    source.canonical && source.writable && source.scope === selected?.sourceScope);
+  const canonicalPath = canonicalSource ? path.join(canonicalSource.skillsDir, skill.name) : null;
+  const enabledPlugins = (skill.managedSourceCandidates ?? [])
+    .filter((candidate) => candidate.plugin.enabled === true)
+    .map((candidate) => candidate.plugin);
+  return dedupePaths([
+    ...(canonicalPath ? [canonicalPath] : []),
+    ...skill.locations.filter((location) => location.mutability === 'writable' && location.provenance?.kind !== 'plugin')
+      .map((location) => location.path),
+    ...(snapshot.agents ?? []).filter((agent) =>
+      agent.scope === selected?.sourceScope
+      && agent.installState === 'installed'
+      && agent.writable
+      && Boolean(agent.skillsLocation.path)
+      && !isAgentSatisfiedByNativePlugin(agent.family, enabledPlugins))
+      .map((agent) => path.join(agent.skillsLocation.path as string, skill.name)),
+    resolveAuditPathsForOptions(options).configFile,
+  ]);
 }
 
 function buildResolveIssueAuditRequest(

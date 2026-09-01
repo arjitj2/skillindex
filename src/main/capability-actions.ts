@@ -44,6 +44,7 @@ export async function applyCapabilityAction(
   request: CapabilityActionRequest,
   options: CapabilityActionOptions = {},
 ): Promise<SkillInventorySnapshot> {
+  assertCapabilityActionRequest(request);
   const paths = options.paths ?? resolveSkillIndexPaths(options);
   await ensureSkillIndexLayout(paths);
   const snapshot = await scanInventory({
@@ -128,6 +129,29 @@ export async function applyCapabilityAction(
   }
 
   return updatedSnapshot;
+}
+
+function assertCapabilityActionRequest(request: CapabilityActionRequest): void {
+  if (!request || typeof request !== 'object') {
+    throw new Error('Invalid capability action request.');
+  }
+  if (request.action === 'choose-universal-version') {
+    if (request.entity !== 'skill'
+      || typeof request.skillName !== 'string' || !request.skillName.trim()
+      || typeof request.selectedVariantPath !== 'string' || !request.selectedVariantPath.trim()) {
+      throw new Error('Invalid choose Universal version request.');
+    }
+    return;
+  }
+  if (request.action === 'update-universal-from-plugin') {
+    if (!['skill', 'mcp', 'subagent'].includes(request.entity)
+      || typeof request.capabilityName !== 'string' || !request.capabilityName.trim()
+      || typeof request.selectedVariantPath !== 'string' || !request.selectedVariantPath.trim()) {
+      throw new Error('Invalid plugin update request.');
+    }
+    return;
+  }
+  throw new Error(`Unsupported capability action: ${(request as { action?: string }).action ?? 'unknown'}`);
 }
 
 function assertSelectedManagedPluginCandidate(

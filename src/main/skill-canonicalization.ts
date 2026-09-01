@@ -117,12 +117,9 @@ export async function makeSkillCanonical(
     allowDefaultUniversalRoot: selectedSource.provenance?.kind === 'plugin',
   });
   const shouldLinkMissingAgentInstalls = options.linkMissingAgentInstalls !== false;
-  const selectedSkillPluginCandidates = selectedSource.provenance?.kind === 'plugin'
-    ? beforeSnapshot.sources.flatMap((source) =>
-      source.id === selectedSource.sourceId && source.kind === 'plugin' && source.plugin
-        ? [source.plugin]
-        : [])
-    : [];
+  const selectedSkillPluginCandidates = (skill.managedSourceCandidates ?? [])
+    .filter((candidate) => candidate.plugin.enabled === true)
+    .map((candidate) => candidate.plugin);
   const writableLinkedSkillsDirs = new Set(
     !shouldLinkMissingAgentInstalls
       ? []

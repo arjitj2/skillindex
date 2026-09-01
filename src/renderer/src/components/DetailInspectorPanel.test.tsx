@@ -14,6 +14,36 @@ const openPathInEditorMock = vi.fn<SkillIndexDesktopApi['openPathInEditor']>();
 const packagePath = (value: string) => value.replace(/\.md$/, '');
 
 describe('DetailInspectorPanel', () => {
+  it('gives each plugin update candidate a distinct accessible action name', () => {
+    const baseSkill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'healthy-skill');
+    expect(baseSkill).toBeDefined();
+    const skill: SkillRecord = {
+      ...baseSkill!,
+      managedSourceCandidates: ['1.1.0', '1.2.0'].map((version) => ({
+        path: `/Users/tester/.codex/plugins/cache/tools/${version}/skills/healthy-skill`,
+        plugin: { host: 'codex' as const, pluginId: 'tools@official', pluginName: 'tools', version, rootPath: `/Users/tester/.codex/plugins/cache/tools/${version}`, enabled: true as const },
+        evidence: 'enabled-installation' as const,
+        relationship: 'differs-from-universal' as const,
+        dependencyWarnings: [],
+      })),
+    };
+    const onLocationAction = vi.fn();
+    render(<DetailInspectorPanel model={buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex)} onClose={vi.fn()} onLocationAction={onLocationAction} />);
+
+    const actions = screen.getAllByRole('button', { name: /Update Universal from this version:/i });
+    expect(actions).toHaveLength(2);
+    expect(actions.map((action) => action.getAttribute('aria-label'))).toEqual([
+      expect.stringContaining('1.1.0'),
+      expect.stringContaining('1.2.0'),
+    ]);
+    fireEvent.click(actions[1]);
+    expect(onLocationAction).toHaveBeenCalledWith({
+      kind: 'update-universal-from-plugin',
+      label: 'Update Universal from this version',
+      path: '/Users/tester/.codex/plugins/cache/tools/1.2.0/skills/healthy-skill',
+    });
+  });
+
   beforeEach(() => {
     openPathInEditorMock.mockReset();
     openPathInEditorMock.mockResolvedValue(undefined);

@@ -593,6 +593,37 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
   });
 
+  it('does not duplicate into Codex when a different enabled managed candidate supplies the same skill', async () => {
+    const root = await createRoot('skillindex-canonicalize-cross-host-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const claudeRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const codexRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+    const claudePluginPath = path.join(claudeRoot, 'skills', 'foo');
+    const codexPluginPath = path.join(codexRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const codexPath = path.join(homeDir, '.codex', 'skills', 'tools:foo');
+    await Promise.all([
+      mkdir(path.join(claudeRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(path.join(codexRoot, '.codex-plugin'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(claudeRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8'),
+      writeFile(path.join(codexRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.1.0' }), 'utf8'),
+      writeSkillFile(path.join(claudePluginPath, 'SKILL.md'), '# Claude source\n'),
+      writeSkillFile(path.join(codexPluginPath, 'SKILL.md'), '# Codex source\n'),
+      writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'tools@official': true } })),
+      writeSkillFile(path.join(homeDir, '.codex', 'config.toml'), '[plugins."tools@official"]\nenabled = true\n'),
+    ]);
+
+    await makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: claudePluginPath }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toContain('Claude source');
+    await expect(lstat(codexPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does materialize a selected plugin into Claude when only an unrelated Claude plugin is enabled', async () => {
     const root = await createRoot('skillindex-canonicalize-exact-native-plugin-');
     const homeDir = await createRoot('skillindex-live-home-');

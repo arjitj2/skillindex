@@ -16,6 +16,21 @@ import type { McpConnectivityRecord } from '@shared/contracts';
 import { readSkillIndexConfig, resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 describe('resolveInventoryIssue', () => {
+  it('rejects malformed plugin update actions before scanning or auditing', async () => {
+    await expect(applyCapabilityAction({
+      entity: 'unknown',
+      action: 'update-universal-from-plugin',
+      capabilityName: 'demo',
+      selectedVariantPath: '/tmp/demo',
+    } as never)).rejects.toThrow('Invalid plugin update request.');
+    await expect(applyCapabilityAction({
+      entity: 'skill',
+      action: 'update-universal-from-plugin',
+      capabilityName: '',
+      selectedVariantPath: '/tmp/demo',
+    } as never)).rejects.toThrow('Invalid plugin update request.');
+  });
+
   it('rejects stale skill and MCP resolution requests instead of silently no-oping', async () => {
     const paths = await createPaths('skillindex-resolve-stale-request-');
     const skillDir = path.join(paths.sandboxAgentsSkillsDir, 'healthy-skill');

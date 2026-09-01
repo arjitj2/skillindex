@@ -201,6 +201,7 @@ export function DetailInspectorPanel({
                     ))}
                   </span>
                   <button
+                    aria-label={`${candidate.action.label}: ${candidate.evidenceLabel}, ${formatDisplayPath(candidate.path)}`}
                     className="detail-inspector-panel__location-action"
                     disabled={isLocationActionPending}
                     type="button"
