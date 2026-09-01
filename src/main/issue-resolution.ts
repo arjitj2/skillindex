@@ -76,6 +76,8 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   testFailSubagentMutationAt?: number;
   /** Test-only deterministic failure point for subagent rendering. */
   testFailSubagentRenderAt?: number;
+  /** Test-only deterministic failure point while staging subagent mutations. */
+  testFailSubagentStageAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -812,13 +814,10 @@ async function resolveSubagentIssueIfCurrent(
       const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
         allowInvalid: true,
       });
-      const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
-        ? null
-        : createCanonicalSubagentPackageForPromotion(subagent, snapshot, selectedLocation, options.paths);
-      const canonicalPath = canonicalPackage
-        ? canonicalPackage.path
-        : await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths);
-      if (canonicalPackage) {
+      if (selectedLocation.canonicalRole === 'managed-source') {
+        const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
+          ? createInvalidCanonicalSubagentPackage(subagent, selectedLocation, options.paths)
+          : createCanonicalSubagentPackageForPromotion(subagent, snapshot, selectedLocation, options.paths);
         const targets = collectWritableSubagentTargetsForNewCanonical(
           snapshot,
           subagent,
@@ -830,10 +829,18 @@ async function resolveSubagentIssueIfCurrent(
           selectedLocation,
           snapshot,
           subagent,
-          targets: dedupeSubagentTargets(targets),
+          targets: isInvalidSubagentLocation(selectedLocation) ? [] : dedupeSubagentTargets(targets),
           options,
+          rawCanonicalContent: isInvalidSubagentLocation(selectedLocation)
+            ? await readFile(selectedLocation.path, 'utf8')
+            : undefined,
         });
       } else {
+        const canonicalPath = isInvalidSubagentLocation(selectedLocation)
+          ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths)
+          : (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+            preferExisting: false,
+          })).path;
         const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
         await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
           replaceWithCanonicalSymlink(target.path, canonicalPath)));
@@ -987,6 +994,18 @@ function createCanonicalSubagentPackageForPromotion(
   };
 }
 
+function createInvalidCanonicalSubagentPackage(
+  subagent: SubagentRecord,
+  selectedLocation: SubagentLocationRecord,
+  paths: SkillIndexPaths,
+): CanonicalSubagentPackage {
+  return {
+    path: resolveCanonicalSubagentPath(subagent, selectedLocation, paths),
+    definition: { name: '', description: null, prompt: '', extras: {} },
+    allowInvalid: true,
+  };
+}
+
 async function executeSubagentPromotionTransaction({
   canonicalPackage,
   selectedLocation,
@@ -994,6 +1013,7 @@ async function executeSubagentPromotionTransaction({
   subagent,
   targets,
   options,
+  rawCanonicalContent,
 }: {
   canonicalPackage: CanonicalSubagentPackage;
   selectedLocation: SubagentLocationRecord;
@@ -1001,12 +1021,14 @@ async function executeSubagentPromotionTransaction({
   subagent: SubagentRecord;
   targets: SubagentWriteTarget[];
   options: ResolveIssueOptions & { paths: SkillIndexPaths };
+  rawCanonicalContent?: string;
 }): Promise<void> {
   const mutations = buildSubagentPromotionMutations(
     canonicalPackage,
     snapshot,
     targets,
     options,
+    rawCanonicalContent,
   );
   await assertSubagentPromotionMutationPlan(mutations, canonicalPackage, selectedLocation, snapshot, subagent);
   await applyStagedSubagentMutations(mutations, options);
@@ -1017,10 +1039,11 @@ function buildSubagentPromotionMutations(
   snapshot: SkillInventorySnapshot,
   targets: SubagentWriteTarget[],
   options: ResolveIssueOptions,
+  rawCanonicalContent?: string,
 ): StagedSubagentMutation[] {
   const mutations: StagedSubagentMutation[] = [{
     path: canonicalPackage.path,
-    rendered: renderPortableSubagentDefinition(canonicalPackage.definition, 'markdown-frontmatter'),
+    rendered: rawCanonicalContent ?? renderPortableSubagentDefinition(canonicalPackage.definition, 'markdown-frontmatter'),
   }];
   for (const [index, target] of targets.entries()) {
     if (options.testFailSubagentRenderAt === index + 1) {
@@ -1060,6 +1083,7 @@ async function assertSubagentPromotionMutationPlan(
   subagent: SubagentRecord,
 ): Promise<void> {
   const allowedExistingPaths = new Set(subagent.locations.map((location) => path.normalize(location.path)));
+  const resolvedDestinations = new Set<string>();
   for (const mutation of mutations) {
     await assertSafeSubagentMutationDestination(mutation.path, selectedLocation.scope, snapshot, canonicalPackage.path);
     const exists = await lstat(mutation.path).then(() => true).catch((error: NodeJS.ErrnoException) => {
@@ -1069,6 +1093,14 @@ async function assertSubagentPromotionMutationPlan(
     if (exists && !allowedExistingPaths.has(path.normalize(mutation.path))) {
       throw new Error(`Subagent destination collision: ${mutation.path} belongs to a different subagent.`);
     }
+    const resolvedDestination = path.join(
+      await resolveSubagentNearestExistingParent(path.dirname(mutation.path)),
+      path.basename(mutation.path),
+    );
+    if (resolvedDestinations.has(path.normalize(resolvedDestination))) {
+      throw new Error('Subagent mutation plan contains overlapping destination aliases.');
+    }
+    resolvedDestinations.add(path.normalize(resolvedDestination));
   }
 }
 
@@ -1096,9 +1128,6 @@ async function assertSafeSubagentMutationDestination(
   if (pluginRoots.concat(resolvedPluginRoots).some((root) => isSubagentPathContainedBy(root, destinationPath)
     || isSubagentPathContainedBy(root, resolvedParent))) {
     throw new Error('Subagent mutations cannot write into a plugin-managed cache path.');
-  }
-  if (destinationPath !== canonicalPath && path.normalize(destinationPath) === path.normalize(canonicalPath)) {
-    throw new Error('Subagent mutation plan contains overlapping destination aliases.');
   }
 }
 
@@ -1132,14 +1161,23 @@ async function applyStagedSubagentMutations(
   mutations: StagedSubagentMutation[],
   options: ResolveIssueOptions,
 ): Promise<void> {
-  const staged = await Promise.all(mutations.map(async (mutation) => {
-    const parent = path.dirname(mutation.path);
-    await mkdir(parent, { recursive: true });
-    const stagePath = path.join(parent, `.${path.basename(mutation.path)}.stage-${randomUUID()}`);
-    if (mutation.symlinkTarget) await symlink(mutation.symlinkTarget, stagePath);
-    else await writeFile(stagePath, mutation.rendered ?? '', 'utf8');
-    return { ...mutation, stagePath, backupPath: path.join(parent, `.${path.basename(mutation.path)}.backup-${randomUUID()}`), installed: false, backedUp: false };
-  }));
+  const staged: Array<StagedSubagentMutation & { stagePath: string; backupPath: string; installed: boolean; backedUp: boolean }> = [];
+  try {
+    for (const [index, mutation] of mutations.entries()) {
+      const parent = path.dirname(mutation.path);
+      await mkdir(parent, { recursive: true });
+      const stagePath = path.join(parent, `.${path.basename(mutation.path)}.stage-${randomUUID()}`);
+      if (options.testFailSubagentStageAt === index + 1) {
+        throw new Error(`Injected subagent stage failure at ${index + 1}.`);
+      }
+      if (mutation.symlinkTarget) await symlink(mutation.symlinkTarget, stagePath);
+      else await writeFile(stagePath, mutation.rendered ?? '', 'utf8');
+      staged.push({ ...mutation, stagePath, backupPath: path.join(parent, `.${path.basename(mutation.path)}.backup-${randomUUID()}`), installed: false, backedUp: false });
+    }
+  } catch (error) {
+    await Promise.all(staged.map((mutation) => rm(mutation.stagePath, { recursive: true, force: true }).catch(() => undefined)));
+    throw error;
+  }
   try {
     for (const [index, mutation] of staged.entries()) {
       mutation.backedUp = await rename(mutation.path, mutation.backupPath).then(() => true).catch((error: NodeJS.ErrnoException) => {
