@@ -187,8 +187,9 @@ export function registerIpcHandlers(): void {
   });
   if (isDevToolsEnabled()) {
     registerIpcHandler(IPC_CHANNELS.seedRepresentativeFixtures, async () => {
-      const { seedRepresentativeFixtures } = await import('@main/sandbox-fixtures');
+      const { assertSandboxRootSafeForReset, seedRepresentativeFixtures } = await import('@main/sandbox-fixtures');
       const paths = resolveSandboxSkillIndexPaths();
+      await assertSandboxRootSafeForReset(paths, { env: process.env });
       const result = await runAuditedIpcOperation({
         kind: 'seed-representative-fixtures',
         title: 'Reset representative sandbox',
@@ -197,7 +198,7 @@ export function registerIpcHandlers(): void {
         entity: { type: 'sandbox' },
         affectedPaths: [paths.sandboxRoot, paths.configFile],
         undoable: false,
-      }, () => seedRepresentativeFixtures({ env: process.env }), paths);
+      }, () => seedRepresentativeFixtures({ paths, env: process.env }), paths);
       return result;
     });
     registerIpcHandler(IPC_CHANNELS.setInventoryMode, (_event, mode: InventorySourceMode) => setInventoryMode(mode));

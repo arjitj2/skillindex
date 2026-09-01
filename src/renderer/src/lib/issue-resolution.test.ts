@@ -850,7 +850,7 @@ describe('issue resolution request builder', () => {
     });
   });
 
-  it('allows repairing Universal links to a read-only plugin skill', () => {
+  it('requires exporting a read-only plugin skill before repairing its links', () => {
     const skill: SkillRecord = {
       ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'plugin-readonly-skill')!,
       name: 'tools:foo',
@@ -924,17 +924,12 @@ describe('issue resolution request builder', () => {
     }, agentIndex);
 
     expect(getSkillResolveActionState(skill, model, pluginSourceIndex)).toEqual({
-      disabledReason: null,
-      request: {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'tools:foo',
-        selectedVariantPath: '/Users/tester/.claude/plugins/cache/official/tools/1.0.0/skills/foo',
-      },
+      disabledReason: 'Choose a Universal version first. Symlink repairs need a Universal target.',
+      request: null,
     });
   });
 
-  it('selects a deterministic plugin location when the same plugin skill exists in multiple hosts', () => {
+  it('does not use a deterministic plugin location as a Universal symlink repair target', () => {
     const skill: SkillRecord = {
       ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'plugin-readonly-skill')!,
       name: 'example-workflow-kit:idea-shaping',
@@ -1011,13 +1006,8 @@ describe('issue resolution request builder', () => {
     }, agentIndex);
 
     expect(getSkillResolveActionState(skill, model, sourceIndex)).toEqual({
-      disabledReason: null,
-      request: {
-        entity: 'skill',
-        issue: 'missing-symlinks',
-        skillName: 'example-workflow-kit:idea-shaping',
-        selectedVariantPath: '/Users/tester/.claude/plugins/cache/sandbox-gallery/example-workflow-kit/5.1.0/skills/idea-shaping',
-      },
+      disabledReason: 'Choose a Universal version first. Symlink repairs need a Universal target.',
+      request: null,
     });
   });
 

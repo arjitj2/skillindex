@@ -1,14 +1,15 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { applyCapabilityAction } from '@main/capability-actions';
 import { resolveInventoryIssue } from '@main/issue-resolution';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
-import { dismissDrift, scanInventory } from '@main/scan-inventory';
+import { dismissDrift, readCachedInventory, scanInventory } from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
   renderPortableSubagentDefinition,
@@ -527,7 +528,524 @@ describe('subagent inventory', () => {
     expect(universalDefinition).not.toContain('build-ios-apps:openai');
   });
 
-  it('repairs legacy plugin subagent Universal files without keeping the scoped name in frontmatter', async () => {
+  it('promotes a plugin subagent into Universal and all non-native writable agents in one action', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(codexPath, [
+      'name = "reviewer"',
+      'description = "Local Codex reviewer."',
+      'developer_instructions = "Use local rules."',
+      'color = "blue"',
+      '',
+    ].join('\n'));
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }));
+
+    const repaired = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'alpha:reviewer',
+    }, scanOptions);
+
+    expect(await readFile(universalPath, 'utf8')).toContain('Use alpha rules.');
+    expect(await readFile(codexPath, 'utf8')).toContain('developer_instructions = "Use alpha rules."');
+    expect(await readFile(codexPath, 'utf8')).toContain('color = "blue"');
+    expect((await lstat(codexPath)).isSymbolicLink()).toBe(false);
+    await expect(lstat(claudePath)).rejects.toThrow();
+    expect(await realpath(universalPath)).not.toContain(path.join('.claude', 'plugins', 'cache'));
+    expect(repaired.subagents?.find((subagent) => subagent.name === 'alpha:reviewer')?.status).toBe('healthy');
+  });
+
+  it('rejects a plugin promotion collision before changing an unrelated Universal subagent', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const victimPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml');
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(victimPath, 'victim', 'Unrelated victim.', 'Leave this unchanged.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    const victimBefore = await readFile(victimPath, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'alpha:reviewer',
+    }, scanOptions)).rejects.toThrow(/destination collision/i);
+
+    expect(await readFile(victimPath, 'utf8')).toBe(victimBefore);
+    await expect(lstat(codexPath)).rejects.toThrow();
+  });
+
+  it('rolls back every staged plugin promotion mutation after an injected write failure', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml');
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeCodexSubagent(codexPath, 'reviewer', 'Old Codex reviewer.', 'Keep this content.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    const codexBefore = await readFile(codexPath, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'alpha:reviewer',
+    }, { ...scanOptions, testFailSubagentMutationAt: 2 })).rejects.toThrow(/Injected subagent mutation failure at 2/i);
+
+    await expect(lstat(universalPath)).rejects.toThrow();
+    expect(await readFile(codexPath, 'utf8')).toBe(codexBefore);
+  });
+
+  it('cleans a partially created stage file before any plugin promotion mutation', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const canonicalDirectory = path.dirname(universalPath);
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await expect(resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'alpha:reviewer',
+    }, { ...scanOptions, testFailSubagentStageAfterCreateAt: 1 })).rejects.toThrow(/post-create stage failure/i);
+
+    await expect(lstat(universalPath)).rejects.toThrow();
+    expect((await readdir(canonicalDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+  });
+
+  it('keeps non-plugin missing-universal resolution isolated from differing agent definitions', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'planner.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'planner.toml');
+    await writeMarkdownSubagent(claudePath, 'planner', 'Claude planner.', 'Use Claude rules.');
+    await writeCodexSubagent(codexPath, 'planner', 'Codex planner.', 'Keep Codex rules.');
+    const codexBefore = await readFile(codexPath, 'utf8');
+
+    await resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: claudePath, subagentName: 'planner' }, scanOptions);
+
+    expect(await readFile(codexPath, 'utf8')).toBe(codexBefore);
+    expect(await readFile(path.join(homeDir, '.agents', 'agents', 'planner.md'), 'utf8')).toContain('Use Claude rules.');
+  });
+
+  it('rejects an invalid managed plugin collision without changing the victim or agents', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const victimPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml');
+    await writeRawFile(pluginPath, '---\nname: reviewer\n---\nMissing description.\n');
+    await writeMarkdownSubagent(victimPath, 'victim', 'Victim.', 'Do not touch.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    const before = await readFile(victimPath, 'utf8');
+
+    await expect(resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: pluginPath, subagentName: 'alpha:reviewer' }, scanOptions)).rejects.toThrow(/collision/i);
+    expect(await readFile(victimPath, 'utf8')).toBe(before);
+    await expect(lstat(codexPath)).rejects.toThrow();
+  });
+
+  it('rejects Universal and agent destination aliases before mutation', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalDir = path.join(homeDir, '.agents', 'agents');
+    const claudeDir = path.join(homeDir, '.claude', 'agents');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(root, '.codex-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await mkdir(universalDir, { recursive: true });
+    await rm(claudeDir, { recursive: true, force: true });
+    await symlink(universalDir, claudeDir);
+
+    await expect(resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: pluginPath, subagentName: 'alpha:reviewer' }, scanOptions)).rejects.toThrow(/overlapping destination aliases/i);
+    await expect(lstat(path.join(universalDir, 'alpha-reviewer.md'))).rejects.toThrow();
+  });
+
+  it('leaves every target unchanged when managed promotion rendering fails before staging', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeCodexSubagent(codexPath, 'reviewer', 'Existing.', 'Keep me.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    const before = await readFile(codexPath, 'utf8');
+
+    await expect(resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: pluginPath, subagentName: 'alpha:reviewer' }, { ...scanOptions, testFailSubagentRenderAt: 1 })).rejects.toThrow(/render failure/i);
+    expect(await readFile(codexPath, 'utf8')).toBe(before);
+    await expect(lstat(path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md'))).rejects.toThrow();
+  });
+
+  it('rejects a Universal root that resolves into an unindexed plugin cache', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const sourceRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const unsafeRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'stale', 'agents');
+    const pluginPath = path.join(sourceRoot, 'agents', 'reviewer.md');
+    const universalRoot = path.join(homeDir, '.agents', 'agents');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(sourceRoot, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await mkdir(unsafeRoot, { recursive: true });
+    await rm(universalRoot, { recursive: true, force: true });
+    await mkdir(path.dirname(universalRoot), { recursive: true });
+    await symlink(unsafeRoot, universalRoot);
+
+    await expect(resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: pluginPath, subagentName: 'alpha:reviewer' }, scanOptions)).rejects.toThrow(/plugin-managed cache/i);
+    expect(await readdir(unsafeRoot)).toEqual([]);
+  });
+
+  it('rejects an agent root that resolves into an unindexed plugin cache', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const sourceRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const unsafeRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'stale', 'agents');
+    const pluginPath = path.join(sourceRoot, 'agents', 'reviewer.md');
+    const codexAgents = path.join(homeDir, '.codex', 'agents');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(sourceRoot, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await mkdir(unsafeRoot, { recursive: true });
+    await rm(codexAgents, { recursive: true, force: true });
+    await symlink(unsafeRoot, codexAgents);
+
+    await expect(resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: pluginPath, subagentName: 'alpha:reviewer' }, scanOptions)).rejects.toThrow(/plugin-managed cache/i);
+    expect(await readdir(unsafeRoot)).toEqual([]);
+  });
+
+  it('promotes a live managed plugin subagent without mutating the sandbox scope', async () => {
+    const { homeDir, paths, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const sandboxConfig = path.join(paths.sandboxRoot, '.claude', 'settings.json');
+    const sandboxUniversal = path.join(paths.sandboxRoot, '.agents', 'agents', 'alpha-reviewer.md');
+    const sandboxClaude = path.join(paths.sandboxRoot, '.claude', 'agents', 'alpha-reviewer.md');
+    const sandboxCodex = path.join(paths.sandboxRoot, '.codex', 'agents', 'alpha-reviewer.toml');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use live alpha rules.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(sandboxConfig, '{"sandbox":"unchanged"}\n');
+    const sandboxBefore = await readFile(sandboxConfig, 'utf8');
+
+    await resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: pluginPath, subagentName: 'alpha:reviewer' }, {
+      ...scanOptions,
+      includeSandboxSources: true,
+    });
+
+    expect(await readFile(path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md'), 'utf8')).toContain('Use live alpha rules.');
+    expect(await readFile(sandboxConfig, 'utf8')).toBe(sandboxBefore);
+    await expect(lstat(sandboxUniversal)).rejects.toThrow();
+    await expect(lstat(sandboxClaude)).rejects.toThrow();
+    await expect(lstat(sandboxCodex)).rejects.toThrow();
+  });
+
+  it('replaces a stale cache-linked agent subagent through Universal using a surviving managed candidate', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const oldRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const currentRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha', '1.1.0');
+    const oldPath = path.join(oldRoot, 'agents', 'reviewer.md');
+    const currentPath = path.join(currentRoot, 'agents', 'reviewer.md');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(oldPath, 'reviewer', 'Old reviewer.', 'Old cache rules.');
+    await writeMarkdownSubagent(currentPath, 'reviewer', 'Current reviewer.', 'Use current rules.');
+    await writeRawFile(path.join(currentRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha","version":"1.1.0"}\n');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(oldPath, claudePath);
+    await rm(oldRoot, { recursive: true, force: true });
+    await expect(realpath(claudePath)).rejects.toThrow();
+
+    const freshBroken = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    const cachedBroken = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(freshBroken?.locations.some((location) => location.path === claudePath)).toBe(true);
+    expect(cachedBroken?.locations.some((location) => location.path === claudePath)).toBe(true);
+
+    await resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', selectedVariantPath: currentPath, subagentName: 'alpha:reviewer' }, scanOptions);
+
+    expect(await readFile(universalPath, 'utf8')).toContain('Use current rules.');
+    expect(await realpath(claudePath)).toBe(await realpath(universalPath));
+    expect(await realpath(claudePath)).not.toContain(path.join('.codex', 'plugins', 'cache'));
+  });
+
+  it('does not regroup a broken sanitized link when more than one managed alias matches its filename', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const secondRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'alpha-reviewer', '1.0.0');
+    const stalePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer-one.md');
+
+    await writeMarkdownSubagent(path.join(firstRoot, 'agents', 'reviewer.md'), 'reviewer:one', 'First reviewer.', 'Use first rules.');
+    await writeMarkdownSubagent(path.join(secondRoot, 'agents', 'one.md'), 'one', 'Second reviewer.', 'Use second rules.');
+    await writeRawFile(path.join(firstRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(path.join(secondRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha-reviewer","version":"1.0.0"}\n');
+    await mkdir(path.dirname(stalePath), { recursive: true });
+    await symlink(path.join(firstRoot, 'agents', 'removed.md'), stalePath);
+
+    const inventory = await scanInventory(scanOptions);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha:reviewer:one')?.locations.some((location) => location.path === stalePath)).toBe(false);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha-reviewer:one')?.locations.some((location) => location.path === stalePath)).toBe(false);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha-reviewer-one')?.locations.some((location) => location.path === stalePath)).toBe(true);
+  });
+
+  it('does not regroup a broken link when managed identities collide on the exact sanitized alias key', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'first', '1.0.0');
+    const secondRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'second', '1.0.0');
+    const stalePath = path.join(homeDir, '.claude', 'agents', 'alpha-beta-reviewer.md');
+
+    await writeMarkdownSubagent(path.join(firstRoot, 'agents', 'reviewer.md'), 'reviewer', 'First reviewer.', 'Use first rules.');
+    await writeMarkdownSubagent(path.join(secondRoot, 'agents', 'reviewer.md'), 'reviewer', 'Second reviewer.', 'Use second rules.');
+    await writeRawFile(path.join(firstRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha:beta","version":"1.0.0"}\n');
+    await writeRawFile(path.join(secondRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha-beta","version":"1.0.0"}\n');
+    await mkdir(path.dirname(stalePath), { recursive: true });
+    await symlink(path.join(firstRoot, 'agents', 'removed.md'), stalePath);
+
+    const fresh = await scanInventory(scanOptions);
+    const cached = await readCachedInventory(scanOptions);
+    for (const inventory of [fresh, cached]) {
+      expect(inventory?.subagents?.find((subagent) => subagent.name === 'alpha:beta:reviewer')?.locations.some((location) => location.path === stalePath)).toBe(false);
+      expect(inventory?.subagents?.find((subagent) => subagent.name === 'alpha-beta:reviewer')?.locations.some((location) => location.path === stalePath)).toBe(false);
+      expect(inventory?.subagents?.find((subagent) => subagent.name === 'alpha-beta-reviewer')?.locations.some((location) => location.path === stalePath)).toBe(true);
+    }
+  });
+
+  it('treats differing plugin subagent versions as managed source candidates instead of a mismatch', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const roots = [
+      path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0'),
+      path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.1.0'),
+    ];
+
+    for (const [index, root] of roots.entries()) {
+      const version = `1.${index}.0`;
+      await writeMarkdownSubagent(
+        path.join(root, 'agents', 'reviewer.md'),
+        'reviewer',
+        `Plugin reviewer ${version}.`,
+        `Use plugin revision ${version}.`,
+      );
+      await writeRawFile(path.join(root, '.codex-plugin', 'plugin.json'), `${JSON.stringify({ name: 'tools', version })}\n`);
+    }
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+
+    expect(reviewer?.issueReasons).toEqual(['missing-universal']);
+    expect(reviewer?.locations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ canonical: false, canonicalRole: 'managed-source', mutability: 'read-only-managed' }),
+    ]));
+    expect(reviewer?.managedSourceCandidates).toHaveLength(2);
+    expect(reviewer?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')).toMatchObject({
+      evidence: 'cached-unknown',
+      relationship: 'universal-missing',
+    });
+
+    const cached = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+    expect(cached?.issueReasons).toEqual(['missing-universal']);
+    expect(cached?.managedSourceCandidates).toHaveLength(2);
+
+    const oldPath = path.join(roots[0], 'agents', 'reviewer.md');
+    const newPath = path.join(roots[1], 'agents', 'reviewer.md');
+    await resolveInventoryIssue({
+      entity: 'subagent', issue: 'missing-universal', selectedVariantPath: oldPath, subagentName: 'tools:reviewer',
+    }, scanOptions);
+    const oldBefore = await readFile(oldPath, 'utf8');
+    const newBefore = await readFile(newPath, 'utf8');
+    const updated = await applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer', selectedVariantPath: newPath,
+    }, scanOptions);
+    expect(await readFile(path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md'), 'utf8')).toContain('1.1.0');
+    expect(await readFile(path.join(homeDir, '.codex', 'agents', 'tools-reviewer.toml'), 'utf8')).toContain('1.1.0');
+    expect(await readFile(oldPath, 'utf8')).toBe(oldBefore);
+    expect(await readFile(newPath, 'utf8')).toBe(newBefore);
+    expect(updated.subagents?.find((subagent) => subagent.name === 'tools:reviewer')?.managedSourceCandidates
+      ?.find((candidate) => candidate.path === newPath)?.relationship).toBe('matches-universal');
+
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md');
+    const universalBeforeRollback = await readFile(universalPath, 'utf8');
+    await expect(applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer', selectedVariantPath: oldPath,
+    }, { ...scanOptions, testFailSubagentStageAt: 1 } as never)).rejects.toThrow(/stage failure/i);
+    expect(await readFile(universalPath, 'utf8')).toBe(universalBeforeRollback);
+    expect(await readFile(oldPath, 'utf8')).toBe(oldBefore);
+    expect(await readFile(newPath, 'utf8')).toBe(newBefore);
+    await expect(applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer', selectedVariantPath: '/foreign/reviewer.md',
+    }, scanOptions)).rejects.toThrow(/current readable plugin update candidate/i);
+    expect(await readFile(universalPath, 'utf8')).toBe(universalBeforeRollback);
+  });
+
+  it('reconciles cached plugin subagent enablement and removed assets exactly like a fresh scan', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+
+    const initial = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(initial?.managedSourceCandidates?.[0]?.evidence).toBe('cached-unknown');
+
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }));
+    const cachedEnabled = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    const freshEnabled = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(cachedEnabled?.managedSourceCandidates?.[0]?.evidence).toBe('enabled-installation');
+    expect(cachedEnabled?.expectedLocations?.some((location) => location.agentLabel === 'Claude Code')).toBe(false);
+    expect(cachedEnabled?.managedSourceCandidates).toEqual(freshEnabled?.managedSourceCandidates);
+    expect(cachedEnabled?.missingLocations).toEqual(freshEnabled?.missingLocations);
+
+    await rm(pluginPath);
+    const cachedRemoved = (await readCachedInventory(scanOptions))?.subagents ?? [];
+    const freshRemoved = (await scanInventory(scanOptions)).subagents ?? [];
+    expect(cachedRemoved.find((subagent) => subagent.name === 'alpha:reviewer')).toBeUndefined();
+    expect(cachedRemoved.find((subagent) => subagent.name === 'reviewer')).toMatchObject({
+      locations: [expect.objectContaining({ path: universalPath, canonical: true })],
+      managedSourceCandidates: undefined,
+    });
+    expect(cachedRemoved).toEqual(freshRemoved);
+  });
+
+  it('keeps cached namespaced Markdown materializations grouped with their plugin source', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(universalPath, claudePath);
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+
+    const fresh = (await scanInventory(scanOptions)).subagents ?? [];
+    const cached = (await readCachedInventory(scanOptions))?.subagents ?? [];
+
+    expect(cached.find((subagent) => subagent.name === 'alpha:reviewer')?.locations)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ path: claudePath, fileType: 'symlink' })]));
+    expect(cached.find((subagent) => subagent.name === 'alpha-reviewer')).toBeUndefined();
+    expect(cached).toEqual(fresh);
+  });
+
+  it('classifies a plugin source that differs from Universal as a definition mismatch', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md');
+    const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const secondRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+    const claudePath = path.join(homeDir, '.claude', 'agents', 'tools-reviewer.md');
+    const codexPath = path.join(homeDir, '.codex', 'agents', 'tools-reviewer.toml');
+
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use revision one.');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(universalPath, claudePath);
+    await writeCodexSubagent(codexPath, 'reviewer', 'Plugin reviewer.', 'Use revision one.');
+    await writeMarkdownSubagent(path.join(firstRoot, 'agents', 'reviewer.md'), 'reviewer', 'Plugin reviewer.', 'Use revision one.');
+    await writeMarkdownSubagent(path.join(secondRoot, 'agents', 'reviewer.md'), 'reviewer', 'Plugin reviewer.', 'Use revision two.');
+    await writeRawFile(path.join(firstRoot, '.codex-plugin', 'plugin.json'), '{"name":"tools","version":"1.0.0"}\n');
+    await writeRawFile(path.join(secondRoot, '.codex-plugin', 'plugin.json'), '{"name":"tools","version":"1.1.0"}\n');
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+
+    expect(reviewer).toMatchObject({ status: 'needs-attention', issueReasons: ['definition-mismatch'] });
+    expect(reviewer?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+    }))).toEqual(expect.arrayContaining([
+      { version: '1.0.0', relationship: 'matches-universal' },
+      { version: '1.1.0', relationship: 'differs-from-universal' },
+    ]));
+  });
+
+  it('reports managed plugin dependency warnings without turning them into drift', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+
+    await writeRawFile(pluginPath, [
+      '---',
+      'name: reviewer',
+      'description: Plugin reviewer.',
+      'color: blue',
+      '---',
+      '$CODEX_PLUGIN_ROOT/bin/review',
+      `${root}/assets/rules.json`,
+      '',
+    ].join('\n'));
+    await writeRawFile(path.join(root, '.codex-plugin', 'plugin.json'), '{"name":"tools","version":"1.0.0"}\n');
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+    expect(reviewer?.issueReasons).toEqual(['missing-universal']);
+    expect(reviewer?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind)).toEqual([
+      'plugin-root-variable',
+      'plugin-contained-path',
+      'provider-specific-field',
+    ]);
+  });
+
+  it('uses only the exact enabled plugin subagent to satisfy its native provider', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const alphaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const betaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'beta', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+
+    await writeMarkdownSubagent(universalPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(path.join(alphaRoot, 'agents', 'reviewer.md'), 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeMarkdownSubagent(path.join(betaRoot, 'agents', 'reviewer.md'), 'reviewer', 'Other reviewer.', 'Use beta rules.');
+    await writeRawFile(path.join(alphaRoot, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await writeRawFile(path.join(betaRoot, '.claude-plugin', 'plugin.json'), '{"name":"beta","version":"1.0.0"}\n');
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }));
+
+    const alpha = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(alpha?.expectedLocations?.some((location) => location.agentLabel === 'Claude Code')).toBe(false);
+
+    const repaired = await resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-from-agents',
+      selectedVariantPath: universalPath,
+      subagentName: 'alpha:reviewer',
+    }, scanOptions);
+    expect(await readFile(path.join(homeDir, '.codex', 'agents', 'alpha-reviewer.toml'), 'utf8'))
+      .toContain('developer_instructions = "Use alpha rules."');
+    await expect(lstat(path.join(homeDir, '.claude', 'agents', 'alpha-reviewer.md'))).rejects.toThrow();
+    expect(repaired.subagents?.find((subagent) => subagent.name === 'alpha:reviewer')?.missingLocations)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ agentLabel: 'Claude Code' })]));
+
+    await writeRawFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'beta@official': true } }));
+    const alphaWithOnlyBeta = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'alpha:reviewer');
+    expect(alphaWithOnlyBeta?.missingLocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentLabel: 'Claude Code' }),
+    ]));
+  });
+
+  it('keeps invalid managed plugin definitions visible alongside missing Universal', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+
+    await writeRawFile(path.join(root, 'agents', 'reviewer.md'), [
+      '---',
+      'name: reviewer',
+      '---',
+      'This omits the required description.',
+      '',
+    ].join('\n'));
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"tools","version":"1.0.0"}\n');
+
+    const reviewer = (await scanInventory(scanOptions)).subagents?.find((subagent) => subagent.name === 'tools:reviewer');
+    expect(reviewer?.issueReasons).toEqual(expect.arrayContaining(['invalid-definition', 'missing-universal']));
+    expect(reviewer?.locations[0]?.invalidDetails).toContain('Missing required field: description');
+  });
+
+  it('classifies legacy plugin source differences by current definition content', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const universalPath = path.join(homeDir, '.agents', 'agents', 'github-tools-reviewer.md');
     const pluginPath = path.join(
@@ -560,20 +1078,6 @@ describe('subagent inventory', () => {
     const inventory = await scanInventory(scanOptions);
     expect(inventory.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer')?.issueReasons)
       .toContain('definition-mismatch');
-
-    const repaired = await resolveInventoryIssue({
-      entity: 'subagent',
-      issue: 'definition-mismatch',
-      selectedVariantPath: pluginPath,
-      subagentName: 'github-tools:reviewer',
-    }, scanOptions);
-    const repairedPlugin = repaired.subagents?.find((subagent) => subagent.name === 'github-tools:reviewer');
-    const universalDefinition = await readFile(universalPath, 'utf8');
-
-    expect(repairedPlugin?.issueReasons).not.toContain('definition-mismatch');
-    expect(repairedPlugin?.issueReasons).not.toContain('missing-universal');
-    expect(universalDefinition).toContain('name: "reviewer"');
-    expect(universalDefinition).not.toContain('github-tools:reviewer');
   });
 
   it('auto-selects the Universal definition for ambiguous subagent mismatch repair', async () => {
@@ -731,6 +1235,77 @@ describe('subagent inventory', () => {
     expect(resolvedSubagent?.issueReasons).not.toContain('definition-mismatch');
     expect(resolvedSubagent?.issueReasons).toContain('missing-from-agents');
     expect(resolvedSubagent?.missingLocations ?? []).not.toHaveLength(0);
+  });
+
+  it('promotes each seeded plugin-version-choice subagent candidate explicitly without mutating either cache version', async () => {
+    const candidateVersions = ['1.0.0', 'd6169bef'] as const;
+
+    for (const version of candidateVersions) {
+      const root = await mkdtemp(path.join(tmpdir(), `skillindex-subagent-version-choice-${version}-`));
+      const homeDir = path.join(root, 'home');
+      const rootPaths = resolveSkillIndexPaths({
+        env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') },
+        homeDir,
+      });
+      const sandboxPaths = resolveSandboxSkillIndexPaths({ paths: rootPaths });
+      const scanOptions = {
+        paths: sandboxPaths,
+        homeDir,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+      } as const;
+      const subagentName = 'plugin-version-choice-subagent:plugin-version-choice-subagent';
+      const candidatePath = path.join(
+        rootPaths.sandboxRoot,
+        '.codex',
+        'plugins',
+        'cache',
+        'sandbox-fixtures',
+        'plugin-version-choice-subagent',
+        version,
+        'agents',
+        'plugin-version-choice-subagent.md',
+      );
+      const otherVersion = version === '1.0.0' ? 'd6169bef' : '1.0.0';
+      const otherCandidatePath = path.join(
+        rootPaths.sandboxRoot,
+        '.codex',
+        'plugins',
+        'cache',
+        'sandbox-fixtures',
+        'plugin-version-choice-subagent',
+        otherVersion,
+        'agents',
+        'plugin-version-choice-subagent.md',
+      );
+      const universalPath = path.join(rootPaths.sandboxRoot, '.agents', 'agents', 'plugin-version-choice-subagent-plugin-version-choice-subagent.md');
+      const claudePath = path.join(rootPaths.sandboxRoot, '.claude', 'agents', 'plugin-version-choice-subagent-plugin-version-choice-subagent.md');
+      const codexPath = path.join(rootPaths.sandboxRoot, '.codex', 'agents', 'plugin-version-choice-subagent-plugin-version-choice-subagent.toml');
+      const factoryPath = path.join(rootPaths.sandboxRoot, '.factory', 'droids', 'plugin-version-choice-subagent-plugin-version-choice-subagent.md');
+
+      await seedRepresentativeFixtures({ paths: rootPaths, homeDir });
+      const selectedBefore = await readFile(candidatePath, 'utf8');
+      const otherBefore = await readFile(otherCandidatePath, 'utf8');
+      const resolved = await resolveInventoryIssue({
+        entity: 'subagent',
+        issue: 'missing-universal',
+        subagentName,
+        selectedVariantPath: candidatePath,
+      }, scanOptions);
+
+      expect(await readFile(universalPath, 'utf8')).toBe(selectedBefore);
+      expect(await realpath(claudePath)).toBe(await realpath(universalPath));
+      expect(await realpath(factoryPath)).toBe(await realpath(universalPath));
+      await expect(readFile(codexPath, 'utf8')).resolves.toContain(
+        version === '1.0.0' ? 'Plugin subagent version 1.0.0 selected content.' : 'Plugin subagent revision d6169bef selected content.',
+      );
+      expect(await readFile(candidatePath, 'utf8')).toBe(selectedBefore);
+      expect(await readFile(otherCandidatePath, 'utf8')).toBe(otherBefore);
+      expect(resolved.subagents?.find((subagent) => subagent.name === subagentName)).toMatchObject({
+        status: 'needs-attention',
+        issueReasons: ['definition-mismatch'],
+      });
+    }
   });
 
   it('promotes an invalid but readable subagent definition into Universal', async () => {

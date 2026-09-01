@@ -119,7 +119,26 @@ export type ProvenanceKind =
   | 'unknown';
 export type CanonicalRole =
   | 'canonical'
-  | 'materialized-copy';
+  | 'materialized-copy'
+  | 'managed-source';
+export type PluginSourceEvidence =
+  | 'enabled-installation'
+  | 'cached-unknown';
+export type PluginDependencyWarningKind =
+  | 'plugin-root-variable'
+  | 'plugin-contained-path'
+  | 'provider-specific-field';
+export interface PluginDependencyWarning {
+  kind: PluginDependencyWarningKind;
+  detail: string;
+}
+export interface PluginManagedSourceCandidate {
+  path: string;
+  plugin: PluginSourceRef;
+  evidence: PluginSourceEvidence;
+  relationship: 'universal-missing' | 'matches-universal' | 'differs-from-universal';
+  dependencyWarnings: PluginDependencyWarning[];
+}
 export type Mutability = 'writable' | 'read-only-managed' | 'unknown';
 export type SkillStructuralState =
   | 'healthy'
@@ -159,6 +178,7 @@ export interface PluginSourceRef {
   version?: string;
   rootPath: string;
   manifestPath?: string;
+  enabled: boolean | 'unknown';
 }
 
 export interface SkillProvenance {
@@ -243,15 +263,8 @@ export interface PluginUnsupportedAssetRef {
   sourceId: string;
 }
 
-export interface PluginRecord {
-  host: PluginHost;
+export interface PluginRecord extends PluginSourceRef {
   scope?: SkillSourceScope;
-  pluginId: string;
-  pluginName: string;
-  version?: string;
-  rootPath: string;
-  manifestPath?: string;
-  enabled: boolean | 'unknown';
   skillRoots?: string[];
   bundledSkills: PluginSkillRef[];
   bundledMcps: PluginMcpRef[];
@@ -374,6 +387,7 @@ export interface SkillRecord {
   issueReasons?: SkillIssueReason[];
   locations: SkillLocationRecord[];
   detailDiagnostics: SkillDetailDiagnostics;
+  managedSourceCandidates?: PluginManagedSourceCandidate[];
   driftSignature?: string;
   diff?: SkillDiffRecord;
 }
@@ -585,6 +599,7 @@ export interface McpRecord {
   missingLocations?: McpExpectedLocationRecord[];
   issueReasons: McpIssueReason[];
   signature?: string;
+  managedSourceCandidates?: PluginManagedSourceCandidate[];
 }
 
 export interface McpInventoryCounts {
@@ -649,6 +664,7 @@ export interface SubagentRecord {
   missingLocations?: SubagentExpectedLocationRecord[];
   issueReasons: SubagentIssueReason[];
   signature?: string;
+  managedSourceCandidates?: PluginManagedSourceCandidate[];
 }
 
 export interface SubagentInventoryCounts {
@@ -747,6 +763,11 @@ export type CapabilityActionRequest = {
   entity: 'skill';
   action: 'choose-universal-version';
   skillName: string;
+  selectedVariantPath: string;
+} | {
+  entity: 'skill' | 'subagent' | 'mcp';
+  action: 'update-universal-from-plugin';
+  capabilityName: string;
   selectedVariantPath: string;
 };
 

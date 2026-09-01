@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
+import type { PluginManagedSourceCandidate } from '@shared/contracts';
 import { AGENT_CATALOG } from '@shared/agent-catalog';
 import {
   dismissDrift,
@@ -743,7 +744,7 @@ describe('representative-agent scan foundation', () => {
 
     expect(seeded.fixtureSet).toBe('representative-agent-scan-foundation');
     expect(seeded.ignoredPaths).toHaveLength(2);
-    expect(inventory.skills).toHaveLength(89);
+    expect(inventory.skills).toHaveLength(95);
     expect(inventory.skills.map((skill) => skill.name)).toEqual(expect.arrayContaining([
       'broken-symlink-skill',
       'double-broken-symlink-skill',
@@ -777,6 +778,12 @@ describe('representative-agent scan foundation', () => {
       'plugin-manual-diverged-skill',
       'plugin-manual-identical-skill',
       'plugin-readonly-skill',
+      'plugin-single-source-skill',
+      'plugin-version-choice-skill',
+      'plugin-incomparable-version-skill',
+      'plugin-update-skill',
+      'legacy-plugin-link-skill',
+      'native-plugin-delivery:native-plugin-skill',
       'example-workflow-kit:idea-shaping',
       'example-workflow-kit:handoff-notes',
       'example-workflow-kit:handoff-notes-with-static',
@@ -865,41 +872,96 @@ describe('representative-agent scan foundation', () => {
     expect((inventory.plugins ?? []).filter((plugin) => plugin.pluginName === 'example-workflow-kit')
       .map((plugin) => plugin.host).sort()).toEqual(['claude', 'codex']);
     const examplePluginSkill = inventory.skills.find((skill) => skill.name === 'example-workflow-kit:idea-shaping');
-    expect(examplePluginSkill?.structuralState).toBe('missing-symlinks');
+    expect(examplePluginSkill?.structuralState).toBe('single-source-noncanonical');
     expect(examplePluginSkill?.isDrifted).toBe(true);
-    expect(examplePluginSkill?.issueReasons).toEqual(['missing-symlinks']);
+    expect(examplePluginSkill?.issueReasons).toEqual(['missing-canonical']);
     expect(examplePluginSkill?.locations).toHaveLength(2);
     expect(examplePluginSkill?.locations.map((location) => location.provenance?.plugin?.host).sort()).toEqual(['claude', 'codex']);
     const versionShadowSkill = inventory.skills.find((skill) => skill.name === 'version-shadow-kit:cache-shadow');
     expect(versionShadowSkill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
     expect(versionShadowSkill?.locations).toHaveLength(2);
     expect(versionShadowSkill?.locations
       .map((location) => location.provenance?.plugin?.version)
       .sort()).toEqual(['1.0.0', '1.1.0']);
-    expect(versionShadowSkill?.detailDiagnostics.duplicateCandidates).toHaveLength(2);
+    expect(versionShadowSkill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    const pluginSingleSourceSkill = inventory.skills.find((skill) => skill.name === 'plugin-single-source-skill');
+    expect(pluginSingleSourceSkill).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+      managedSourceCandidates: [objectContaining({ relationship: 'universal-missing' })],
+    });
+    expect(pluginSingleSourceSkill?.managedSourceCandidates).toHaveLength(1);
+    const pluginVersionChoiceSkill = inventory.skills.find((skill) => skill.name === 'plugin-version-choice-skill');
+    expect(pluginVersionChoiceSkill).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+    });
+    expect(pluginVersionChoiceSkill?.managedSourceCandidates).toEqual(arrayContaining([
+      objectContaining({ plugin: objectContaining({ version: '1.0.0' }), evidence: 'cached-unknown' }),
+      objectContaining({ plugin: objectContaining({ version: '1.1.0' }), evidence: 'cached-unknown' }),
+    ]));
+    expect(pluginVersionChoiceSkill?.managedSourceCandidates).toHaveLength(2);
+    expect(pluginVersionChoiceSkill?.issueReasons).not.toContain('diverged-copies');
+    expect(pluginVersionChoiceSkill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    const incomparableVersionSkill = inventory.skills.find((skill) => skill.name === 'plugin-incomparable-version-skill');
+    expect(incomparableVersionSkill).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+      managedSourceCandidates: [
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), evidence: 'cached-unknown' }),
+        objectContaining({ plugin: objectContaining({ version: 'd6169bef' }), evidence: 'cached-unknown' }),
+      ],
+    });
+    expect(incomparableVersionSkill?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')).toMatchObject({
+      structuralState: 'diverged-drift',
+      issueReasons: ['diverged-copies'],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
+        objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
+      ]),
+    });
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'cached-unknown' },
+    ]);
+    const legacyPluginLinkSkill = inventory.skills.find((skill) => skill.name === 'legacy-plugin-link-skill');
+    expect(legacyPluginLinkSkill?.issueReasons).toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
+    expect(legacyPluginLinkSkill?.issueReasons).not.toContain('diverged-copies');
+    expect(legacyPluginLinkSkill?.managedSourceCandidates).toEqual([
+      objectContaining({ relationship: 'universal-missing', plugin: objectContaining({ version: '2.0.0' }) }),
+    ]);
+    const nativePluginSkill = inventory.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill');
+    expect(nativePluginSkill).toMatchObject({ structuralState: 'diverged-drift', issueReasons: ['diverged-copies'] });
+    expect(nativePluginSkill?.detailDiagnostics.missingInstallSources?.map((source) => source.sourceId)).not.toContain('sandbox-claude');
     expect(inventory.skills.find((skill) => skill.name === 'mixed-plugin-skill')).toMatchObject({
-      structuralState: 'identical-drift',
-      issueReasons: arrayContaining(['identical-copies']),
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-identical-skill')).toMatchObject({
       structuralState: 'missing-symlinks',
       issueReasons: ['missing-symlinks'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'plugin-manual-diverged-skill')).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'missing-symlinks',
+      issueReasons: ['missing-symlinks'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'example-workflow-kit:overlap-check')).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
     });
     expect(inventory.skills.find((skill) => skill.name === 'example-workflow-kit:handoff-notes')).toMatchObject({
-      structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
       locations: arrayContaining([
         objectContaining({
           provenance: objectContaining({
@@ -916,7 +978,7 @@ describe('representative-agent scan foundation', () => {
     const twoPluginsOneStaticSkill = inventory.skills.find((skill) => skill.name === 'example-workflow-kit:handoff-notes-with-static');
     expect(twoPluginsOneStaticSkill).toMatchObject({
       structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies', 'missing-symlinks']),
+      issueReasons: ['diverged-copies', 'missing-symlinks'],
     });
     expect(twoPluginsOneStaticSkill?.locations).toHaveLength(3);
     expect(twoPluginsOneStaticSkill?.locations.map((location) => location.sourceId)).toEqual(expect.arrayContaining([
@@ -958,10 +1020,28 @@ describe('representative-agent scan foundation', () => {
     expect(inventory.skills.find((skill) => skill.name === 'single-source-skill')).toMatchObject({
       structuralState: 'single-source-noncanonical',
     });
-    expect(inventory.counts.totalSkills).toBeGreaterThan(0);
-    expect(inventory.counts.driftedSkills).toBeGreaterThan(0);
-    expect(inventory.counts.healthySkills).toBeGreaterThanOrEqual(0);
-    expect((inventory.mcps ?? []).length).toBeGreaterThan(0);
+    expect(inventory.counts).toEqual({
+      totalSkills: 95,
+      driftedSkills: 56,
+      healthySkills: 39,
+      missingSymlinkSkills: 16,
+      singleSourceSkills: 15,
+      identicalDriftSkills: 9,
+      divergedDriftSkills: 16,
+      dismissedDriftSkills: 0,
+    });
+    expect(inventory.mcpCounts).toEqual({
+      totalMcps: 32,
+      attentionMcps: 29,
+      healthyMcps: 3,
+      dismissedAttentionMcps: 0,
+    });
+    expect(inventory.subagentCounts).toEqual({
+      totalSubagents: 23,
+      attentionSubagents: 20,
+      healthySubagents: 3,
+      dismissedAttentionSubagents: 0,
+    });
     expect((inventory.mcps ?? []).map((mcp) => mcp.name)).toEqual(expect.arrayContaining([
       'broken-mcp',
       'double-definition-mismatch-mcp',
@@ -983,7 +1063,87 @@ describe('representative-agent scan foundation', () => {
       'muted-extra-mcp',
       'shared-stable-mcp-01',
       'shared-stable-mcp-02',
+      'plugin-remote-mcp:plugin-remote-mcp',
+      'plugin-bound-mcp:plugin-bound-mcp',
+      'plugin-update-mcp:plugin-update-mcp',
+      'native-plugin-delivery:native-plugin-mcp',
     ]));
+    const pluginRemoteMcp = inventory.mcps?.find((mcp) => mcp.name === 'plugin-remote-mcp:plugin-remote-mcp');
+    expect(pluginRemoteMcp).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      managedSourceCandidates: [objectContaining({ dependencyWarnings: [] })],
+    });
+    expect(pluginRemoteMcp?.managedSourceCandidates).toHaveLength(1);
+    const pluginBoundMcp = inventory.mcps?.find((mcp) => mcp.name === 'plugin-bound-mcp:plugin-bound-mcp');
+    expect(pluginBoundMcp).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      managedSourceCandidates: [objectContaining({
+        dependencyWarnings: arrayContaining([
+          objectContaining({ kind: 'plugin-root-variable' }),
+          objectContaining({ kind: 'plugin-contained-path' }),
+          objectContaining({ kind: 'provider-specific-field' }),
+        ]),
+      })],
+    });
+    expect(pluginBoundMcp?.managedSourceCandidates).toHaveLength(1);
+    expect(pluginBoundMcp?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind).sort()).toEqual([
+      'plugin-contained-path',
+      'plugin-root-variable',
+      'provider-specific-field',
+    ]);
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['definition-mismatch'],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
+        objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
+      ]),
+    });
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'cached-unknown' },
+    ]);
+    const nativePluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp');
+    expect(nativePluginMcp?.missingLocations).toEqual([]);
+    expect(nativePluginMcp).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(nativePluginMcp?.expectedLocations?.map((location) => location.agentId)).not.toContain('sandbox-claude');
+    const versionChoiceSubagent = inventory.subagents?.find((subagent) => subagent.name === 'plugin-version-choice-subagent:plugin-version-choice-subagent');
+    expect(versionChoiceSubagent).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), evidence: 'cached-unknown' }),
+        objectContaining({ plugin: objectContaining({ version: 'd6169bef' }), evidence: 'cached-unknown' }),
+      ]),
+    });
+    expect(versionChoiceSubagent?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['definition-mismatch'],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
+        objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
+      ]),
+    });
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'cached-unknown' },
+    ]);
+    const nativePluginSubagent = inventory.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent');
+    expect(nativePluginSubagent).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(nativePluginSubagent?.expectedLocations?.map((location) => location.agentId)).not.toContain('sandbox-claude');
     expect(inventory.mcps?.find((mcp) => mcp.name === 'missing-from-agents-mcp')).toMatchObject({
       status: 'needs-attention',
       issueReasons: ['missing-from-agents'],
@@ -1348,6 +1508,150 @@ describe('representative-agent scan foundation', () => {
       'missing-from-agents',
       'invalid-definition',
     ]));
+  });
+
+  it('limits enabled native plugin delivery to its originating host and exact plugin', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-native-fixture-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const claudeSettingsPath = path.join(paths.sandboxRoot, '.claude', 'settings.json');
+
+    await seedRepresentativeFixtures({ paths });
+    const enabled = await scanInventory(scanOptions);
+    expect(enabled.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill')?.detailDiagnostics
+      .missingInstallSources?.map((source) => source.sourceId)).not.toContain('sandbox-claude');
+    expect(enabled.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent')?.expectedLocations
+      ?.map((location) => location.agentId)).not.toContain('sandbox-claude');
+    expect(enabled.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp')?.expectedLocations
+      ?.map((location) => location.agentId)).not.toContain('sandbox-claude');
+
+    await writeFile(claudeSettingsPath, `${JSON.stringify({ enabledPlugins: {} }, null, 2)}\n`, 'utf8');
+    const disabled = await scanInventory(scanOptions);
+    expect(disabled.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill')?.detailDiagnostics
+      .missingInstallSources?.map((source) => source.sourceId)).toContain('sandbox-claude');
+    expect(disabled.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+    expect(disabled.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+
+    await writeFile(claudeSettingsPath, `${JSON.stringify({
+      enabledPlugins: { 'alloy-kit@sandbox-gallery': true },
+    }, null, 2)}\n`, 'utf8');
+    const unrelated = await scanInventory(scanOptions);
+    expect(unrelated.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill')?.detailDiagnostics
+      .missingInstallSources?.map((source) => source.sourceId)).toContain('sandbox-claude');
+    expect(unrelated.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+    expect(unrelated.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+  });
+
+  it('removes plugin divergence when the differing cache candidate disappears', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-update-removal-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const updateRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-skill', '1.1.0');
+
+    await seedRepresentativeFixtures({ paths });
+    const before = (await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'plugin-update-skill');
+    expect(before?.managedSourceCandidates?.map((candidate) => `${candidate.plugin.version}:${candidate.relationship}`)).toEqual([
+      '1.0.0:matches-universal',
+      '1.1.0:differs-from-universal',
+    ]);
+
+    await rm(updateRoot, { recursive: true, force: true });
+    const fresh = (await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'plugin-update-skill');
+    const cached = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'plugin-update-skill');
+    for (const record of [fresh, cached]) {
+      expect(record).toMatchObject({ structuralState: 'healthy', issueReasons: [] });
+      expect(record?.managedSourceCandidates?.map((candidate) => `${candidate.plugin.version}:${candidate.relationship}`)).toEqual([
+        '1.0.0:matches-universal',
+      ]);
+    }
+  });
+
+  it('keeps fresh and cached managed-source fixture records identical after reset', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-fixture-cache-parity-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    await seedRepresentativeFixtures({ paths });
+
+    const fresh = await scanInventory(scanOptions);
+    const cached = await readCachedInventory(scanOptions);
+    expect(cached).not.toBeNull();
+
+    const summarizeCandidate = (candidate: PluginManagedSourceCandidate) => ({
+      path: candidate.path,
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+      warnings: candidate.dependencyWarnings.map((warning) => `${warning.kind}:${warning.detail}`),
+    });
+    const summarize = (snapshot: NonNullable<typeof cached>) => ({
+      skills: [
+        'plugin-single-source-skill',
+        'plugin-version-choice-skill',
+        'plugin-incomparable-version-skill',
+        'plugin-update-skill',
+        'legacy-plugin-link-skill',
+        'native-plugin-delivery:native-plugin-skill',
+      ].map((name) => {
+        const record = snapshot.skills.find((skill) => skill.name === name);
+        return {
+          name,
+          state: record?.structuralState,
+          issues: record?.issueReasons,
+          candidates: record?.managedSourceCandidates?.map(summarizeCandidate),
+          nativeMissing: record?.detailDiagnostics.missingInstallSources?.map((source) => source.sourceId),
+        };
+      }),
+      mcps: [
+        'plugin-remote-mcp:plugin-remote-mcp',
+        'plugin-bound-mcp:plugin-bound-mcp',
+        'plugin-update-mcp:plugin-update-mcp',
+        'native-plugin-delivery:native-plugin-mcp',
+      ].map((name) => {
+        const record = snapshot.mcps?.find((mcp) => mcp.name === name);
+        return {
+          name,
+          status: record?.status,
+          issues: record?.issueReasons,
+          candidates: record?.managedSourceCandidates?.map(summarizeCandidate),
+          missing: record?.missingLocations?.map((location) => location.agentId),
+          expected: record?.expectedLocations?.map((location) => location.agentId),
+        };
+      }),
+      subagents: [
+        'plugin-version-choice-subagent:plugin-version-choice-subagent',
+        'plugin-update-subagent:plugin-update-subagent',
+        'native-plugin-delivery:native-plugin-subagent',
+      ].map((name) => {
+        const record = snapshot.subagents?.find((subagent) => subagent.name === name);
+        return {
+          name,
+          status: record?.status,
+          issues: record?.issueReasons,
+          candidates: record?.managedSourceCandidates?.map(summarizeCandidate),
+          missing: record?.missingLocations?.map((location) => location.agentId),
+          expected: record?.expectedLocations?.map((location) => location.agentId),
+        };
+      }),
+    });
+
+    for (const snapshot of [fresh, cached as NonNullable<typeof cached>]) {
+      for (const [collection, name] of [
+        [snapshot.skills, 'plugin-update-skill'],
+        [snapshot.mcps ?? [], 'plugin-update-mcp:plugin-update-mcp'],
+        [snapshot.subagents ?? [], 'plugin-update-subagent:plugin-update-subagent'],
+      ] as const) {
+        const record = collection.find((entry) => entry.name === name);
+        expect(record?.managedSourceCandidates?.map((candidate) => `${candidate.plugin.version}:${candidate.evidence}`)).toEqual([
+          '1.0.0:cached-unknown',
+          '1.1.0:cached-unknown',
+        ]);
+      }
+    }
+    expect(summarize(cached as NonNullable<typeof cached>)).toEqual(summarize(fresh));
   });
 
   it('seeds an opt-in parser-shape MCP matrix for supported sandbox agent config formats', async () => {
@@ -2031,7 +2335,7 @@ describe('representative-agent scan foundation', () => {
       rootPath: path.join(paths.sandboxRoot, '.claude', 'plugins', 'sandbox-plugin-pack'),
       manifestPath: path.join(paths.sandboxRoot, '.claude', 'plugins', 'sandbox-plugin-pack', '.claude-plugin', 'plugin.json'),
     }));
-    expect(seeded.skills).toHaveLength(78);
+    expect(seeded.skills).toHaveLength(80);
     expect(seeded.skills).toEqual(expect.arrayContaining([
       {
         name: 'healthy-skill',
@@ -2062,6 +2366,16 @@ describe('representative-agent scan foundation', () => {
         name: 'plugin-manual-diverged-skill',
         expectedState: 'diverged-drift',
         expectedLocationCount: 2,
+      },
+      {
+        name: 'plugin-update-skill',
+        expectedState: 'healthy',
+        expectedLocationCount: 4,
+      },
+      {
+        name: 'native-plugin-delivery:native-plugin-skill',
+        expectedState: 'healthy',
+        expectedLocationCount: 4,
       },
       {
         name: 'representative-diverged-drift-skill-02',
@@ -3562,7 +3876,7 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
-  it('marks plugin-only skills as needing Universal links', async () => {
+  it('marks plugin-only skills as noncanonical managed sources', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-universal-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -3606,14 +3920,12 @@ describe('representative-agent scan foundation', () => {
 
     const skill = inventory.skills.find((entry) => entry.name === 'tools:foo');
     expect(skill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
-    expect(skill?.detailDiagnostics.missingInstallSources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceId: 'live-agents', canonical: false, writable: true }),
-      expect.objectContaining({ sourceId: 'live-factory', kind: 'agent', writable: true }),
-    ]));
+    expect(skill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    expect(skill?.managedSourceCandidates).toHaveLength(1);
   });
 
   it('does not report identical copies for read-only plugin cache versions with matching content', async () => {
@@ -3665,19 +3977,388 @@ describe('representative-agent scan foundation', () => {
 
     const skill = inventory.skills.find((entry) => entry.name === 'tools:foo');
     expect(skill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
     expect(skill?.issueReasons).not.toContain('identical-copies');
-    expect(skill?.detailDiagnostics.duplicateCandidates).toHaveLength(2);
-    expect(skill?.detailDiagnostics.missingInstallSources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceId: 'live-agents', canonical: false, writable: true }),
-      expect.objectContaining({ sourceId: 'live-factory', kind: 'agent', writable: true }),
-    ]));
+    expect(skill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    expect(skill?.managedSourceCandidates).toHaveLength(2);
+    expect(skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')?.evidence)
+      .toBe('cached-unknown');
   });
 
-  it('groups a same-slug plugin skill with the matching local skill as diverged copies', async () => {
+  it('keeps differing plugin cache versions as noncanonical managed candidates', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-cache-differing-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const firstPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const secondPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+
+    for (const [pluginRoot, version, body] of [
+      [firstPluginRoot, '1.0.0', 'Version one content.'],
+      [secondPluginRoot, '1.1.0', 'Version two content.'],
+    ] as const) {
+      await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+      await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version }, null, 2), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+        '---',
+        'name: foo',
+        `description: Plugin foo ${version}.`,
+        '---',
+        '',
+        '# Foo',
+        body,
+        '',
+      ].join('\n'), '2026-01-08T00:00:00.000Z');
+    }
+
+    const skill = (await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    })).skills.find((entry) => entry.name === 'tools:foo');
+
+    expect(skill).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+      detailDiagnostics: { duplicateCandidates: [] },
+    });
+    expect(skill?.issueReasons).not.toEqual(expect.arrayContaining(['identical-copies', 'diverged-copies']));
+    expect(skill?.managedSourceCandidates).toHaveLength(2);
+    expect(skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0')?.evidence)
+      .toBe('cached-unknown');
+  });
+
+  it('reconciles cached managed-source evidence when plugin enablement changes', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-enable-cache-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const configPath = path.join(homeDir, '.codex', 'config.toml');
+
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, 'model = "gpt-5"\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+      '---',
+      'name: foo',
+      'description: Plugin foo.',
+      '---',
+      '',
+      '# Foo',
+      '',
+    ].join('\n'), '2026-01-08T00:00:00.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    const initialSkill = (await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'tools:foo');
+    expect(initialSkill?.managedSourceCandidates?.[0]?.evidence).toBe('cached-unknown');
+
+    await writeFile(configPath, [
+      'model = "gpt-5"',
+      '',
+      '[plugins."tools@official"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+
+    const cachedSkill = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'tools:foo');
+    expect(cachedSkill?.locations[0]).toMatchObject({ canonical: false, canonicalRole: 'managed-source' });
+    expect(cachedSkill?.managedSourceCandidates?.[0]).toMatchObject({
+      evidence: 'enabled-installation',
+      plugin: { enabled: true },
+    });
+  });
+
+  it('rebuilds cached plugin MCP candidates when enablement, entries, or bundles change', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-cache-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const codexConfigPath = path.join(homeDir, '.codex', 'config.toml');
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+
+    await mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await writeFile(codexConfigPath, 'model = "gpt-5"\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeFile(pluginConfigPath, JSON.stringify({ mcpServers: { pluginCache: { command: 'node', args: ['server.js'] } } }), 'utf8');
+
+    const freshInitial = await scanInventory(scanOptions);
+    expect(freshInitial.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.managedSourceCandidates?.[0]?.evidence)
+      .toBe('cached-unknown');
+
+    await writeFile(codexConfigPath, '[plugins."tools@official"]\nenabled = true\n', 'utf8');
+    const cachedEnabled = await readCachedInventory(scanOptions);
+    const freshEnabled = await scanInventory({ ...scanOptions, writeCache: false });
+    expect(cachedEnabled?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.issueReasons)
+      .toEqual(freshEnabled.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.issueReasons);
+    expect(cachedEnabled?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.managedSourceCandidates?.[0]?.evidence)
+      .toBe('enabled-installation');
+
+    await writeFile(pluginConfigPath, JSON.stringify({ mcpServers: {} }), 'utf8');
+    expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
+    expect(readCachedInventorySync(scanOptions)?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
+
+    await rm(pluginRoot, { recursive: true, force: true });
+    expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
+  });
+
+  it('recomputes synchronous cached MCP missing status after native plugin satisfaction disappears', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-sync-plugin-mcp-status-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') } });
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-bundled', 'sync-native', '1.0.0');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const options = {
+      paths,
+      includeLiveSources: false,
+      includeSandboxSources: true,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+    } as const;
+
+    await mkdir(path.dirname(universalConfigPath), { recursive: true });
+    await mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(universalConfigPath, `${JSON.stringify({
+      servers: {
+        nativeServer: { command: 'node', args: ['native.js'] },
+        ordinaryServer: { command: 'node', args: ['ordinary.js'] },
+      },
+    })}\n`, 'utf8');
+    await writeFile(codexConfigPath, '[plugins."sync-native@openai-bundled"]\nenabled = true\n', 'utf8');
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'sync-native', version: '1.0.0' }), 'utf8');
+    await writeFile(path.join(pluginRoot, '.mcp.json'), JSON.stringify({
+      mcpServers: { nativeServer: { command: 'node', args: ['native.js'] } },
+    }), 'utf8');
+
+    const initial = await scanInventory(options);
+    expect(initial.mcps?.find((mcp) => mcp.name === 'sync-native:nativeServer')).toMatchObject({
+      status: 'healthy',
+      missingLocations: [],
+    });
+
+    await writeFile(codexConfigPath, 'model = "gpt-5"\n', 'utf8');
+    const sync = readCachedInventorySync(options);
+    const native = sync?.mcps?.find((mcp) => mcp.name === 'sync-native:nativeServer');
+    expect(native?.managedSourceCandidates).toBeUndefined();
+    expect(native?.missingLocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentId: 'sandbox-codex' }),
+    ]));
+    expect(native?.issueReasons).toContain('missing-from-agents');
+    // Non-plugin records remain in the warm bootstrap even though their status is
+    // independently reconciled against the currently installed agents.
+    expect(sync?.mcps?.find((mcp) => mcp.name === 'ordinaryServer')).toBeDefined();
+  });
+
+  it('keeps comparable cached plugin versions usage-unknown within each host and marketplace group', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-evidence-groups-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const bundles = [
+      { host: 'codex', marketplace: 'curated', version: '9.0.0' },
+      { host: 'claude', marketplace: 'official', version: '1.0.0' },
+      { host: 'claude', marketplace: 'official', version: '1.1.0' },
+    ] as const;
+
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), [
+      '[plugins."tools@curated"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+    for (const bundle of bundles) {
+      const pluginRoot = path.join(homeDir, `.${bundle.host}`, 'plugins', 'cache', bundle.marketplace, 'tools', bundle.version);
+      await mkdir(path.join(pluginRoot, `.${bundle.host}-plugin`), { recursive: true });
+      await writeFile(path.join(pluginRoot, `.${bundle.host}-plugin`, 'plugin.json'), JSON.stringify({ name: 'tools', version: bundle.version }, null, 2), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+        '---',
+        'name: foo',
+        `description: Tools ${bundle.version}.`,
+        '---',
+        '',
+        '# Foo',
+        '',
+      ].join('\n'), '2026-01-08T00:00:00.000Z');
+    }
+
+    const candidates = (await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    })).skills.find((skill) => skill.name === 'tools:foo')?.managedSourceCandidates;
+
+    expect(candidates?.find((candidate) => candidate.plugin.host === 'codex')?.evidence).toBe('enabled-installation');
+    expect(candidates?.find((candidate) => candidate.plugin.host === 'claude' && candidate.plugin.version === '1.0.0')?.evidence)
+      .toBe('cached-unknown');
+    expect(candidates?.find((candidate) => candidate.plugin.host === 'claude' && candidate.plugin.version === '1.1.0')?.evidence)
+      .toBe('cached-unknown');
+  });
+
+  it('does not claim that every cached version is current when only the plugin id is enabled', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-ambiguous-enabled-plugin-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), [
+      '[plugins."tools@official"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+    for (const version of ['1.0.0', '1.1.0']) {
+      const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', version);
+      await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+      await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version }), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+        '---',
+        'name: foo',
+        `description: Tools ${version}.`,
+        '---',
+        '',
+        '# Foo',
+        '',
+      ].join('\n'), '2026-01-08T00:00:00.000Z');
+    }
+
+    const candidates = (await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    })).skills.find((skill) => skill.name === 'tools:foo')?.managedSourceCandidates;
+
+    expect(candidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      enabled: candidate.plugin.enabled,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', enabled: true, evidence: 'cached-unknown' },
+      { version: '1.1.0', enabled: true, evidence: 'cached-unknown' },
+    ]);
+  });
+
+  it('clears cached managed candidates after their plugin source disappears', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-cache-removal-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'foo');
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'foo', '1.0.0');
+
+    await writeSkillFile(path.dirname(universalPath), 'foo', '# Foo\n', '2026-01-08T00:00:00.000Z');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'foo', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', '# Plugin Foo\n', '2026-01-08T00:00:00.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    expect((await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'foo')?.managedSourceCandidates).toHaveLength(1);
+    await rm(pluginRoot, { recursive: true, force: true });
+
+    const cachedSkill = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'foo');
+    expect(cachedSkill?.locations.some((location) => location.canonicalRole === 'managed-source')).toBe(false);
+    expect(cachedSkill?.managedSourceCandidates).toBeUndefined();
+  });
+
+  it('drops legacy cached diffs that reference a managed plugin source', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-legacy-diff-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'foo', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'foo');
+
+    await writeSkillFile(path.dirname(universalPath), 'foo', '# Universal\n', '2026-01-08T00:00:00.000Z');
+    await writeSkillFile(path.dirname(factoryPath), 'foo', '# Factory\n', '2026-01-08T00:00:01.000Z');
+    await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'foo', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', '# Plugin\n', '2026-01-08T00:00:02.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    const snapshot = await scanInventory(scanOptions);
+    const legacySnapshot = structuredClone(snapshot);
+    const legacySkill = legacySnapshot.skills.find((skill) => skill.name === 'foo');
+    if (!legacySkill) throw new Error('Expected foo skill.');
+    legacySkill.diff = {
+      baselinePath: path.join(pluginRoot, 'skills', 'foo'),
+      selectedPath: factoryPath,
+      files: [],
+    };
+    await writeFile(paths.cacheFile, `${JSON.stringify(legacySnapshot)}\n`, 'utf8');
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), '[plugins."foo@official"]\nenabled = true\n', 'utf8');
+
+    const reconciledDiff = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'foo')?.diff;
+    expect(reconciledDiff).toMatchObject({
+      baselinePath: universalPath,
+      selectedPath: factoryPath,
+    });
+    expect(reconciledDiff?.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: 'SKILL.md', status: 'changed' }),
+    ]));
+    expect(JSON.stringify(reconciledDiff)).not.toContain(pluginRoot);
+  });
+
+  it('preserves plugin dependency warnings through fresh and cached inventory', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-warning-cache-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const configPath = path.join(homeDir, '.codex', 'config.toml');
+
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, 'model = "gpt-5"\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', `# Foo\n$CODEX_PLUGIN_ROOT/bin/tool\n${pluginRoot}/data.json\n`, '2026-01-08T00:00:00.000Z');
+
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+    const warningKinds = (await scanInventory(scanOptions)).skills.find((skill) => skill.name === 'tools:foo')
+      ?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind);
+    expect(warningKinds).toEqual(['plugin-root-variable', 'plugin-contained-path']);
+
+    await writeFile(configPath, '[plugins."tools@official"]\nenabled = true\n', 'utf8');
+    const cachedWarningKinds = (await readCachedInventory(scanOptions))?.skills.find((skill) => skill.name === 'tools:foo')
+      ?.managedSourceCandidates?.[0]?.dependencyWarnings.map((warning) => warning.kind);
+    expect(cachedWarningKinds).toEqual(['plugin-root-variable', 'plugin-contained-path']);
+  });
+
+  it('uses exact enabled plugin records when deciding whether native Claude needs a Universal symlink', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-native-plugin-missing-install-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const alphaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const betaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'beta', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'skills');
+    await Promise.all([
+      mkdir(path.join(alphaRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(path.join(betaRoot, '.claude-plugin'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(alphaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'alpha', version: '1.0.0' }), 'utf8'),
+      writeFile(path.join(betaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'beta', version: '1.0.0' }), 'utf8'),
+      writeSkillFile(path.join(alphaRoot, 'skills'), 'foo', '# Alpha\n', '2026-01-08T00:00:00.000Z'),
+      writeSkillFile(path.join(betaRoot, 'skills'), 'foo', '# Beta\n', '2026-01-08T00:00:00.000Z'),
+      writeSkillFile(universalPath, 'alpha:foo', '# Alpha\n', '2026-01-08T00:00:00.000Z'),
+      writeFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'alpha@official': true } }), 'utf8'),
+    ]);
+
+    const alpha = (await scanInventory({ paths, homeDir, includeLiveSources: true, includeSandboxSources: false }))
+      .skills.find((skill) => skill.name === 'alpha:foo');
+    expect(alpha?.detailDiagnostics.missingInstallSources?.some((source) => source.sourceId === 'live-claude')).toBe(false);
+
+    await writeFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'beta@official': true } }), 'utf8');
+    const alphaWithOnlyBetaEnabled = (await scanInventory({ paths, homeDir, includeLiveSources: true, includeSandboxSources: false }))
+      .skills.find((skill) => skill.name === 'alpha:foo');
+    expect(alphaWithOnlyBetaEnabled?.detailDiagnostics.missingInstallSources)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ sourceId: 'live-claude' })]));
+  });
+
+  it('classifies a differing same-slug plugin skill as a current-state divergence', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-self-named-plugin-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -3688,6 +4369,8 @@ describe('representative-agent scan foundation', () => {
       homeDir,
     });
     const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'frontend-design', '1.0.0');
+    const localSkillPath = path.join(homeDir, '.agents', 'skills', 'frontend-design');
+    const claudeSkillPath = path.join(homeDir, '.claude', 'skills', 'frontend-design');
 
     await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
     await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
@@ -3724,6 +4407,8 @@ describe('representative-agent scan foundation', () => {
       ].join('\n'),
       '2026-01-08T00:00:01.000Z',
     );
+    await mkdir(path.dirname(claudeSkillPath), { recursive: true });
+    await symlink(localSkillPath, claudeSkillPath);
 
     const inventory = await scanInventory({
       paths,
@@ -3737,7 +4422,7 @@ describe('representative-agent scan foundation', () => {
       displayName: 'frontend-design',
       structuralState: 'diverged-drift',
       isDrifted: true,
-      issueReasons: arrayContaining(['diverged-copies']),
+      issueReasons: ['diverged-copies'],
       locations: arrayContaining([
         objectContaining({
           provenance: objectContaining({
@@ -3751,17 +4436,55 @@ describe('representative-agent scan foundation', () => {
         }),
       ]),
       detailDiagnostics: {
-        duplicateCandidates: arrayContaining([
-          objectContaining({
-            fileType: 'real-file',
-            provenance: objectContaining({ kind: 'plugin' }),
-          }),
-          objectContaining({
-            fileType: 'real-file',
-            sourceId: 'live-agents',
-          }),
-        ]),
+        duplicateCandidates: [],
       },
+    });
+    expect(inventory.skills.find((entry) => entry.name === 'frontend-design')?.managedSourceCandidates).toEqual([
+      expect.objectContaining({ relationship: 'differs-from-universal' }),
+    ]);
+  });
+
+  it('keeps a matching plugin skill as managed-source evidence when the Universal is installed', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-matching-universal-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'foo', '1.0.0');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'foo');
+    const content = [
+      '---',
+      'name: foo',
+      'description: Shared foo.',
+      '---',
+      '',
+      '# Foo',
+      'Shared content.',
+      '',
+    ].join('\n');
+
+    await writeSkillFile(path.dirname(universalPath), 'foo', content, '2026-01-08T00:00:00.000Z');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
+      name: 'foo',
+      version: '1.0.0',
+    }, null, 2), 'utf8');
+    await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', content, '2026-01-08T00:00:00.000Z');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await symlink(universalPath, claudePath);
+
+    const inventory = await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    });
+
+    expect(inventory.skills.find((entry) => entry.name === 'foo')).toMatchObject({
+      structuralState: 'healthy',
+      isDrifted: false,
+      issueReasons: [],
+      detailDiagnostics: { duplicateCandidates: [] },
+      managedSourceCandidates: [expect.objectContaining({ relationship: 'matches-universal' })],
     });
   });
 
@@ -3938,9 +4661,9 @@ describe('representative-agent scan foundation', () => {
       },
     });
     expect(inventory.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: ['missing-canonical'],
     });
 
     const cachedInventory = await readCachedInventory({
@@ -3950,9 +4673,9 @@ describe('representative-agent scan foundation', () => {
       includeSandboxSources: true,
     });
     expect(cachedInventory?.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: ['missing-canonical'],
     });
   });
 
@@ -4048,13 +4771,13 @@ describe('representative-agent scan foundation', () => {
       issueReasons: [],
     });
     expect(inventory.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
   });
 
-  it('treats symlinks to an explicitly selected plugin Universal as healthy for a manual skill name', async () => {
+  it('does not treat a selected plugin cache path as a canonical manual skill', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-manual-symlink-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4125,16 +4848,16 @@ describe('representative-agent scan foundation', () => {
     const resolvedPluginSkillPath = await realpath(pluginSkillPath);
 
     expect(inventory.skills.find((entry) => entry.name === 'foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: arrayContaining(['missing-canonical', 'wrong-symlink-target']),
     });
     expect(inventory.skills.find((entry) => entry.name === 'foo')?.locations).toEqual(expect.arrayContaining([
       expect.objectContaining({
         path: agentsPath,
         fileType: 'symlink',
         resolvedPath: resolvedPluginSkillPath,
-        canonical: false,
+        canonical: true,
       }),
       expect.objectContaining({
         path: factoryPath,
@@ -4145,7 +4868,7 @@ describe('representative-agent scan foundation', () => {
     ]));
   });
 
-  it('treats symlink-only skills pointing at one plugin cache skill as healthy', async () => {
+  it('does not treat symlink-only plugin cache targets as canonical', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-symlink-only-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4188,9 +4911,9 @@ describe('representative-agent scan foundation', () => {
     });
 
     expect(inventory.skills.find((entry) => entry.name === 'tools:foo')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: arrayContaining(['missing-canonical', 'wrong-symlink-target']),
     });
   });
 
@@ -4418,7 +5141,7 @@ describe('representative-agent scan foundation', () => {
 
     expect(skill).toMatchObject({
       structuralState: 'diverged-drift',
-      issueReasons: arrayContaining(['diverged-copies']),
+      issueReasons: ['diverged-copies', 'missing-symlinks'],
     });
     expect(skill?.locations).toEqual(arrayContaining([
       objectContaining({
@@ -4442,18 +5165,7 @@ describe('representative-agent scan foundation', () => {
       path: candidate.path,
       fileType: candidate.fileType,
       canonical: candidate.canonical,
-    })).sort((left, right) => left.path.localeCompare(right.path))).toEqual([
-      {
-        path: pluginSkillPath,
-        fileType: 'real-file',
-        canonical: false,
-      },
-      {
-        path: repoSkillPath,
-        fileType: 'real-file',
-        canonical: true,
-      },
-    ].sort((left, right) => left.path.localeCompare(right.path)));
+    }))).toEqual([]);
   });
 
   it('hydrates from the saved cache and rewrites it to reconciled live disk truth after refresh', async () => {
@@ -4608,7 +5320,7 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
-  it('keeps dismissed missing-symlink plugin skills hidden when managed plugin content changes', async () => {
+  it('reactivates dismissed plugin-only drift when managed source content changes', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-dismissal-'));
     const homeDir = path.join(root, 'home');
     const dataDir = path.join(root, 'data');
@@ -4656,7 +5368,7 @@ describe('representative-agent scan foundation', () => {
     };
     const initialSnapshot = await scanInventory(scanOptions);
     expect(initialSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
       driftPresentation: 'active',
     });
@@ -4684,15 +5396,15 @@ describe('representative-agent scan foundation', () => {
     const rescannedSnapshot = await scanInventory(scanOptions);
     const rescannedSkill = rescannedSnapshot.skills.find((skill) => skill.name === skillName);
     expect(rescannedSkill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      driftPresentation: 'dismissed',
+      driftPresentation: 'active',
     });
     expect(rescannedSkill?.driftSignature).not.toBe(dismissedSignature);
     const configAfterRescan = JSON.parse(await readFile(paths.configFile, 'utf8')) as {
       dismissedDriftSignatures: string[];
     };
-    expect(configAfterRescan.dismissedDriftSignatures).toContain(dismissedSignature);
+    expect(configAfterRescan.dismissedDriftSignatures).not.toContain(dismissedSignature);
   });
 
   it('undismisses a previously dismissed skill back into active drift', async () => {
@@ -4831,7 +5543,8 @@ describe('representative-agent scan foundation', () => {
     const asyncSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const syncSnapshot = readCachedInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
 
-    expect(asyncSnapshot).toEqual(syncSnapshot);
+    expect(syncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(false);
+    expect(asyncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(true);
     expect(syncSnapshot).not.toBeNull();
     expect(syncSnapshot?.sourceIds).not.toContain('sandbox-windsurf');
     expect(syncSnapshot?.skills.some((skill) => skill.name === 'single-source-skill')).toBe(false);
@@ -4863,7 +5576,8 @@ describe('representative-agent scan foundation', () => {
     const asyncSnapshot = await readCachedInventory({ paths, includeSandboxSources: true, includeLiveSources: false });
     const syncSnapshot = readCachedInventorySync({ paths, includeSandboxSources: true, includeLiveSources: false });
 
-    expect(syncSnapshot).toEqual(asyncSnapshot);
+    expect(syncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(false);
+    expect(asyncSnapshot?.mcps?.some((mcp) => mcp.locations.some((location) => location.canonicalRole === 'managed-source'))).toBe(true);
     expect(syncSnapshot?.sourceIds).toEqual(expect.arrayContaining(['sandbox-agents', 'sandbox-claude', 'sandbox-windsurf', 'sandbox-plugin-pack']));
     expect(syncSnapshot?.counts.driftedSkills).toBeGreaterThan(0);
   });

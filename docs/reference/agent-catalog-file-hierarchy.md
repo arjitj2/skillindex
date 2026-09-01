@@ -68,16 +68,29 @@ healthy state expects compatible copies to be symlinks to Universal.
 Resolution can manage writable compatibility directories that already contain
 affected skills. For example, resolving a skill found only in `~/.claude/skills`
 can copy the selected package into `~/.agents/skills` and replace the Claude copy
-with a symlink back to Universal.
+with a symlink back to Universal, unless that exact Claude capability is already
+satisfied by an enabled native Claude plugin.
 
 Adding a new skill does not proactively write to every compatibility directory.
 New skills are written to Universal first, then linked into installed agents'
-primary skill locations. Compatibility directories primarily make existing
-agent-readable skills visible to inventory and repair.
+primary skill locations, except the exact agent family already satisfied by an
+enabled native plugin for that skill. Compatibility directories primarily make
+existing agent-readable skills visible to inventory and repair.
 
 `compatibleProjectSkillsDirs` documents project-level compatibility paths, but
 the current skill inventory scan creates sources from global compatibility
 directories only.
+
+### Plugin-Managed Sources
+
+Plugin cache directories are separate from compatibility directories. They are
+read-only `managed-source` candidates: Skill Index can show them and let a user
+explicitly make a durable Universal copy, but it never marks a cache package as
+canonical, writes into the cache, or creates a symlink to it. An enabled native
+plugin satisfies only its own agent family; other compatible agents can still
+receive a Universal materialization. See the [inventory resolution
+model](inventory-resolution-model.md) for candidate evidence and resolution
+rules.
 
 ## MCP Metadata
 

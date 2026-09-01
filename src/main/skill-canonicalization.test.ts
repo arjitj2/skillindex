@@ -1,16 +1,31 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { makeSkillCanonical } from '@main/skill-canonicalization';
+import { applyCapabilityAction } from '@main/capability-actions';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
+import { scanInventory } from '@main/scan-inventory';
 import { resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 describe('makeSkillCanonical', () => {
+  it('rejects traversal-shaped plugin inventory names before any filesystem mutation', async () => {
+    const root = await createRoot('skillindex-canonicalize-malicious-name-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const escapedPath = path.join(root, 'escape');
+
+    await expect(makeSkillCanonical({ skillName: '../../../escape' }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/single safe skill package name/i);
+    await expect(lstat(escapedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('requires explicit source selection for diverged skills, writes the chosen content to sandbox .agents, and repairs duplicates into symlinks', async () => {
     const root = await createRoot('skillindex-canonicalize-');
     const paths = resolveSkillIndexPaths({
@@ -297,7 +312,7 @@ describe('makeSkillCanonical', () => {
     );
   });
 
-  it('fails instead of inventing a live canonical directory when no canonical source is installed', async () => {
+  it('refuses non-plugin resolution when no active canonical Universal source exists', async () => {
     const root = await createRoot('skillindex-canonicalize-live-missing-canonical-');
     const homeDir = path.join(root, 'home');
     const paths = resolveSkillIndexPaths({
@@ -336,20 +351,20 @@ describe('makeSkillCanonical', () => {
       writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n'),
     ]);
 
-    await expect(
-      makeSkillCanonical(
-        {
-          skillName,
-          selectedVariantPath: claudePath,
-        },
-        {
-          paths,
-          homeDir,
-          includeSandboxSources: false,
-          includeLiveSources: true,
-        },
-      ),
-    ).rejects.toThrow(`Unable to locate the canonical live skills directory for "${skillName}".`);
+    await expect(makeSkillCanonical(
+      {
+        skillName,
+        selectedVariantPath: claudePath,
+      },
+      {
+        paths,
+        homeDir,
+        includeSandboxSources: false,
+        includeLiveSources: true,
+      },
+    )).rejects.toThrow(/current writable Universal destination/i);
+    await expect(lstat(path.join(homeDir, '.agents', 'skills', skillName))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(factoryPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
   });
 
   it('creates the canonical package in the live shared directory and rewrites live installs into symlinks', async () => {
@@ -450,6 +465,480 @@ describe('makeSkillCanonical', () => {
       sourceId: 'sandbox-agents',
       path: canonicalPath,
     });
+  });
+
+  it('copies selected plugin packages into Universal, keeps cache versions unchanged, and retargets links through the stable Universal path', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({
+      env: { SKILL_INDEX_DATA_DIR: root },
+      homeDir,
+    });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const nextPluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '2.0.0');
+    const nextPluginPath = path.join(nextPluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await mkdir(path.join(pluginPath, 'assets'), { recursive: true });
+    await writeFile(path.join(pluginPath, 'assets', 'payload.bin'), Buffer.from([0, 1, 2, 255]));
+    await mkdir(path.join(nextPluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(nextPluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '2.0.0' }), 'utf8');
+    await writeSkillFile(path.join(nextPluginPath, 'SKILL.md'), '# Plugin foo v2\n');
+    await mkdir(path.join(nextPluginPath, 'assets'), { recursive: true });
+    await writeFile(path.join(nextPluginPath, 'assets', 'payload.bin'), Buffer.from([255, 2, 1, 0]));
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), '# Factory foo\n');
+    await writeFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n', 'utf8');
+    const beforePluginSkill = await readFile(path.join(pluginPath, 'SKILL.md'));
+    const beforePluginAsset = await readFile(path.join(pluginPath, 'assets', 'payload.bin'));
+    const beforeNextPluginSkill = await readFile(path.join(nextPluginPath, 'SKILL.md'));
+    const beforeNextPluginAsset = await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'));
+
+    const snapshot = await makeSkillCanonical({
+      skillName: 'tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'))).toEqual(beforePluginSkill);
+    expect(await readFile(path.join(universalPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
+    expect(await readlink(factoryPath)).toBe(universalPath);
+    expect(await realpath(factoryPath)).toBe(await realpath(universalPath));
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'))).toEqual(beforePluginSkill);
+    expect(await readFile(path.join(pluginPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
+    expect(snapshot.skills.find((skill) => skill.name === 'tools:foo')?.detailDiagnostics.universalDecision?.universal)
+      .toMatchObject({ kind: 'path', sourceId: 'live-agents', path: universalPath });
+
+    await makeSkillCanonical({
+      skillName: 'tools:foo',
+      selectedVariantPath: nextPluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'))).toEqual(beforeNextPluginSkill);
+    expect(await readFile(path.join(universalPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
+    expect(await readlink(factoryPath)).toBe(universalPath);
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'))).toEqual(beforePluginSkill);
+    expect(await readFile(path.join(pluginPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
+    expect(await readFile(path.join(nextPluginPath, 'SKILL.md'))).toEqual(beforeNextPluginSkill);
+    expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
+  });
+
+  it.each([
+    { kind: 'file' as const, leakedRelativePath: 'assets/leak.txt' },
+    { kind: 'directory' as const, leakedRelativePath: 'resources/leak/secret.txt' },
+  ])('rejects a plugin package whose nested $kind symlink escapes its managed source without reading or mutating the target', async ({
+    kind,
+    leakedRelativePath,
+  }) => {
+    const root = await createRoot(`skillindex-canonicalize-plugin-${kind}-escape-`);
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'escape-tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'escape-tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'escape-tools:foo');
+    const outsideRoot = path.join(root, 'outside');
+    const outsideSecret = kind === 'file'
+      ? path.join(outsideRoot, 'secret.txt')
+      : path.join(outsideRoot, 'directory', 'secret.txt');
+    const linkPath = kind === 'file'
+      ? path.join(pluginPath, 'assets', 'leak.txt')
+      : path.join(pluginPath, 'resources', 'leak');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'escape-tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(outsideSecret, 'outside secret v1\n');
+    await mkdir(path.dirname(linkPath), { recursive: true });
+    await symlink(path.relative(path.dirname(linkPath), kind === 'file' ? outsideSecret : path.dirname(outsideSecret)), linkPath);
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+
+    const firstScan = await scanInventory({
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    });
+    const firstLocation = firstScan.skills.find((skill) => skill.name === 'escape-tools:foo')
+      ?.locations.find((location) => location.path === pluginPath);
+    expect(firstLocation?.packageFiles?.map((file) => file.relativePath)).not.toContain(leakedRelativePath);
+    const firstHash = firstLocation?.contentHash;
+
+    await writeFile(outsideSecret, 'outside secret v2 that must not affect the managed package hash\n', 'utf8');
+    const secondScan = await scanInventory({
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    });
+    expect(secondScan.skills.find((skill) => skill.name === 'escape-tools:foo')
+      ?.locations.find((location) => location.path === pluginPath)?.contentHash).toBe(firstHash);
+
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [], preferredCanonicalSourcePath: null, dismissedDriftSignatures: [], dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const pluginEntrypointBefore = await readFile(path.join(pluginPath, 'SKILL.md'));
+    const outsideBefore = await readFile(outsideSecret);
+    const linkTargetBefore = await readlink(linkPath);
+    const configBefore = await readFile(paths.configFile);
+    const cacheBefore = await readFile(paths.cacheFile);
+
+    await expect(makeSkillCanonical({
+      skillName: 'escape-tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/symlink.*escapes.*managed source/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'))).toEqual(pluginEntrypointBefore);
+    expect(await readFile(outsideSecret)).toEqual(outsideBefore);
+    expect(await readlink(linkPath)).toBe(linkTargetBefore);
+    expect(await readFile(paths.configFile)).toEqual(configBefore);
+    expect(await readFile(paths.cacheFile)).toEqual(cacheBefore);
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(factoryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a relative in-package plugin symlink whose target remains inside the exported Universal package', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-contained-link-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'contained-tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'contained-tools:foo');
+    const assetPath = path.join(pluginPath, 'assets', 'payload.txt');
+    const aliasPath = path.join(pluginPath, 'assets', 'alias.txt');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'contained-tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(assetPath, 'contained payload\n');
+    await symlink('payload.txt', aliasPath);
+
+    await makeSkillCanonical({
+      skillName: 'contained-tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readlink(path.join(universalPath, 'assets', 'alias.txt'))).toBe('payload.txt');
+    expect(await readFile(path.join(universalPath, 'assets', 'alias.txt'), 'utf8')).toBe('contained payload\n');
+    expect(await readlink(aliasPath)).toBe('payload.txt');
+  });
+
+  it('does not discover a plugin skill package through a directory symlink that escapes the managed skill root', async () => {
+    const root = await createRoot('skillindex-plugin-discovery-link-escape-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'discovery-tools', '1.0.0');
+    const pluginSkillsRoot = path.join(pluginRoot, 'skills');
+    const outsideSkill = path.join(root, 'outside', 'borrowed-skill');
+    const linkedSkill = path.join(pluginSkillsRoot, 'borrowed-skill');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'discovery-tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(outsideSkill, 'SKILL.md'), '# Outside skill must remain undiscovered\n');
+    await mkdir(pluginSkillsRoot, { recursive: true });
+    await symlink(path.relative(pluginSkillsRoot, outsideSkill), linkedSkill);
+
+    const snapshot = await scanInventory({
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    });
+
+    expect(snapshot.skills.some((skill) => skill.name === 'discovery-tools:borrowed-skill')).toBe(false);
+    expect(await readlink(linkedSkill)).toBe(path.relative(pluginSkillsRoot, outsideSkill));
+    expect(await readFile(path.join(outsideSkill, 'SKILL.md'), 'utf8')).toContain('must remain undiscovered');
+  });
+
+  it('requires an exact current managed-source path for plugin-only promotion', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-choice-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, 'plugin-version-choice-skill');
+    await seedRepresentativeFixtures({ paths });
+
+    await expect(makeSkillCanonical({
+      skillName: 'plugin-version-choice-skill',
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/select a current plugin candidate/i);
+
+    await expect(makeSkillCanonical({
+      skillName: 'plugin-version-choice-skill',
+      selectedVariantPath: path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'deleted', 'skills', 'plugin-version-choice-skill'),
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/select a current plugin candidate/i);
+
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rolls back the Universal package and every earlier link when a later link transaction fails', async () => {
+    const root = await createRoot('skillindex-canonicalize-link-rollback-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const canonicalPath = path.join(paths.sandboxAgentsSkillsDir, 'diverged-drift-skill');
+    const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', 'diverged-drift-skill');
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', 'diverged-drift-skill');
+
+    await seedRepresentativeFixtures({ paths });
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), '# Factory diverged skill\n');
+    const beforeCanonical = await snapshotPath(canonicalPath);
+    const beforeClaude = await snapshotPath(claudePath);
+    const beforeFactory = await snapshotPath(factoryPath);
+
+    await expect(makeSkillCanonical({
+      skillName: 'diverged-drift-skill',
+      selectedVariantPath: claudePath,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      testFailSkillLinkAt: 2,
+      writeCache: false,
+    })).rejects.toThrow(/Injected skill link replacement failure at 2/i);
+
+    await expect(snapshotPath(canonicalPath)).resolves.toEqual(beforeCanonical);
+    await expect(snapshotPath(claudePath)).resolves.toEqual(beforeClaude);
+    await expect(snapshotPath(factoryPath)).resolves.toEqual(beforeFactory);
+  });
+
+  it('does not duplicate a plugin-selected skill into its enabled native Claude skills directory', async () => {
+    const root = await createRoot('skillindex-canonicalize-native-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'tools@official': true } }));
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+
+    await makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: pluginPath }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readlink(factoryPath)).toBe(universalPath);
+    await expect(lstat(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+  });
+
+  it('does not duplicate into Codex when a different enabled managed candidate supplies the same skill', async () => {
+    const root = await createRoot('skillindex-canonicalize-cross-host-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const claudeRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const codexRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.1.0');
+    const claudePluginPath = path.join(claudeRoot, 'skills', 'foo');
+    const codexPluginPath = path.join(codexRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const codexPath = path.join(homeDir, '.codex', 'skills', 'tools:foo');
+    await Promise.all([
+      mkdir(path.join(claudeRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(path.join(codexRoot, '.codex-plugin'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(claudeRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8'),
+      writeFile(path.join(codexRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.1.0' }), 'utf8'),
+      writeSkillFile(path.join(claudePluginPath, 'SKILL.md'), '# Claude source\n'),
+      writeSkillFile(path.join(codexPluginPath, 'SKILL.md'), '# Codex source\n'),
+      writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'tools@official': true } })),
+      writeSkillFile(path.join(homeDir, '.codex', 'config.toml'), '[plugins."tools@official"]\nenabled = true\n'),
+    ]);
+
+    await makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: claudePluginPath }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true,
+    });
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toContain('Claude source');
+    await expect(lstat(codexPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does materialize a selected plugin into Claude when only an unrelated Claude plugin is enabled', async () => {
+    const root = await createRoot('skillindex-canonicalize-exact-native-plugin-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const alphaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const betaRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'beta', '1.0.0');
+    const alphaPath = path.join(alphaRoot, 'skills', 'foo');
+    const betaPath = path.join(betaRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'alpha:foo');
+    const claudePath = path.join(homeDir, '.claude', 'skills', 'alpha:foo');
+    await Promise.all([
+      mkdir(path.join(alphaRoot, '.claude-plugin'), { recursive: true }),
+      mkdir(path.join(betaRoot, '.claude-plugin'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(alphaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'alpha', version: '1.0.0' }), 'utf8'),
+      writeFile(path.join(betaRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'beta', version: '1.0.0' }), 'utf8'),
+      writeSkillFile(path.join(alphaPath, 'SKILL.md'), '# Alpha foo\n'),
+      writeSkillFile(path.join(betaPath, 'SKILL.md'), '# Beta foo\n'),
+      writeSkillFile(path.join(homeDir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'beta@official': true } })),
+    ]);
+
+    await makeSkillCanonical({ skillName: 'alpha:foo', selectedVariantPath: alphaPath }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true,
+    });
+
+    expect(await readlink(claudePath)).toBe(universalPath);
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toContain('Alpha foo');
+  });
+
+  it('rolls back Universal and links when persisting a plugin selection fails', async () => {
+    const root = await createRoot('skillindex-canonicalize-persist-rollback-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'tools:foo');
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin source\n');
+    await writeSkillFile(path.join(universalPath, 'SKILL.md'), '# Universal sentinel\n');
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), '# Factory sentinel\n');
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [], preferredCanonicalSourcePath: null, dismissedDriftSignatures: [], dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforeUniversal = await snapshotPath(universalPath);
+    const beforeFactory = await snapshotPath(factoryPath);
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: pluginPath }, {
+      paths, homeDir, includeSandboxSources: false, includeLiveSources: true, writeCache: false,
+      testFailSkillDecisionPersist: true,
+    })).rejects.toThrow(/Injected skill Universal decision persistence failure/i);
+
+    await expect(snapshotPath(universalPath)).resolves.toEqual(beforeUniversal);
+    await expect(snapshotPath(factoryPath)).resolves.toEqual(beforeFactory);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+  });
+
+  it('refuses a Universal directory symlinked into a plugin cache without mutating packages or state', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-target-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await mkdir(path.join(homeDir, '.agents'), { recursive: true });
+    await symlink(path.join(pluginRoot, 'skills'), path.join(homeDir, '.agents', 'skills'));
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName: 'tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/plugin-managed cache path/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(path.join(homeDir, '.agents', 'skills'))).toBe(path.join(pluginRoot, 'skills'));
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a writable agent skills directory aliased into a plugin cache before staging Universal', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-agent-alias-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const factorySkillsDir = path.join(homeDir, '.factory', 'skills');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'tools:foo');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await symlink(path.join(pluginRoot, 'skills'), factorySkillsDir);
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: null,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const beforePlugin = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+    const beforeConfig = await readFile(paths.configFile, 'utf8');
+    const beforeCache = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(makeSkillCanonical({ skillName: 'tools:foo', selectedVariantPath: pluginPath }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/plugin-managed cache path/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(beforePlugin);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(beforeConfig);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
+    expect(await readlink(factorySkillsDir)).toBe(path.join(pluginRoot, 'skills'));
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

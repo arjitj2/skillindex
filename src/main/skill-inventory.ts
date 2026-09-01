@@ -21,7 +21,6 @@ import type {
   SkillDetailDiagnostics,
   SkillDefinitionIssue,
   SkillDiffFileRecord,
-  SkillDiffRecord,
   SkillDuplicateCandidate,
   SkillInstallKind,
   SkillFrontMatterRequiredField,
@@ -62,8 +61,15 @@ import {
   emptyMcpInventoryCounts,
   reconcileCachedMcps,
 } from '@main/mcp-inventory';
-import { applyDismissedSubagentState, countSubagents } from '@main/subagent-inventory';
+import { applyDismissedSubagentState, countSubagents, reconcileCachedSubagents } from '@main/subagent-inventory';
 import { parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
+import {
+  buildPluginManagedSourceCandidate,
+  detectPluginDependencyWarnings,
+  getOperationalLocations,
+  isAgentSatisfiedByNativePlugin,
+  normalizePluginSourceEvidenceByIdentity,
+} from '@main/plugin-managed-sources';
 
 interface IndexedSkillLocation extends SkillLocationRecord {
   entrypointContent?: string;
@@ -265,29 +271,28 @@ function classifySkillLocations(
   });
   const displayName = getPreferredSkillDisplayName(canonicalizedLocations, name);
   const description = getPreferredSkillDescription(canonicalizedLocations);
-  const issueLocations = getIssueRelevantSkillLocations(canonicalizedLocations, options.universalDecisionContext);
+  const issueLocations = getOperationalLocations(
+    getIssueRelevantSkillLocations(canonicalizedLocations, options.universalDecisionContext),
+  );
   const canonicalRealFileLocations = issueLocations.filter((location) =>
     location.fileType === 'real-file' && matchesCanonicalSkillPath(location, canonicalPaths));
-  const hasExternalPluginSymlinkOrigin = hasPluginSymlinkCanonicalOrigin(issueLocations, canonicalPaths);
-  const hasExternalUniversalOrigin = canonicalRealFileLocations.length === 0
-    && (hasExternalPluginSymlinkOrigin
-      || (options.universalDecisionContext?.acceptedAlternateOnly === false
-        && options.universalDecisionContext.decision.universal.kind === 'plugin'
-        && options.universalDecisionContext.resolvedUniversalPaths.length > 0));
   const canonicalTargets = new Set(canonicalRealFileLocations.length > 0
     ? canonicalRealFileLocations.map((location) => location.resolvedPath ?? location.path)
-    : hasExternalUniversalOrigin
-      ? canonicalPaths
-      : []);
+    : []);
   const missingInstallSources = detailDiagnostics.missingInstallSources ?? [];
   const definitionIssues = detailDiagnostics.definitionIssues ?? [];
+  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const issueReasons = getSkillIssueReasons({
     canonicalPaths,
     definitionIssues,
-    hasExternalUniversalOrigin,
     locations: issueLocations,
     missingInstallSources,
   });
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')
+    && !issueReasons.includes('diverged-copies')) {
+    issueReasons.push('diverged-copies');
+    issueReasons.sort(compareSkillIssueReasons);
+  }
   const structuralState = determineSkillStructuralState({
     issueReasons,
     locations: issueLocations,
@@ -303,7 +308,6 @@ function classifySkillLocations(
 
       return location.resolvedPath !== undefined && canonicalTargets.has(location.resolvedPath);
     });
-
   if (isHealthy) {
     return {
       name,
@@ -315,6 +319,7 @@ function classifySkillLocations(
       issueReasons: [],
       locations: publicLocations,
       detailDiagnostics,
+      managedSourceCandidates,
     };
   }
 
@@ -328,8 +333,9 @@ function classifySkillLocations(
     issueReasons,
     locations: publicLocations,
     detailDiagnostics,
+    managedSourceCandidates,
     driftSignature: issueReasons.length > 0 ? createDriftSignature(name, structuralState, publicLocations, issueReasons) : undefined,
-    diff: issueReasons.includes('diverged-copies') ? buildSkillDiff(sortedLocations) : undefined,
+    diff: issueReasons.includes('diverged-copies') ? buildSkillDiff(issueLocations) : undefined,
   };
 }
 
@@ -375,7 +381,8 @@ function normalizeSelfQualifiedSkillName(skillName: string): string {
 }
 
 async function collectSkillEntryFiles(source: SkillScanSource): Promise<SkillPackageEntry[]> {
-  return collectNestedSkillEntryFiles(source, source.skillsDir, source.skillsDir, new Set());
+  const resolvedManagedRoot = source.kind === 'plugin' ? await safeRealpath(source.skillsDir) : undefined;
+  return collectNestedSkillEntryFiles(source, source.skillsDir, source.skillsDir, new Set(), resolvedManagedRoot);
 }
 
 async function collectNestedSkillEntryFiles(
@@ -383,6 +390,7 @@ async function collectNestedSkillEntryFiles(
   rootDir: string,
   currentDir: string,
   activeDirectories: Set<string>,
+  resolvedManagedRoot: string | undefined,
 ): Promise<SkillPackageEntry[]> {
   const visitKey = await getDirectoryVisitKey(currentDir);
   if (visitKey && activeDirectories.has(visitKey)) {
@@ -409,6 +417,12 @@ async function collectNestedSkillEntryFiles(
       ) {
         continue;
       }
+      if (entry.isSymbolicLink()
+        && source.kind === 'plugin'
+        && (!resolvedManagedRoot
+          || !await isContainedRelativePackageSymlink(rootDir, resolvedManagedRoot, entryPath))) {
+        continue;
+      }
 
       const skillPackage = await describeExistingSkillPackage(rootDir, entryPath);
       if (skillPackage) {
@@ -417,7 +431,7 @@ async function collectNestedSkillEntryFiles(
       }
 
       if (await isDirectoryLikePath(entryPath)) {
-        files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, activeDirectories)));
+        files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, activeDirectories, resolvedManagedRoot)));
       }
     }
 
@@ -446,7 +460,7 @@ async function readSkillLocation(
   const modifiedAt = await getLocationModifiedAt(rootPath, packageEntry.entrypointPath, fileType, resolvedPath);
   const packageFiles = fileType === 'symlink' && resolvedPath === undefined
     ? []
-    : await readPackageFiles(rootPath);
+    : await readPackageFiles(rootPath, source.kind === 'plugin');
   const entrypointText = packageFiles.find((file) => file.relativePath === 'SKILL.md')?.text;
   const contentHash = createPackageContentHash(packageFiles);
 
@@ -470,7 +484,9 @@ async function readSkillLocation(
     packageFiles,
     entrypointContent: entrypointText,
     provenance: createSkillLocationProvenance(rootPath, source, modifiedAt, npxLockCache),
-    canonicalRole: source.canonical ? 'canonical' : 'materialized-copy',
+    canonicalRole: source.kind === 'plugin'
+      ? 'managed-source'
+      : source.canonical ? 'canonical' : 'materialized-copy',
     mutability: source.writable ? 'writable' : source.kind === 'plugin' ? 'read-only-managed' : 'unknown',
   };
 }
@@ -1007,6 +1023,20 @@ function haveSameOptionalStringEntries(left: string[] | undefined, right: string
   return haveSameStringEntries(left ?? [], right ?? []);
 }
 
+function haveSamePluginSourceRef(left: SkillScanSource['plugin'], right: SkillScanSource['plugin']): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  return left.host === right.host
+    && left.pluginId === right.pluginId
+    && left.pluginName === right.pluginName
+    && left.version === right.version
+    && left.rootPath === right.rootPath
+    && left.manifestPath === right.manifestPath
+    && left.enabled === right.enabled;
+}
+
 function haveSameSkillScanSources(left: SkillScanSource[], right: SkillScanSource[]): boolean {
   return left.length === right.length
     && left.every((source, index) => {
@@ -1018,8 +1048,11 @@ function haveSameSkillScanSources(left: SkillScanSource[], right: SkillScanSourc
         && source.writable === other.writable
         && source.scope === other.scope
         && source.skillsDir === other.skillsDir
+        && source.preferredCanonical === other.preferredCanonical
         && haveSameOptionalStringEntries(source.compatibleAgentFamilies, other.compatibleAgentFamilies)
-        && haveSameOptionalStringEntries(source.ignoredSkillSubpaths, other.ignoredSkillSubpaths);
+        && haveSameOptionalStringEntries(source.ignoredSkillSubpaths, other.ignoredSkillSubpaths)
+        && haveSamePluginSourceRef(source.plugin, other.plugin)
+        && source.mcpConfigPath === other.mcpConfigPath;
     });
 }
 
@@ -1043,7 +1076,10 @@ export function reconcileSkillInventorySnapshot(
   ) {
     const mcps = applyDismissedMcpState(snapshot.mcps ?? [], dismissedMcpSignatures);
     const mcpCounts = countMcps(mcps);
-    const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+    const subagents = applyDismissedSubagentState(
+      reconcileCachedSubagents(snapshot.subagents ?? [], activeAgents, plugins),
+      dismissedSubagentSignatures,
+    );
     const subagentCounts = countSubagents(subagents);
     const agentCounts = countAgents(activeAgents);
 
@@ -1091,7 +1127,10 @@ export function reconcileSkillInventorySnapshot(
     dismissedMcpSignatures,
   );
   const mcpCounts = countMcps(reconciledMcps);
-  const subagents = applyDismissedSubagentState(snapshot.subagents ?? [], dismissedSubagentSignatures);
+  const subagents = applyDismissedSubagentState(
+    reconcileCachedSubagents(snapshot.subagents ?? [], activeAgents, plugins),
+    dismissedSubagentSignatures,
+  );
   const subagentCounts = countSubagents(subagents);
   const agentCounts = countAgents(activeAgents);
   const counts = countSkills(skills);
@@ -1134,7 +1173,7 @@ function createDriftSignature(
   });
 }
 
-function buildSkillDiff(locations: IndexedSkillLocation[]) {
+function buildSkillDiff(locations: SkillLocationRecord[]) {
   const realFileLocations = locations
     .filter((location) => location.fileType === 'real-file')
     .sort(compareByNewestModifiedAt);
@@ -1155,7 +1194,7 @@ function buildSkillDiff(locations: IndexedSkillLocation[]) {
   return comparisons[0] ?? undefined;
 }
 
-function buildDiffComparison(primaryLocation: IndexedSkillLocation, comparisonLocation: IndexedSkillLocation) {
+function buildDiffComparison(primaryLocation: SkillLocationRecord, comparisonLocation: SkillLocationRecord) {
   const files = buildPackageDiffFiles(comparisonLocation, primaryLocation);
   if (files.length === 0) {
     return null;
@@ -1199,7 +1238,7 @@ function buildSkillDetailDiagnostics(
   const universalDecision = options.universalDecisionContext?.decision;
   const acceptedAlternates = universalDecision?.acceptedAlternates ?? [];
   return {
-    duplicateCandidates: buildDuplicateCandidates(locations),
+    duplicateCandidates: buildDuplicateCandidates(getOperationalLocations(locations)),
     installSources: buildInstallSources(locations),
     missingInstallSources: options.universalDecisionContext?.acceptedAlternateOnly === true
       ? []
@@ -1217,6 +1256,45 @@ function buildSkillDetailDiagnostics(
     ...(universalDecision ? { universalDecision } : {}),
     ...(acceptedAlternates.length > 0 ? { acceptedAlternates } : {}),
   };
+}
+
+function buildManagedSourceCandidates(
+  locations: SkillLocationRecord[],
+  sources: SkillScanSource[],
+  canonicalPaths: string[],
+): SkillRecord['managedSourceCandidates'] {
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  const universalLocation = getOperationalLocations(locations).find((location) =>
+    location.fileType === 'real-file' && matchesCachedCanonicalSkillPath(location, canonicalPaths));
+  const universalComparisonKey = universalLocation
+    ? getSkillComparisonContentHash(universalLocation, false)
+    : null;
+  const candidates = locations.flatMap((location) => {
+    if (location.fileType !== 'real-file' || location.canonicalRole !== 'managed-source') {
+      return [];
+    }
+    const plugin = sourceById.get(location.sourceId)?.plugin;
+    if (!plugin) {
+      return [];
+    }
+    const text = location.packageFiles
+      ?.filter((file) => file.kind === 'text' && file.text !== undefined)
+      .map((file) => file.text)
+      .join('\n') ?? location.definitionText ?? '';
+    return [buildPluginManagedSourceCandidate({
+      path: location.path,
+      plugin,
+      comparisonKey: getSkillComparisonContentHash(location, false),
+      universalComparisonKey,
+      dependencyWarnings: detectPluginDependencyWarnings({ text, pluginRoot: plugin.rootPath }),
+    })];
+  });
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  return normalizePluginSourceEvidenceByIdentity(candidates);
 }
 
 function buildDuplicateCandidate(location: IndexedSkillLocation): SkillDuplicateCandidate {
@@ -1508,7 +1586,9 @@ function getCanonicalSkillRoots(
   scope: SkillScanSource['scope'] | undefined,
   universalDecisionContext?: SkillUniversalDecisionContext,
 ): string[] {
-  if (universalDecisionContext && !universalDecisionContext.acceptedAlternateOnly) {
+  if (universalDecisionContext
+    && !universalDecisionContext.acceptedAlternateOnly
+    && universalDecisionContext.decision.universal.kind === 'path') {
     const decisionCanonicalPaths = resolveUniversalDecisionCanonicalPaths(
       universalDecisionContext.decision,
       locations,
@@ -1521,7 +1601,6 @@ function getCanonicalSkillRoots(
     }
   }
 
-  const sourceById = new Map(sources.map((source) => [source.id, source]));
   const preferredCanonicalSourceIds = new Set(
     sources
       .filter((source) => source.preferredCanonical === true && source.scope === (scope ?? source.scope))
@@ -1533,22 +1612,6 @@ function getCanonicalSkillRoots(
     .sort((left, right) => left.localeCompare(right));
   if (preferredCanonicalPaths.length > 0) {
     return [...new Set(preferredCanonicalPaths)];
-  }
-
-  const pluginCanonicalPaths = locations
-    .filter((location) => {
-      const source = sourceById.get(location.sourceId);
-      return source?.kind === 'plugin' && source.canonical && source.scope === (scope ?? source.scope);
-    })
-    .map((location) => location.path)
-    .sort((left, right) => left.localeCompare(right));
-  if (pluginCanonicalPaths.length > 0) {
-    return [...new Set(pluginCanonicalPaths)];
-  }
-
-  const pluginSymlinkCanonicalPaths = getPluginSymlinkCanonicalPaths(locations);
-  if (pluginSymlinkCanonicalPaths.length > 0) {
-    return pluginSymlinkCanonicalPaths;
   }
 
   const canonicalSource = sources.find((source) =>
@@ -1658,35 +1721,6 @@ function locationMatchesAcceptedAlternate(
     && path.basename(location.path) === alternate.pluginSkillName;
 }
 
-function getPluginSymlinkCanonicalPaths(locations: CanonicalPathLocation[]): string[] {
-  const pluginSymlinkTargets = locations
-    .filter((location) =>
-      location.fileType === 'symlink'
-      && location.resolvedPath !== undefined
-      && isLikelyPluginSkillPath(location.resolvedPath))
-    .map((location) => location.resolvedPath as string)
-    .sort((left, right) => left.localeCompare(right));
-  const uniqueTargets = [...new Set(pluginSymlinkTargets)];
-  return uniqueTargets.length === 1 ? uniqueTargets : [];
-}
-
-function hasPluginSymlinkCanonicalOrigin(
-  locations: SkillLocationRecord[],
-  canonicalPaths: string[],
-): boolean {
-  const normalizedCanonicalPaths = new Set(canonicalPaths.map(normalizePath));
-  return canonicalPaths.some(isLikelyPluginSkillPath)
-    && locations.some((location) =>
-      location.fileType === 'symlink'
-      && location.resolvedPath !== undefined
-      && normalizedCanonicalPaths.has(normalizePath(location.resolvedPath)));
-}
-
-function isLikelyPluginSkillPath(targetPath: string): boolean {
-  const normalized = targetPath.replace(/\\/g, '/');
-  return normalized.includes('/plugins/cache/') && normalized.includes('/skills/');
-}
-
 function matchesCanonicalSkillPath(location: IndexedSkillLocation, canonicalPaths: string[]): boolean {
   const normalizedCanonicalPaths = new Set(canonicalPaths.map(normalizePath));
   return normalizedCanonicalPaths.has(normalizePath(location.path))
@@ -1695,7 +1729,7 @@ function matchesCanonicalSkillPath(location: IndexedSkillLocation, canonicalPath
 
 function getExpectedLinkedSkillSources(
   skillName: string,
-  locations: Array<Pick<SkillLocationRecord, 'path' | 'sourceId'> & Partial<Pick<SkillLocationRecord, 'resolvedPath'>>>,
+  locations: Array<Pick<SkillLocationRecord, 'path' | 'sourceId'> & Partial<Pick<SkillLocationRecord, 'resolvedPath' | 'provenance'>>>,
   sources: SkillScanSource[],
   agents: AgentRecord[] = [],
   scope: SkillScanSource['scope'] | undefined,
@@ -1704,42 +1738,25 @@ function getExpectedLinkedSkillSources(
   const expectedSourcesById = new Map<string, SkillInstallSource>();
   const canonicalSkillPaths = new Set(canonicalPaths.map(normalizePath));
   const presentSkillPaths = new Set(locations.map((location) => normalizePath(location.path)));
-  const sourceById = new Map(sources.map((source) => [source.id, source]));
-  const hasPluginUniversalOrigin = locations.some((location) => {
-    const source = sourceById.get(location.sourceId);
-    return source?.kind === 'plugin'
-      && (canonicalSkillPaths.has(normalizePath(location.path))
-        || (location.resolvedPath !== undefined && canonicalSkillPaths.has(normalizePath(location.resolvedPath))));
-  });
-
-  if (hasPluginUniversalOrigin) {
-    for (const source of sources) {
-      if (!source.canonical || !source.writable || source.scope !== (scope ?? source.scope)) {
-        continue;
-      }
-
-      const canonicalSourceSkillPath = normalizePath(path.join(source.skillsDir, skillName));
-      if (canonicalSkillPaths.has(canonicalSourceSkillPath) || presentSkillPaths.has(canonicalSourceSkillPath)) {
-        continue;
-      }
-
-      expectedSourcesById.set(source.id, {
-        sourceId: source.id,
-        label: source.label,
-        kind: source.kind,
-        scope: source.scope,
-        writable: source.writable,
-        canonical: false,
-      });
-    }
-  }
-
   for (const agent of agents) {
     if (agent.installState !== 'installed') {
       continue;
     }
 
     if (scope !== undefined && agent.scope !== scope) {
+      continue;
+    }
+
+    if (isAgentSatisfiedByNativePlugin(
+      agent.family,
+      locations.flatMap((location) => {
+        if (location.provenance?.kind !== 'plugin') {
+          return [];
+        }
+        const plugin = sources.find((source) => source.id === location.sourceId)?.plugin;
+        return plugin ? [plugin] : [];
+      }),
+    )) {
       continue;
     }
 
@@ -1799,13 +1816,11 @@ function createAgentInstallSource(agent: AgentRecord): SkillInstallSource {
 function getSkillIssueReasons({
   canonicalPaths,
   definitionIssues,
-  hasExternalUniversalOrigin = false,
   locations,
   missingInstallSources,
 }: {
   canonicalPaths: string[];
   definitionIssues: SkillDefinitionIssue[];
-  hasExternalUniversalOrigin?: boolean;
   locations: SkillLocationRecord[];
   missingInstallSources: SkillInstallSource[];
 }): SkillIssueReason[] {
@@ -1828,7 +1843,7 @@ function getSkillIssueReasons({
     reasons.add('invalid-definition');
   }
 
-  if (canonicalRealFiles.length === 0 && !hasExternalUniversalOrigin) {
+  if (canonicalRealFiles.length === 0) {
     reasons.add('missing-canonical');
   }
 
@@ -1972,6 +1987,17 @@ function reconcileCachedSkill(
 
       return !isIgnoredSkillDiscoveryPath(source.skillsDir, location.path, source.ignoredSkillSubpaths);
     })
+    .map((location) => {
+      const source = sourceById.get(location.sourceId);
+      return source?.kind === 'plugin'
+        ? {
+          ...location,
+          canonical: false,
+          canonicalRole: 'managed-source' as const,
+          mutability: 'read-only-managed' as const,
+        }
+        : location;
+    })
     .sort((left, right) => left.path.localeCompare(right.path));
   if (locations.length === 0) {
     return null;
@@ -1992,7 +2018,9 @@ function reconcileCachedSkill(
   );
   const canonicalPaths = getCanonicalSkillRoots(skill.name, locations, sources, locations[0]?.sourceScope, universalDecisionContext);
   const canonicalizedLocations = applySkillCanonicalState(locations, canonicalPaths);
-  const issueLocations = getIssueRelevantSkillLocations(canonicalizedLocations, universalDecisionContext);
+  const issueLocations = getOperationalLocations(
+    getIssueRelevantSkillLocations(canonicalizedLocations, universalDecisionContext),
+  );
   const missingInstallSources = universalDecisionContext?.acceptedAlternateOnly === true
     ? []
     : computeMissingInstallSourcesFromCachedLocations(
@@ -2003,28 +2031,28 @@ function reconcileCachedSkill(
       canonicalPaths,
     );
   const installSources = buildCachedInstallSources(canonicalizedLocations, skill.detailDiagnostics.installSources ?? []);
-  const canonicalLocationKeys = new Set(canonicalizedLocations.map((location) => createLocationCacheKey(location.path, location.sourceId)));
-  const duplicateCandidates = canonicalizedLocations.length > 1
+  const operationalLocationKeys = new Set(
+    getOperationalLocations(canonicalizedLocations)
+      .map((location) => createLocationCacheKey(location.path, location.sourceId)),
+  );
+  const duplicateCandidates = operationalLocationKeys.size > 1
     ? (skill.detailDiagnostics.duplicateCandidates ?? [])
-      .filter((candidate) => canonicalLocationKeys.has(createLocationCacheKey(candidate.path, candidate.sourceId)))
+      .filter((candidate) => operationalLocationKeys.has(createLocationCacheKey(candidate.path, candidate.sourceId)))
       .map((candidate) => applyCanonicalStateToDuplicateCandidate(candidate, canonicalPaths))
     : [];
   const canonicalizedDefinitionIssues = definitionIssues.map((issue) => applyCanonicalStateToDefinitionIssue(issue, canonicalPaths));
-  const canonicalRealFileLocations = issueLocations.filter((location) =>
-    location.fileType === 'real-file' && matchesCachedCanonicalSkillPath(location, canonicalPaths));
-  const hasExternalPluginSymlinkOrigin = hasPluginSymlinkCanonicalOrigin(issueLocations, canonicalPaths);
-  const hasExternalUniversalOrigin = canonicalRealFileLocations.length === 0
-    && (hasExternalPluginSymlinkOrigin
-      || (universalDecisionContext?.acceptedAlternateOnly === false
-        && universalDecisionContext.decision.universal.kind === 'plugin'
-        && universalDecisionContext.resolvedUniversalPaths.length > 0));
+  const managedSourceCandidates = buildManagedSourceCandidates(canonicalizedLocations, sources, canonicalPaths);
   const issueReasons = getSkillIssueReasons({
     canonicalPaths,
     definitionIssues: canonicalizedDefinitionIssues,
-    hasExternalUniversalOrigin,
     locations: issueLocations,
     missingInstallSources,
   });
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')
+    && !issueReasons.includes('diverged-copies')) {
+    issueReasons.push('diverged-copies');
+    issueReasons.sort(compareSkillIssueReasons);
+  }
   const structuralState = determineSkillStructuralState({
     issueReasons,
     locations: issueLocations,
@@ -2041,7 +2069,7 @@ function reconcileCachedSkill(
       : {}),
   };
   const diff = issueReasons.includes('diverged-copies')
-    ? pruneCachedSkillDiff(skill.diff, new Set(canonicalizedLocations.map((location) => location.path)))
+    ? buildSkillDiff(issueLocations)
     : undefined;
 
   if (isHealthyCachedSkill(canonicalizedLocations, canonicalPaths, missingInstallSources, issueReasons)) {
@@ -2054,6 +2082,7 @@ function reconcileCachedSkill(
       issueReasons: [],
       locations: canonicalizedLocations,
       detailDiagnostics,
+      managedSourceCandidates,
       driftSignature: undefined,
       diff: undefined,
     };
@@ -2067,6 +2096,7 @@ function reconcileCachedSkill(
     issueReasons,
     locations: canonicalizedLocations,
     detailDiagnostics,
+    managedSourceCandidates,
     driftSignature: issueReasons.length > 0
       ? createDriftSignature(skill.name, structuralState, canonicalizedLocations, issueReasons)
       : undefined,
@@ -2097,6 +2127,9 @@ function applySkillCanonicalState<T extends SkillLocationRecord>(locations: T[],
 }
 
 function applyCanonicalStateToCachedLocation<T extends SkillLocationRecord>(location: T, canonicalPaths: string[]): T {
+  if (location.canonicalRole === 'managed-source') {
+    return { ...location, canonical: false };
+  }
   const isCanonicalPath = matchesCanonicalLocationPath(location.path, canonicalPaths);
   return {
     ...location,
@@ -2178,7 +2211,8 @@ function isHealthyCachedSkill(
   missingInstallSources: SkillInstallSource[],
   issueReasons: SkillIssueReason[],
 ): boolean {
-  const canonicalRealFileLocations = locations.filter((location) =>
+  const operationalLocations = getOperationalLocations(locations);
+  const canonicalRealFileLocations = operationalLocations.filter((location) =>
     location.canonical
     && location.fileType === 'real-file'
     && matchesCachedCanonicalSkillPath(location, canonicalPaths));
@@ -2187,7 +2221,7 @@ function isHealthyCachedSkill(
   return issueReasons.length === 0
     && canonicalTargets.size > 0
     && missingInstallSources.length === 0
-    && locations.every((location) => {
+    && operationalLocations.every((location) => {
       if (location.fileType === 'real-file') {
         return location.canonical && canonicalTargets.has(location.resolvedPath ?? location.path);
       }
@@ -2237,43 +2271,6 @@ function matchesCanonicalLocationPath(locationPath: string, canonicalPaths: stri
 
 function createLocationCacheKey(filePath: string, sourceId: string): string {
   return `${sourceId}:${filePath}`;
-}
-
-function pruneCachedSkillDiff(
-  diff: SkillDiffRecord | undefined,
-  activePaths: Set<string>,
-): SkillDiffRecord | undefined {
-  if (!diff) {
-    return undefined;
-  }
-
-  if (diff.selectedPath || diff.baselinePath || diff.files) {
-    if (!diff.selectedPath || !diff.baselinePath) {
-      return undefined;
-    }
-    if (!activePaths.has(diff.selectedPath) || !activePaths.has(diff.baselinePath)) {
-      return undefined;
-    }
-
-    return {
-      ...diff,
-      files: diff.files ?? [],
-    };
-  }
-
-  if (!diff.primaryPath || !activePaths.has(diff.primaryPath)) {
-    return undefined;
-  }
-
-  const comparisons = (diff.comparisons ?? []).filter((comparison) => activePaths.has(comparison.path));
-  if (comparisons.length === 0) {
-    return undefined;
-  }
-
-  return {
-    ...diff,
-    comparisons,
-  };
 }
 
 function findSkillLocationByPath(
@@ -2496,8 +2493,9 @@ async function isBrokenTopLevelSkillSymlink(rootDir: string, rootPath: string): 
   }
 }
 
-async function readPackageFiles(rootPath: string): Promise<SkillPackageFileRecord[]> {
-  const files = await walkPackageFiles(rootPath, rootPath, new Set());
+async function readPackageFiles(rootPath: string, constrainSymlinksToPackage = false): Promise<SkillPackageFileRecord[]> {
+  const resolvedManagedRoot = constrainSymlinksToPackage ? await safeRealpath(rootPath) : undefined;
+  const files = await walkPackageFiles(rootPath, rootPath, new Set(), constrainSymlinksToPackage, resolvedManagedRoot);
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
@@ -2505,6 +2503,8 @@ async function walkPackageFiles(
   rootDir: string,
   currentDir: string,
   activeDirectories: Set<string>,
+  constrainSymlinksToPackage: boolean,
+  resolvedManagedRoot: string | undefined,
 ): Promise<SkillPackageFileRecord[]> {
   const visitKey = await getDirectoryVisitKey(currentDir);
   if (visitKey && activeDirectories.has(visitKey)) {
@@ -2530,14 +2530,31 @@ async function walkPackageFiles(
 
       const entryPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+        files.push(...(await walkPackageFiles(
+          rootDir,
+          entryPath,
+          activeDirectories,
+          constrainSymlinksToPackage,
+          resolvedManagedRoot,
+        )));
         continue;
       }
 
       if (entry.isSymbolicLink()) {
+        if (constrainSymlinksToPackage
+          && (!resolvedManagedRoot
+            || !await isContainedRelativePackageSymlink(rootDir, resolvedManagedRoot, entryPath))) {
+          continue;
+        }
         const stats = await safeStat(entryPath);
         if (stats?.isDirectory()) {
-          files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+          files.push(...(await walkPackageFiles(
+            rootDir,
+            entryPath,
+            activeDirectories,
+            constrainSymlinksToPackage,
+            resolvedManagedRoot,
+          )));
           continue;
         }
       }
@@ -2554,6 +2571,25 @@ async function walkPackageFiles(
       activeDirectories.delete(visitKey);
     }
   }
+}
+
+async function isContainedRelativePackageSymlink(
+  lexicalRoot: string,
+  resolvedRoot: string,
+  symlinkPath: string,
+): Promise<boolean> {
+  const target = await safeReadlink(symlinkPath);
+  if (!target || path.isAbsolute(target)) return false;
+  const lexicalTarget = path.resolve(path.dirname(symlinkPath), target);
+  const resolvedTarget = await safeRealpath(symlinkPath);
+  return isPathContainedBy(lexicalRoot, lexicalTarget)
+    && Boolean(resolvedTarget && isPathContainedBy(resolvedRoot, resolvedTarget));
+}
+
+function isPathContainedBy(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === ''
+    || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function shouldIgnorePackageEntry(name: string, isDirectoryEntry: boolean): boolean {
@@ -2662,8 +2698,8 @@ async function getLocationModifiedAt(
 }
 
 function buildPackageDiffFiles(
-  baselineLocation: IndexedSkillLocation,
-  selectedLocation: IndexedSkillLocation,
+  baselineLocation: SkillLocationRecord,
+  selectedLocation: SkillLocationRecord,
 ): SkillDiffFileRecord[] {
   const baselineFiles = new Map((baselineLocation.packageFiles ?? []).map((file) => [file.relativePath, file]));
   const selectedFiles = new Map((selectedLocation.packageFiles ?? []).map((file) => [file.relativePath, file]));
@@ -2750,6 +2786,7 @@ export async function readSkillInventoryCache(cacheFile: string): Promise<SkillI
   try {
     const raw = await readFile(cacheFile, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
+    normalizeLegacyPluginSourceEvidence(parsed);
     return isSkillInventorySnapshot(parsed) ? parsed : null;
   } catch {
     return null;
@@ -2760,6 +2797,7 @@ export function readSkillInventoryCacheSync(cacheFile: string): SkillInventorySn
   try {
     const raw = readFileSync(cacheFile, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
+    normalizeLegacyPluginSourceEvidence(parsed);
     return isSkillInventorySnapshot(parsed) ? parsed : null;
   } catch {
     return null;
@@ -2851,7 +2889,8 @@ function isPluginSourceRef(value: unknown): value is PluginSourceRef {
     && isString(value.pluginName)
     && (value.version === undefined || isString(value.version))
     && isString(value.rootPath)
-    && (value.manifestPath === undefined || isString(value.manifestPath));
+    && (value.manifestPath === undefined || isString(value.manifestPath))
+    && (value.enabled === 'unknown' || typeof value.enabled === 'boolean');
 }
 
 function isSkillProvenance(value: unknown): boolean {
@@ -2891,7 +2930,53 @@ function isProvenanceKind(value: unknown): boolean {
 
 function isCanonicalRole(value: unknown): boolean {
   return value === 'canonical'
-    || value === 'materialized-copy';
+    || value === 'materialized-copy'
+    || value === 'managed-source';
+}
+
+function isPluginSourceEvidence(value: unknown): boolean {
+  return value === 'enabled-installation'
+    || value === 'cached-unknown';
+}
+
+function normalizeLegacyPluginSourceEvidence(value: unknown): void {
+  if (!isRecord(value)) return;
+  for (const collectionName of ['skills', 'mcps', 'subagents']) {
+    const records = value[collectionName];
+    if (!Array.isArray(records)) continue;
+    for (const record of records) {
+      if (!isRecord(record) || !Array.isArray(record.managedSourceCandidates)) continue;
+      for (const candidate of record.managedSourceCandidates) {
+        if (isRecord(candidate) && candidate.evidence === 'newer-comparable-version') {
+          candidate.evidence = 'cached-unknown';
+        }
+      }
+    }
+  }
+}
+
+function isPluginDependencyWarningKind(value: unknown): boolean {
+  return value === 'plugin-root-variable'
+    || value === 'plugin-contained-path'
+    || value === 'provider-specific-field';
+}
+
+function isPluginDependencyWarning(value: unknown): boolean {
+  return isRecord(value)
+    && isPluginDependencyWarningKind(value.kind)
+    && isString(value.detail);
+}
+
+function isPluginManagedSourceCandidate(value: unknown): boolean {
+  return isRecord(value)
+    && isString(value.path)
+    && isPluginSourceRef(value.plugin)
+    && isPluginSourceEvidence(value.evidence)
+    && (value.relationship === 'universal-missing'
+      || value.relationship === 'matches-universal'
+      || value.relationship === 'differs-from-universal')
+    && Array.isArray(value.dependencyWarnings)
+    && value.dependencyWarnings.every(isPluginDependencyWarning);
 }
 
 function isMutability(value: unknown): boolean {
@@ -2912,6 +2997,8 @@ function isSkillRecord(value: unknown): boolean {
     && Array.isArray(value.locations)
     && value.locations.every(isSkillLocationRecord)
     && isSkillDetailDiagnostics(value.detailDiagnostics)
+    && (value.managedSourceCandidates === undefined
+      || (Array.isArray(value.managedSourceCandidates) && value.managedSourceCandidates.every(isPluginManagedSourceCandidate)))
     && (value.diff === undefined || isSkillDiffRecord(value.diff));
 }
 
@@ -3113,7 +3200,9 @@ function isMcpRecord(value: unknown): value is McpRecord {
     && (value.missingLocations === undefined || (Array.isArray(value.missingLocations) && value.missingLocations.every(isMcpExpectedLocationRecord)))
     && Array.isArray(value.issueReasons)
     && value.issueReasons.every(isMcpIssueReason)
-    && (value.signature === undefined || isString(value.signature));
+    && (value.signature === undefined || isString(value.signature))
+    && (value.managedSourceCandidates === undefined
+      || (Array.isArray(value.managedSourceCandidates) && value.managedSourceCandidates.every(isPluginManagedSourceCandidate)));
 }
 
 function isMcpInventoryCounts(value: unknown): value is McpInventoryCounts {
@@ -3173,7 +3262,9 @@ function isSubagentRecord(value: unknown): value is SubagentRecord {
     && (value.missingLocations === undefined || (Array.isArray(value.missingLocations) && value.missingLocations.every(isSubagentExpectedLocationRecord)))
     && Array.isArray(value.issueReasons)
     && value.issueReasons.every(isSubagentIssueReason)
-    && (value.signature === undefined || isString(value.signature));
+    && (value.signature === undefined || isString(value.signature))
+    && (value.managedSourceCandidates === undefined
+      || (Array.isArray(value.managedSourceCandidates) && value.managedSourceCandidates.every(isPluginManagedSourceCandidate)));
 }
 
 function isSubagentInventoryCounts(value: unknown): value is SubagentInventoryCounts {

@@ -116,8 +116,7 @@ export async function readCachedInventory(
   if (!cachedSnapshot) {
     return null;
   }
-
-  return reconcileSkillInventorySnapshot(
+  const reconciled = reconcileSkillInventorySnapshot(
     cachedSnapshot,
     registeredSources,
     sources,
@@ -128,6 +127,34 @@ export async function readCachedInventory(
     config.dismissedMcpSignatures,
     config.dismissedSubagentSignatures,
   );
+  // MCP plugin bundles and enabled-state are mutable host-managed input. Re-read
+  // them even when the skill source identity has not changed so cached inventory
+  // never retains a removed plugin entry or stale native-provider satisfaction.
+  const freshMcps = (await collectMcpRecords(agents, sources, plugins, scanOptions))
+    .map((mcp) => applyMcpPresentation(mcp, config.dismissedMcpSignatures))
+    .sort(compareMcps);
+  const mcps = haveEquivalentMcpInventory(reconciled.mcps ?? [], freshMcps)
+    ? reconciled.mcps ?? []
+    : freshMcps;
+  const mcpCounts = countMcps(mcps);
+  return {
+    ...reconciled,
+    mcps,
+    mcpCounts,
+    homeSummary: buildHomeSummary(reconciled.counts, mcpCounts, reconciled.agentCounts ?? countAgents(agents)),
+  };
+}
+
+function haveEquivalentMcpInventory(
+  cachedMcps: NonNullable<SkillInventorySnapshot['mcps']>,
+  freshMcps: NonNullable<SkillInventorySnapshot['mcps']>,
+): boolean {
+  return JSON.stringify(cachedMcps, mcpInventoryJsonReplacer) === JSON.stringify(freshMcps, mcpInventoryJsonReplacer);
+}
+
+function mcpInventoryJsonReplacer(key: string, value: unknown): unknown {
+  if (key === 'discoveredAt') return undefined;
+  return value;
 }
 
 export function readCachedInventorySync(
@@ -156,12 +183,30 @@ export function readCachedInventorySync(
   const activeRegisteredSources = mergeCachedPluginSources(registeredSources, cachedPluginSources);
   const activeSources = mergeCachedPluginSources(sources, cachedPluginSources);
 
+  // Sync bootstrap cannot safely discover current plugin config/enablement.
+  // Omit plugin-managed MCP evidence rather than presenting cache history as
+  // current native delivery; the async scan repopulates it immediately.
+  const syncSafeSnapshot: SkillInventorySnapshot = {
+    ...cachedSnapshot,
+    // Ensure reconciliation recomputes operational MCP expected/missing status
+    // rather than taking the cached-source fast path.
+    sourceIds: [],
+    mcps: (cachedSnapshot.mcps ?? [])
+      .map((mcp) => ({
+        ...mcp,
+        locations: mcp.locations.filter((location) => location.canonicalRole !== 'managed-source'
+          && location.provenance?.kind !== 'plugin'
+          && !location.agentId.startsWith('plugin:')),
+        managedSourceCandidates: undefined,
+      }))
+      .filter((mcp) => mcp.locations.length > 0),
+  };
   return reconcileSkillInventorySnapshot(
-    cachedSnapshot,
+    syncSafeSnapshot,
     activeRegisteredSources,
     activeSources,
     agents,
-    cachedSnapshot.plugins ?? [],
+    [],
     config.skillUniversalDecisions ?? [],
     config.dismissedDriftSignatures,
     config.dismissedMcpSignatures,

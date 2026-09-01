@@ -23,6 +23,7 @@ import {
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { getSubagentResolveActionState } from '../lib/issue-resolution';
+import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
 import {
@@ -44,6 +45,7 @@ export function SubagentsWorkspaceView({
   inventorySnapshot,
   isAutoResolving = false,
   isDismissingDrift,
+  isApplyingCapabilityAction = false,
   isResolvingIssue,
   isRemovingInventoryItem = false,
   isRescanning,
@@ -74,6 +76,7 @@ export function SubagentsWorkspaceView({
   inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving?: boolean;
   isDismissingDrift: boolean;
+  isApplyingCapabilityAction?: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
@@ -203,6 +206,7 @@ export function SubagentsWorkspaceView({
           {selectedSubagent ? (
             <SubagentDetailPanel
               isDismissingDrift={isDismissingDrift}
+              isApplyingCapabilityAction={isApplyingCapabilityAction}
               isResolvingIssue={isResolvingIssue}
               isRemovingInventoryItem={isRemovingInventoryItem}
               inventorySnapshot={inventorySnapshot}
@@ -227,6 +231,7 @@ export function SubagentsWorkspaceView({
 
 function SubagentDetailPanel({
   isDismissingDrift,
+  isApplyingCapabilityAction,
   isResolvingIssue,
   isRemovingInventoryItem,
   inventorySnapshot,
@@ -243,6 +248,7 @@ function SubagentDetailPanel({
   subagent,
 }: {
   isDismissingDrift: boolean;
+  isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
@@ -263,6 +269,9 @@ function SubagentDetailPanel({
   }
 
   const resolveAction = getSubagentResolveActionState(subagent, selectedSubagentInspectorModel, inventorySnapshot);
+  const removalPresentation = getInventoryRemovalPresentation(inventorySnapshot, {
+    entity: 'subagent', subagentName: subagent.name,
+  });
 
   return (
     <DetailInspectorPanel
@@ -270,8 +279,8 @@ function SubagentDetailPanel({
       footerActions={[
         ...(selectedSubagentInspectorModel.activeProblem.primaryActionLabel
           ? [{
-            disabled: !resolveAction.request || isResolvingIssue,
-            label: isResolvingIssue ? 'Applying…' : selectedSubagentInspectorModel.activeProblem.primaryActionLabel,
+            disabled: !resolveAction.request || isResolvingIssue || isApplyingCapabilityAction,
+            label: isResolvingIssue || isApplyingCapabilityAction ? 'Applying…' : selectedSubagentInspectorModel.activeProblem.primaryActionLabel,
             onClick: () => {
               if (!resolveAction.request) {
                 return;
@@ -301,8 +310,8 @@ function SubagentDetailPanel({
             variant: 'subtle' as const,
           }]
           : []),
-        {
-          disabled: isRemovingInventoryItem,
+        ...(removalPresentation.canRemove ? [{
+          disabled: isRemovingInventoryItem || isResolvingIssue || isApplyingCapabilityAction,
           label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
           onClick: () => {
             onRequestRemove({
@@ -312,12 +321,13 @@ function SubagentDetailPanel({
           },
           shortcut: 'R',
           variant: 'danger' as const,
-        },
+        }] : []),
       ]}
       model={selectedSubagentInspectorModel}
       ariaLabel="Subagent detail"
       paneClassName={`subagent-inspector-panel${selectedSubagentProblemKey ? ' subagent-inspector-panel--problem-selected' : ''}`}
       sandboxRoot={sandboxRoot}
+      isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => {

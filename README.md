@@ -27,7 +27,7 @@ Skill Index treats `~/.agents` as the user-owned Universal knowledge directory a
   mcp.json
 ```
 
-Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved.
+Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved. The one exclusion is the exact host family already satisfied by an enabled native plugin for that capability; Skill Index does not create a duplicate local materialization there.
 
 Skill Index still respects agent-native folders, config files, and plugin caches. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
 
@@ -44,7 +44,14 @@ Skill Index gives you a local control plane for agent knowledge:
 | **Standardize** | Review safe auto-fixes from the dashboard, apply them in a batch, or choose explicit repair actions for individual skills, subagents, and MCPs. |
 | **Audit** | Review a local audit log of file-changing operations so every mutation is accountable. |
 
-Plugin-provided skills, subagents, and MCPs are shown as managed, read-only capabilities. They are part of the knowledge map, but Skill Index does not pretend it owns them.
+Plugin-provided skills, subagents, and MCPs are shown as managed, read-only
+sources. They are candidates you can explicitly copy or translate into your
+Universal directory, never canonical locations or symlink targets. While
+Universal is missing, multiple cached versions are alternatives rather than
+drift. Once Universal exists, a differing plugin candidate participates in the
+ordinary divergence flow. Skill Index may show current usage evidence, but you
+choose the version. See the [inventory resolution model](docs/reference/inventory-resolution-model.md)
+for the full contract.
 
 ## Local By Default
 

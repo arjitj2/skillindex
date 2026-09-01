@@ -15,16 +15,26 @@ import type {
 import {
   ensureSkillIndexLayout,
   readSkillIndexConfig,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   writeSkillIndexConfig,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
-import { resolveInventoryIssue } from '@main/issue-resolution';
+import { makeSkillCanonical } from '@main/skill-canonicalization';
+import {
+  resolveInventoryIssue,
+  updateMcpUniversalFromPluginSource,
+  updateSubagentUniversalFromPluginSource,
+} from '@main/issue-resolution';
 
 export interface CapabilityActionOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  /**
+   * A snapshot prepared by the runtime immediately before audit planning.
+   * Supplying it keeps validation, mutation planning, and audit paths in lockstep.
+   */
+  preparedSnapshot?: SkillInventorySnapshot;
 }
 
 const UNIVERSAL_CHOICE_AUTO_REPAIR_ISSUES: SkillResolvableIssue[] = [
@@ -39,20 +49,71 @@ export async function applyCapabilityAction(
   request: CapabilityActionRequest,
   options: CapabilityActionOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  assertCapabilityActionRequest(request);
+  const { preparedSnapshot, ...scanOptions } = options;
+  const paths = scanOptions.paths ?? resolveSkillIndexPathsForScanOptions(scanOptions);
   await ensureSkillIndexLayout(paths);
-  const snapshot = await scanInventory({
-    ...options,
+  const snapshot = preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
 
   switch (request.action) {
-    case 'choose-universal-version':
+    case 'choose-universal-version': {
+      const selectedLocation = selectRepresentativeLocation(findSkill(snapshot, request.skillName), request.selectedVariantPath);
+      if (selectedLocation.provenance?.kind === 'plugin') {
+        return makeSkillCanonical({
+          skillName: request.skillName,
+          selectedVariantPath: selectedLocation.path,
+        }, {
+          ...scanOptions,
+          paths,
+          preparedSnapshot: snapshot,
+        });
+      }
       await persistSkillUniversalDecision(request, snapshot, {
-        ...options,
+        ...scanOptions,
         paths,
       });
       break;
+    }
+    case 'update-universal-from-plugin': {
+      switch (request.entity) {
+        case 'skill': {
+          const skill = findSkill(snapshot, request.capabilityName);
+          assertSelectedManagedPluginCandidate(skill, request.selectedVariantPath);
+          return makeSkillCanonical({
+            skillName: skill.name,
+            selectedVariantPath: request.selectedVariantPath,
+          }, {
+            ...scanOptions,
+            paths,
+            preparedSnapshot: snapshot,
+          });
+        }
+        case 'mcp': {
+          const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.capabilityName);
+          if (!mcp) throw new Error(`MCP "${request.capabilityName}" is no longer available.`);
+          assertSelectedManagedPluginCandidate(mcp, request.selectedVariantPath);
+          await updateMcpUniversalFromPluginSource(snapshot, mcp, request.selectedVariantPath, {
+            ...scanOptions,
+            paths,
+          });
+          break;
+        }
+        case 'subagent': {
+          const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.capabilityName);
+          if (!subagent) throw new Error(`Subagent "${request.capabilityName}" is no longer available.`);
+          assertSelectedManagedPluginCandidate(subagent, request.selectedVariantPath);
+          await updateSubagentUniversalFromPluginSource(snapshot, subagent, request.selectedVariantPath, {
+            ...scanOptions,
+            paths,
+          });
+          break;
+        }
+      }
+      break;
+    }
     default: {
       const unsupported = request as { action?: string };
       throw new Error(`Unsupported capability action: ${unsupported.action ?? 'unknown'}`);
@@ -60,7 +121,7 @@ export async function applyCapabilityAction(
   }
 
   const updatedSnapshot = await scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
   if (request.action === 'choose-universal-version') {
@@ -69,13 +130,52 @@ export async function applyCapabilityAction(
       request.selectedVariantPath,
       updatedSnapshot,
       {
-        ...options,
+        ...scanOptions,
         paths,
       },
     );
   }
 
   return updatedSnapshot;
+}
+
+export function assertCapabilityActionRequest(request: unknown): asserts request is CapabilityActionRequest {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    throw new Error('Invalid capability action request.');
+  }
+  const value = request as Record<string, unknown>;
+  if (value.action === 'choose-universal-version') {
+    if (value.entity !== 'skill'
+      || !isNonBlankString(value.skillName)
+      || !isNonBlankString(value.selectedVariantPath)) {
+      throw new Error('Invalid choose Universal version request.');
+    }
+    return;
+  }
+  if (value.action === 'update-universal-from-plugin') {
+    if ((value.entity !== 'skill' && value.entity !== 'mcp' && value.entity !== 'subagent')
+      || !isNonBlankString(value.capabilityName)
+      || !isNonBlankString(value.selectedVariantPath)) {
+      throw new Error('Invalid plugin update request.');
+    }
+    return;
+  }
+  throw new Error(`Unsupported capability action: ${typeof value.action === 'string' ? value.action : 'unknown'}`);
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function assertSelectedManagedPluginCandidate(
+  capability: Pick<SkillRecord, 'managedSourceCandidates'>,
+  selectedVariantPath: string,
+): void {
+  const candidate = capability.managedSourceCandidates?.find((entry) =>
+    entry.path === selectedVariantPath && entry.relationship === 'differs-from-universal');
+  if (!candidate) {
+    throw new Error('Choose a current readable plugin update candidate before updating Universal.');
+  }
 }
 
 async function persistSkillUniversalDecision(

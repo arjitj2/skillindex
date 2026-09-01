@@ -18,10 +18,13 @@ import {
 export async function persistSkillUniversalDecisionForSelection(
   skill: SkillRecord,
   selectedLocation: SkillLocationRecord,
-  options: ResolveSkillIndexPathOptions & { paths: SkillIndexPaths },
+  options: ResolveSkillIndexPathOptions & { paths: SkillIndexPaths; testFailSkillDecisionPersist?: boolean },
 ): Promise<void> {
   if (!shouldPersistSkillUniversalDecision(skill, selectedLocation)) {
     return;
+  }
+  if (options.testFailSkillDecisionPersist) {
+    throw new Error('Injected skill Universal decision persistence failure.');
   }
 
   const acceptedAlternates = findDivergentReadOnlyPluginAlternates(skill, selectedLocation);

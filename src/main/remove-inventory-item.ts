@@ -1,14 +1,15 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
+  CanonicalRole,
   McpLocationRecord,
   RemoveInventoryItemRequest,
   SkillInventorySnapshot,
 } from '@shared/contracts';
 import {
   ensureSkillIndexLayout,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
@@ -16,14 +17,19 @@ import {
   getDefaultMcpWriteDialect,
   isSupportedWritableMcpParser,
   readWritableMcpDefinitions,
-  writeMcpDefinitions,
+  writeMcpDefinitionsTransaction,
   type McpMutationTarget,
 } from '@main/issue-resolution';
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 
 export interface RemoveInventoryItemOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  preparedSnapshot?: SkillInventorySnapshot;
   trashItem?: TrashItem;
+  /** Test-only deterministic failure point for staged MCP config mutations. */
+  testFailMcpMutationAt?: number;
+  /** Test-only failure immediately before an MCP config's atomic commit. */
+  testFailMcpCommitAt?: number;
 }
 
 interface McpRemovalTarget extends McpMutationTarget {
@@ -36,24 +42,29 @@ export async function removeInventoryItem(
   request: RemoveInventoryItemRequest,
   options: RemoveInventoryItemOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const paths = options.paths ?? resolveSkillIndexPathsForScanOptions(options);
   await ensureSkillIndexLayout(paths);
 
-  const snapshot = await scanInventory({
-    ...options,
+  const scanOptions = { ...options };
+  delete scanOptions.preparedSnapshot;
+  delete scanOptions.trashItem;
+  delete scanOptions.testFailMcpMutationAt;
+  delete scanOptions.testFailMcpCommitAt;
+  const snapshot = options.preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
 
   if (request.entity === 'skill') {
-    await removeSkillFromAllLocations(snapshot, request.skillName, options.trashItem ?? trashPathWithElectron);
+    await removeSkillFromAllLocations(snapshot, request.skillName, paths, options.trashItem ?? trashPathWithElectron);
   } else if (request.entity === 'mcp') {
-    await removeMcpFromAllLocations(snapshot, request.mcpName);
+    await removeMcpFromAllLocations(snapshot, request.mcpName, options);
   } else {
-    await removeSubagentFromAllLocations(snapshot, request.subagentName, options.trashItem ?? trashPathWithElectron);
+    await removeSubagentFromAllLocations(snapshot, request.subagentName, paths, options.trashItem ?? trashPathWithElectron);
   }
 
   return scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
 }
@@ -61,6 +72,7 @@ export async function removeInventoryItem(
 async function removeSkillFromAllLocations(
   snapshot: SkillInventorySnapshot,
   skillName: string,
+  paths: SkillIndexPaths,
   trashItem: TrashItem,
 ): Promise<void> {
   const skill = snapshot.skills.find((entry) => entry.name === skillName);
@@ -68,12 +80,13 @@ async function removeSkillFromAllLocations(
     throw new Error(`Skill "${skillName}" was not found in the current inventory.`);
   }
 
-  await removePaths(skill.locations.map((location) => location.path), `Skill "${skillName}"`, trashItem);
+  await removePaths(snapshot, paths, skill.locations, `Skill "${skillName}"`, trashItem);
 }
 
 async function removeSubagentFromAllLocations(
   snapshot: SkillInventorySnapshot,
   subagentName: string,
+  paths: SkillIndexPaths,
   trashItem: TrashItem,
 ): Promise<void> {
   const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === subagentName);
@@ -81,16 +94,119 @@ async function removeSubagentFromAllLocations(
     throw new Error(`Subagent "${subagentName}" was not found in the current inventory.`);
   }
 
-  await removePaths(subagent.locations.map((location) => location.path), `Subagent "${subagentName}"`, trashItem);
+  await removePaths(snapshot, paths, subagent.locations, `Subagent "${subagentName}"`, trashItem);
 }
 
-async function removePaths(paths: string[], entityLabel: string, trashItem: TrashItem): Promise<void> {
-  const uniquePaths = dedupePaths(paths);
+interface RemovablePathLocation {
+  canonicalRole?: CanonicalRole;
+  mutability?: string;
+  path: string;
+  provenance?: { kind?: string };
+}
+
+export function isPluginManagedRemovalLocation(location: RemovablePathLocation): boolean {
+  return location.canonicalRole === 'managed-source'
+    || location.provenance?.kind === 'plugin'
+    || location.mutability === 'read-only-managed'
+    || isConventionalPluginCachePath(location.path);
+}
+
+async function removePaths(
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+  locations: RemovablePathLocation[],
+  entityLabel: string,
+  trashItem: TrashItem,
+): Promise<void> {
+  const uniquePaths = dedupePaths(locations
+    .filter((location) => !isPluginManagedRemovalLocation(location))
+    .map((location) => location.path));
   if (uniquePaths.length === 0) {
     throw new Error(`${entityLabel} has no removable locations.`);
   }
 
-  await Promise.all(uniquePaths.map((targetPath) => trashExistingPath(targetPath, trashItem)));
+  const removablePaths = (await Promise.all(uniquePaths.map(async (targetPath) =>
+    await isSafeRemovalTarget(targetPath, snapshot, paths) ? targetPath : null))).filter((targetPath): targetPath is string => targetPath !== null);
+  if (removablePaths.length === 0) {
+    throw new Error(`${entityLabel} has no removable locations.`);
+  }
+
+  await Promise.all(removablePaths.map((targetPath) => trashExistingPath(targetPath, trashItem)));
+}
+
+async function isSafeRemovalTarget(
+  targetPath: string,
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+): Promise<boolean> {
+  const lexicalPath = path.normalize(targetPath);
+  const pluginRoots = getPluginRemovalRoots(snapshot, paths);
+  if (pluginRoots.some((root) => isPathWithin(root, lexicalPath)) || isConventionalPluginCachePath(lexicalPath)) {
+    return false;
+  }
+
+  const resolvedPluginRoots = await Promise.all(pluginRoots.map(resolvePathThroughNearestExistingParent));
+  const resolvedParent = await resolvePathThroughNearestExistingParent(path.dirname(lexicalPath));
+  const physicalEntryPath = path.join(resolvedParent, path.basename(lexicalPath));
+  if (isConventionalPluginCachePath(physicalEntryPath)
+    || pluginRoots.concat(resolvedPluginRoots).some((root) => isPathWithin(root, physicalEntryPath))) {
+    return false;
+  }
+
+  try {
+    if ((await lstat(lexicalPath)).isSymbolicLink()) {
+      // Trash removes the agent-owned directory entry, not its referent. A
+      // legacy link may still point into a live managed cache and is safe to
+      // unlink as long as the link itself is outside every plugin root.
+      return true;
+    }
+  } catch (error) {
+    if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const resolvedPath = await resolvePathThroughNearestExistingParent(lexicalPath);
+  return !isConventionalPluginCachePath(resolvedPath)
+    && !pluginRoots.concat(resolvedPluginRoots).some((root) => isPathWithin(root, resolvedPath));
+}
+
+function getPluginRemovalRoots(snapshot: SkillInventorySnapshot, paths: SkillIndexPaths): string[] {
+  return [...new Set([
+    ...(snapshot.plugins ?? []).map((plugin) => plugin.rootPath),
+    ...snapshot.sources.filter((source) => source.kind === 'plugin').map((source) => source.skillsDir),
+    path.join(paths.sandboxRoot, '.codex', 'plugins'),
+    path.join(paths.sandboxRoot, '.claude', 'plugins'),
+    path.join(paths.liveAgentsDir, '..', '.codex', 'plugins'),
+    path.join(paths.liveAgentsDir, '..', '.claude', 'plugins'),
+  ].map(path.normalize))];
+}
+
+function isConventionalPluginCachePath(targetPath: string): boolean {
+  const segments = path.normalize(targetPath).split(path.sep).map((segment) => segment.toLowerCase());
+  return segments.some((segment, index) =>
+    (segment === '.codex' || segment === '.claude') && segments[index + 1] === 'plugins');
+}
+
+function isPathWithin(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function resolvePathThroughNearestExistingParent(targetPath: string): Promise<string> {
+  let candidate = path.normalize(targetPath);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return path.join(await realpath(candidate), ...missing.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return candidate;
+    missing.push(path.basename(candidate));
+    candidate = parent;
+  }
 }
 
 async function trashExistingPath(targetPath: string, trashItem: TrashItem): Promise<void> {
@@ -112,7 +228,11 @@ async function trashPathWithElectron(targetPath: string): Promise<void> {
   await shell.trashItem(targetPath);
 }
 
-async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpName: string): Promise<void> {
+async function removeMcpFromAllLocations(
+  snapshot: SkillInventorySnapshot,
+  mcpName: string,
+  options: Pick<RemoveInventoryItemOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'>,
+): Promise<void> {
   const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === mcpName);
   if (!mcp) {
     throw new Error(`MCP "${mcpName}" was not found in the current inventory.`);
@@ -123,7 +243,7 @@ async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpNa
     throw new Error(`MCP "${mcpName}" has no removable config locations.`);
   }
 
-  await Promise.all(targets.map(async (target) => {
+  const updates = await Promise.all(targets.map(async (target) => {
     const definitions = await readWritableMcpDefinitions(target);
     let changed = false;
 
@@ -134,10 +254,10 @@ async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpNa
       }
     }
 
-    if (changed) {
-      await writeMcpDefinitions(target.configPath, target.parserKind, definitions, target.writeDialect);
-    }
+    return changed ? { ...target, definitions } : null;
   }));
+  const mutationUpdates = updates.filter((target) => target !== null);
+  await writeMcpDefinitionsTransaction(mutationUpdates, options);
 }
 
 function collectMcpRemovalTargets(
@@ -173,13 +293,10 @@ function buildMcpRemovalTarget(
   snapshot: SkillInventorySnapshot,
   location: McpLocationRecord,
 ): Omit<McpRemovalTarget, 'definitionNames'> | null {
-  if (location.agentId.startsWith('plugin:') || location.provenance?.kind === 'plugin') {
-    return {
-      agentId: location.agentId,
-      configPath: location.configPath,
-      parserKind: 'jsonc-mcpServers',
-      writeDialect: 'json-type-url',
-    };
+  if (location.canonicalRole === 'managed-source'
+    || location.agentId.startsWith('plugin:')
+    || location.provenance?.kind === 'plugin') {
+    return null;
   }
 
   const agent = (snapshot.agents ?? []).find((entry) => entry.id === location.agentId);

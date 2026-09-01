@@ -19,6 +19,7 @@ import {
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import { getMcpResolveActionState } from '../lib/issue-resolution';
+import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
@@ -41,6 +42,7 @@ export function McpWorkspaceView({
   inventorySnapshot,
   isAutoResolving = false,
   isDismissingDrift,
+  isApplyingCapabilityAction = false,
   isResolvingIssue,
   isRemovingInventoryItem = false,
   isRescanning,
@@ -70,6 +72,7 @@ export function McpWorkspaceView({
   inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving?: boolean;
   isDismissingDrift: boolean;
+  isApplyingCapabilityAction?: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
@@ -195,8 +198,9 @@ export function McpWorkspaceView({
             </section>
 
             {mcp ? (
-              <McpDetailPanel
-                isDismissingDrift={isDismissingDrift}
+            <McpDetailPanel
+              isDismissingDrift={isDismissingDrift}
+              isApplyingCapabilityAction={isApplyingCapabilityAction}
                 isResolvingIssue={isResolvingIssue}
                 isRemovingInventoryItem={isRemovingInventoryItem}
                 inventorySnapshot={inventorySnapshot}
@@ -204,7 +208,7 @@ export function McpWorkspaceView({
                 mcpInspectorModel={mcpInspectorModel}
                 sandboxRoot={sandboxRoot}
                 onClearSelection={onClearSelection}
-                onDismissDrift={onDismissDrift}
+              onDismissDrift={onDismissDrift}
                 onOpenPluginSource={onOpenPluginSource}
                 onRequestRemove={onRequestRemove}
                 onResolveIssue={onResolveIssue}
@@ -504,6 +508,7 @@ function parseKeyValueLines(raw: string): Record<string, string> | undefined {
 
 function McpDetailPanel({
   isDismissingDrift,
+  isApplyingCapabilityAction,
   isResolvingIssue,
   isRemovingInventoryItem,
   inventorySnapshot,
@@ -519,6 +524,7 @@ function McpDetailPanel({
   onSelectVariant,
 }: {
   isDismissingDrift: boolean;
+  isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
@@ -538,6 +544,9 @@ function McpDetailPanel({
   }
 
   const resolveAction = getMcpResolveActionState(mcp, mcpInspectorModel, inventorySnapshot);
+  const removalPresentation = getInventoryRemovalPresentation(inventorySnapshot, {
+    entity: 'mcp', mcpName: mcp.name,
+  });
 
   return (
     <DetailInspectorPanel
@@ -546,8 +555,8 @@ function McpDetailPanel({
       footerActions={[
         ...(mcpInspectorModel.activeProblem.primaryActionLabel
           ? [{
-            disabled: !resolveAction.request || isResolvingIssue,
-            label: isResolvingIssue ? 'Applying…' : mcpInspectorModel.activeProblem.primaryActionLabel,
+            disabled: !resolveAction.request || isResolvingIssue || isApplyingCapabilityAction,
+            label: isResolvingIssue || isApplyingCapabilityAction ? 'Applying…' : mcpInspectorModel.activeProblem.primaryActionLabel,
             onClick: () => {
               if (!resolveAction.request) {
                 return;
@@ -579,8 +588,8 @@ function McpDetailPanel({
             variant: 'subtle' as const,
           }]
           : []),
-        {
-          disabled: isRemovingInventoryItem,
+        ...(removalPresentation.canRemove ? [{
+          disabled: isRemovingInventoryItem || isResolvingIssue || isApplyingCapabilityAction,
           label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
           onClick: () => {
             onRequestRemove({
@@ -590,11 +599,12 @@ function McpDetailPanel({
           },
           shortcut: 'R',
           variant: 'danger' as const,
-        },
+        }] : []),
       ]}
       model={mcpInspectorModel}
       paneClassName="mcp-inspector-panel"
       sandboxRoot={sandboxRoot}
+      isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => onSelectProblem(problemKey as McpIssueReason)}

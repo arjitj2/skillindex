@@ -1,4 +1,5 @@
-import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type {
@@ -30,12 +31,13 @@ import {
 } from '@shared/mcp-definition';
 import {
   ensureSkillIndexLayout,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 import {
   getSubagentFileNameForFormat,
   isMarkdownSubagentSymlinkCompatible,
+  isSubagentFormatRenderableFromUniversal,
 } from '@shared/subagent-format-policy';
 import {
   parseTomlMcpServerArray,
@@ -46,6 +48,16 @@ import {
 
 import { sanitizeJsonc, sortRecordValue } from '@main/json-utils';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
+import {
+  assertSafeSkillPackageName,
+  assertPluginManagedSkillPackageSymlinksContained,
+  assertSkillSourceAndDestinationDoNotOverlap,
+  assertSafeUniversalSkillMutation,
+  assertSafeWritableSkillLinkMutation,
+  isAgentSatisfiedByNativePlugin,
+  isPluginManagedTargetThroughRealpath,
+  isPluginManagedTarget,
+} from '@main/plugin-managed-sources';
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import {
   readPortableSubagentDefinitionFromFile,
@@ -53,9 +65,28 @@ import {
   type PortableSubagentDefinition,
 } from '@main/subagent-inventory';
 import { persistSkillUniversalDecisionForSelection } from '@main/skill-universal-decisions';
+import { replaceSkillLinksTransaction } from '@main/skill-link-transaction';
 
 export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  /** Snapshot freshly prepared by the runtime for audit and mutation planning. */
+  preparedSnapshot?: SkillInventorySnapshot;
+  /** Test-only deterministic failure point for skill link transactions. */
+  testFailSkillLinkAt?: number;
+  /** Test-only deterministic failure point for skill Universal decision persistence. */
+  testFailSkillDecisionPersist?: boolean;
+  /** Test-only deterministic failure point for staged subagent mutations. */
+  testFailSubagentMutationAt?: number;
+  /** Test-only deterministic failure point for subagent rendering. */
+  testFailSubagentRenderAt?: number;
+  /** Test-only deterministic failure point while staging subagent mutations. */
+  testFailSubagentStageAt?: number;
+  /** Test-only failure after a subagent stage entry has been created. */
+  testFailSubagentStageAfterCreateAt?: number;
+  /** Test-only deterministic failure point for staged MCP config mutations. */
+  testFailMcpMutationAt?: number;
+  /** Test-only failure immediately before an MCP config's atomic commit. */
+  testFailMcpCommitAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -87,6 +118,8 @@ interface SelectedMcpDefinition {
 interface CanonicalSkillPackage {
   path: string;
   location: SkillLocationRecord;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
 }
 
 interface CanonicalSubagentPackage {
@@ -103,50 +136,114 @@ interface SubagentWriteTarget {
   path: string;
 }
 
+interface SubagentMutationSafetyContext {
+  canonicalPath: string;
+  scope: SubagentLocationRecord['scope'];
+  snapshot: SkillInventorySnapshot;
+}
+
+interface StagedSubagentMutation {
+  path: string;
+  rendered?: string;
+  symlinkTarget?: string;
+}
+
 export async function resolveInventoryIssue(
   request: ResolveIssueRequest,
   options: ResolveIssueOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const { preparedSnapshot, ...scanOptions } = options;
+  const paths = scanOptions.paths ?? resolveSkillIndexPathsForScanOptions(scanOptions);
   await ensureSkillIndexLayout(paths);
 
-  const snapshot = await scanInventory({
-    ...options,
+  const snapshot = preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
 
   assertResolutionIssueIsCurrent(snapshot, request);
+  assertExplicitPluginPromotionSelection(snapshot, request);
 
   if (request.entity === 'skill') {
     await resolveSkillIssueIfCurrent(snapshot, request, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   } else if (request.entity === 'mcp') {
     await resolveMcpIssueIfCurrent(snapshot, request, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   } else {
     await resolveSubagentIssueIfCurrent(snapshot, request, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   }
 
   const nextSnapshot = await scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
   assertResolutionIssueWasResolved(nextSnapshot, request);
   return nextSnapshot;
 }
 
+function assertExplicitPluginPromotionSelection(
+  snapshot: SkillInventorySnapshot,
+  request: ResolveIssueRequest,
+): void {
+  if (request.entity === 'skill') {
+    const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
+    if (!skill || !isPluginOnlySkillPromotion(skill)) return;
+    assertCurrentManagedSourcePath(skill.managedSourceCandidates, request.selectedVariantPath);
+    return;
+  }
+
+  if (request.entity === 'mcp') {
+    const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+    if (!mcp || request.issue !== 'missing-universal' || !isPluginOnlyMcpPromotion(mcp)) return;
+    assertCurrentManagedSourcePath(mcp.managedSourceCandidates, request.selectedVariantPath);
+    return;
+  }
+
+  const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+  if (!subagent || request.issue !== 'missing-universal' || !isPluginOnlySubagentPromotion(subagent)) return;
+  assertCurrentManagedSourcePath(subagent.managedSourceCandidates, request.selectedVariantPath);
+}
+
+function assertCurrentManagedSourcePath(
+  candidates: SkillRecord['managedSourceCandidates'],
+  selectedVariantPath: string | undefined,
+): void {
+  if (!selectedVariantPath || !(candidates ?? []).some((candidate) =>
+    candidate.relationship === 'universal-missing' && candidate.path === selectedVariantPath)) {
+    throw new Error('Select a current plugin candidate before promoting it to Universal.');
+  }
+}
+
+function isPluginOnlySkillPromotion(skill: SkillRecord): boolean {
+  return (skill.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !skill.locations.some((location) =>
+      location.fileType === 'real-file' && location.canonicalRole !== 'managed-source');
+}
+
+function isPluginOnlyMcpPromotion(mcp: NonNullable<SkillInventorySnapshot['mcps']>[number]): boolean {
+  return (mcp.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !mcp.locations.some((location) => location.canonicalRole !== 'managed-source');
+}
+
+function isPluginOnlySubagentPromotion(subagent: SubagentRecord): boolean {
+  return (subagent.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !subagent.locations.some((location) =>
+      location.fileType === 'real-file' && location.canonicalRole !== 'managed-source');
+}
+
 export async function addMcpServer(
   request: AddMcpServerRequest,
   options: ResolveIssueOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const paths = options.paths ?? resolveSkillIndexPathsForScanOptions(options);
   await ensureSkillIndexLayout(paths);
 
   const snapshot = await scanInventory({
@@ -154,7 +251,7 @@ export async function addMcpServer(
     paths,
   });
   const definition = buildMcpServerDefinition(request);
-  const mutationTargets = getAddMcpServerTargets(snapshot, request.transport);
+  const mutationTargets = await coalesceMcpMutationTargets(getAddMcpServerTargets(snapshot, request.transport));
 
   if (mutationTargets.length === 0) {
     throw new Error('No writable MCP config targets are available for adding a server.');
@@ -171,12 +268,10 @@ export async function addMcpServer(
     throw new Error(`MCP Server "${request.name.trim()}" already exists in ${existingTargets.length} writable config${existingTargets.length === 1 ? '' : 's'}.`);
   }
 
-  await Promise.all(
-    updates.map(async (target) => {
-      target.definitions[request.name.trim()] = definition;
-      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
-    }),
-  );
+  for (const target of updates) {
+    target.definitions[request.name.trim()] = definition;
+  }
+  await writeMcpDefinitionsTransaction(updates, options);
 
   return scanInventory({
     ...options,
@@ -222,7 +317,9 @@ function assertResolutionIssueIsCurrent(snapshot: SkillInventorySnapshot, reques
 function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, request: ResolveIssueRequest): void {
   if (request.entity === 'skill') {
     const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
-    if (skill && (skill.issueReasons ?? []).includes(request.issue)) {
+    if (skill
+      && (skill.issueReasons ?? []).includes(request.issue)
+      && hasWritableSkillResolutionWorkRemaining(request, skill)) {
       throw new Error(`Skill "${request.skillName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
     }
     return;
@@ -237,9 +334,47 @@ function assertResolutionIssueWasResolved(snapshot: SkillInventorySnapshot, requ
   }
 
   const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
-  if (subagent && subagent.issueReasons.includes(request.issue)) {
+  if (subagent
+    && subagent.issueReasons.includes(request.issue)
+    && hasWritableSubagentResolutionWorkRemaining(request, subagent)) {
     throw new Error(`Subagent "${request.subagentName}" still has ${formatIssueLabel(request.issue)} after resolution.`);
   }
+}
+
+function hasWritableSkillResolutionWorkRemaining(
+  request: Extract<ResolveIssueRequest, { entity: 'skill' }>,
+  skill: SkillRecord,
+): boolean {
+  if (request.issue !== 'diverged-copies') {
+    return true;
+  }
+  const selected = request.selectedVariantPath
+    ? skill.locations.find((location) => location.path === request.selectedVariantPath)
+    : null;
+  const selectedKey = selected?.contentHash ?? selected?.definitionText ?? null;
+  return skill.locations.some((location) =>
+    location.fileType === 'real-file'
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin'
+    && (!selectedKey || (location.contentHash ?? location.definitionText ?? null) !== selectedKey));
+}
+
+function hasWritableSubagentResolutionWorkRemaining(
+  request: Extract<ResolveIssueRequest, { entity: 'subagent' }>,
+  subagent: SubagentRecord,
+): boolean {
+  if (request.issue !== 'definition-mismatch') {
+    return true;
+  }
+  const selected = request.selectedVariantPath
+    ? subagent.locations.find((location) => location.path === request.selectedVariantPath)
+    : null;
+  const selectedKey = selected?.definitionComparisonKey ?? selected?.definitionText ?? null;
+  return subagent.locations.some((location) =>
+    location.fileType === 'real-file'
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin'
+    && (!selectedKey || (location.definitionComparisonKey ?? location.definitionText ?? null) !== selectedKey));
 }
 
 function hasWritableMcpResolutionWorkRemaining(
@@ -312,10 +447,24 @@ async function resolveSkillIssueIfCurrent(
 
   assertSkillResolutionScopeAllowed(skill);
 
+  const hasUniversalPackage = skill.locations.some((location) =>
+    location.canonical
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin'
+    && location.fileType === 'real-file');
+  if (!hasUniversalPackage
+    && (request.issue === 'broken-symlink'
+      || request.issue === 'wrong-symlink-target'
+      || request.issue === 'missing-symlinks')) {
+    throw new Error(`Resolve Missing Universal before repairing symlinks for skill "${request.skillName}".`);
+  }
+
   switch (request.issue) {
     case 'missing-canonical':
     case 'diverged-copies': {
       const selectedSourcePath = pickSkillRealFileSelectionPath(skill, request.selectedVariantPath);
+      const selectedSourceIsPluginManaged = skill.locations.some((location) =>
+        location.path === selectedSourcePath && location.provenance?.kind === 'plugin');
       await makeSkillCanonical(
         {
           skillName: request.skillName,
@@ -323,14 +472,17 @@ async function resolveSkillIssueIfCurrent(
         },
         {
           ...options,
-          linkMissingAgentInstalls: false,
+          preparedSnapshot: snapshot,
+          // Non-plugin canonicalization keeps the existing two-step behavior.
+          // Promoting a managed plugin source is one explicit export operation:
+          // create Universal and distribute it to every compatible writable host.
+          linkMissingAgentInstalls: selectedSourceIsPluginManaged,
         },
       );
       return;
     }
     case 'identical-copies': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const duplicatePaths = skill.locations
         .filter((location) =>
           location.fileType === 'real-file'
@@ -341,45 +493,100 @@ async function resolveSkillIssueIfCurrent(
       if (duplicatePaths.length === 0) {
         throw new Error(`Skill "${request.skillName}" has no writable copies to convert.`);
       }
-      await Promise.all(dedupeNormalizedPaths(duplicatePaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(duplicatePaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, duplicatePaths, snapshot, options);
       return;
     }
     case 'missing-symlinks': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const missingPaths = (skill.detailDiagnostics.missingInstallSources ?? [])
         .map((source) => resolveMissingSkillInstallPath(skill.name, source.sourceId, snapshot))
         .filter((locationPath): locationPath is string => Boolean(locationPath))
         .filter((locationPath) => path.normalize(locationPath) !== path.normalize(canonicalPath));
-      await Promise.all(dedupeNormalizedPaths(missingPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(missingPaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, missingPaths, snapshot, options);
       return;
     }
     case 'broken-symlink': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
-      const canonicalPath = canonicalPackage.path;
-      const brokenPaths = skill.locations
-        .filter((location) => location.fileType === 'symlink' && location.resolvedPath === undefined)
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
+      const repairPaths = (await Promise.all(skill.locations
+        .filter((location) =>
+          location.fileType === 'symlink'
+          && path.normalize(location.path) !== path.normalize(canonicalPath))
+        .map(async (location) => ({
+          path: location.path,
+          broken: location.resolvedPath === undefined,
+          targetsPluginCache: location.resolvedPath
+            ? await isPluginManagedResolvedTarget(location.resolvedPath, snapshot)
+            : false,
+        }))))
+        .filter((location) => location.broken || location.targetsPluginCache)
         .map((location) => location.path);
-      await Promise.all(dedupeNormalizedPaths(brokenPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(repairPaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, repairPaths, snapshot, options);
       return;
     }
     case 'wrong-symlink-target': {
-      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath);
-      const canonicalPath = canonicalPackage.path;
+      const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, request.selectedVariantPath, options.paths);
       const wrongTargetPaths = skill.locations
         .filter((location) =>
           location.fileType === 'symlink'
           && location.resolvedPath !== undefined
-          && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath))
+          && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath)
+          && path.normalize(location.path) !== path.normalize(canonicalPath))
         .map((location) => location.path);
-      await Promise.all(dedupeNormalizedPaths(wrongTargetPaths).map((locationPath) => replaceWritableWithCanonicalSymlink(locationPath, canonicalPath, snapshot)));
-      await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+      await assertWritableSkillLinkMutationPlan(wrongTargetPaths, snapshot);
+      const canonicalPackage = await ensureCanonicalSkillPackage(skill, snapshot, request.selectedVariantPath, options.paths);
+      await completeCanonicalSkillResolution(skill, canonicalPackage, wrongTargetPaths, snapshot, options);
       return;
     }
   }
+}
+
+async function completeCanonicalSkillResolution(
+  skill: SkillRecord,
+  canonicalPackage: CanonicalSkillPackage,
+  locationPaths: string[],
+  snapshot: SkillInventorySnapshot,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  let linkTransaction: Awaited<ReturnType<typeof replaceSkillLinksTransaction>> | undefined;
+  try {
+    linkTransaction = await replaceWritableWithCanonicalSymlinks(locationPaths, canonicalPackage.path, snapshot, options);
+    await persistSkillUniversalDecisionForSelection(skill, canonicalPackage.location, options);
+  } catch (error) {
+    const rollbackFailures: unknown[] = [];
+    try { await linkTransaction?.rollback(); } catch (rollbackError) { rollbackFailures.push(rollbackError); }
+    try { await canonicalPackage.rollback(); } catch (rollbackError) { rollbackFailures.push(rollbackError); }
+    if (rollbackFailures.length > 0) throw new AggregateError([error, ...rollbackFailures], 'Skill issue resolution failed and rollback was incomplete.');
+    throw error;
+  }
+  await linkTransaction.commit();
+  await canonicalPackage.commit();
+}
+
+async function assertWritableSkillLinkMutationPlan(
+  locationPaths: string[],
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  const uniquePaths = dedupeNormalizedPaths(locationPaths);
+  const writableRoots = (snapshot.agents ?? [])
+    .flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []);
+  await Promise.all(uniquePaths.map(async (locationPath) => {
+    assertSkillSymlinkTargetWritable(locationPath, snapshot);
+    await assertSafeWritableSkillLinkMutation(locationPath, snapshot.sources, writableRoots);
+  }));
+}
+
+async function isPluginManagedResolvedTarget(
+  targetPath: string,
+  snapshot: SkillInventorySnapshot,
+): Promise<boolean> {
+  return isPluginManagedTarget(targetPath, snapshot.sources)
+    || await isPluginManagedTargetThroughRealpath(targetPath, snapshot.sources);
 }
 
 function dedupeNormalizedPaths(paths: string[]): string[] {
@@ -477,40 +684,64 @@ async function resolveMcpIssueIfCurrent(
 
   assertMcpResolutionScopeAllowed(mcp);
 
-  const selectedVariant = pickMcpSelection(mcp.locations, request.selectedVariantPath, {
-    preferUniversal: request.issue === 'missing-from-agents',
+  await applyMcpResolution(snapshot, mcp, request.issue, request.selectedVariantPath, options);
+}
+
+export async function updateMcpUniversalFromPluginSource(
+  snapshot: SkillInventorySnapshot,
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  selectedVariantPath: string,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  assertMcpResolutionScopeAllowed(mcp);
+  const selected = pickMcpSelection(mcp.locations, selectedVariantPath);
+  if (selected.canonicalRole !== 'managed-source') {
+    throw new Error('Choose a current readable managed plugin source before updating Universal.');
+  }
+  await applyMcpResolution(snapshot, mcp, 'missing-universal', selectedVariantPath, options);
+}
+
+async function applyMcpResolution(
+  snapshot: SkillInventorySnapshot,
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  issue: Extract<ResolveIssueRequest, { entity: 'mcp' }>['issue'],
+  selectedVariantPath: string | undefined,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+
+  const selectedVariant = pickMcpSelection(mcp.locations, selectedVariantPath, {
+    preferUniversal: issue === 'missing-from-agents',
   });
   const selectedDefinition = parseSelectedMcpDefinition(selectedVariant);
   const agentLocalDefinitions = collectAgentLocalDefinitionsForMcp(mcp, selectedDefinition);
-  const mutationTargets = collectMcpResolutionTargets(snapshot, request.issue, mcp, selectedVariant, options);
+  const mutationTargets = await coalesceMcpMutationTargets(
+    collectMcpResolutionTargets(snapshot, issue, mcp, selectedVariant, options),
+  );
 
   if (mutationTargets.length === 0) {
-    throw new Error(`MCP "${request.mcpName}" has no writable supported targets for ${request.issue}.`);
+    throw new Error(`MCP "${mcp.name}" has no writable supported targets for ${issue}.`);
   }
 
-  const updates = await Promise.all(
-    mutationTargets.map(async (target) => ({
-      ...target,
-      definitions: await readWritableMcpDefinitions(target),
-    })),
-  );
-
-  await Promise.all(
-    updates.map(async (target) => {
-      const definitionName = getMcpDefinitionNameForWrite(request.mcpName, selectedVariant);
-      if (definitionName !== request.mcpName) {
-        delete target.definitions[request.mcpName];
-      }
-      target.definitions[definitionName] = buildMcpDefinitionForTarget(
-        snapshot,
-        target,
-        target.definitions[definitionName],
-        selectedDefinition,
-        agentLocalDefinitions,
-      );
-      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
-    }),
-  );
+  await assertSafeMcpMutationTargets(mutationTargets, snapshot);
+  const updates = await Promise.all(mutationTargets.map(async (target) => ({
+    ...target,
+    definitions: await readWritableMcpDefinitions(target),
+    originalContents: await readMcpConfigContents(target.configPath),
+  })));
+  const definitionName = getMcpDefinitionNameForWrite(mcp.name, selectedVariant);
+  for (const target of updates) {
+    if (definitionName !== mcp.name) {
+      delete target.definitions[mcp.name];
+    }
+    target.definitions[definitionName] = buildMcpDefinitionForTarget(
+      snapshot,
+      target,
+      target.definitions[definitionName],
+      selectedDefinition,
+      agentLocalDefinitions,
+    );
+  }
+  await writeMcpResolutionTransaction(updates, options);
 }
 
 function collectMcpResolutionTargets(
@@ -521,7 +752,15 @@ function collectMcpResolutionTargets(
   options: ResolveIssueOptions & { paths: SkillIndexPaths },
 ): McpMutationTarget[] {
   const targets = issue === 'missing-universal'
-    ? buildWritableUniversalMcpTargets(snapshot, selectedVariant.scope, options)
+    ? [
+        ...buildWritableUniversalMcpTargets(snapshot, selectedVariant.scope, options),
+        ...(selectedVariant.canonicalRole === 'managed-source'
+          ? (mcp.expectedLocations ?? [])
+            .filter((location) => location.supportStatus !== 'unsupported')
+            .map((location) => buildWritableMcpMutationTarget(snapshot, location.agentId, location.configPath))
+            .filter((target): target is McpMutationTarget => target !== null)
+          : []),
+      ]
     : issue === 'definition-mismatch'
       ? [
           ...mcp.locations
@@ -586,6 +825,100 @@ function dedupeMcpMutationTargets(targets: McpMutationTarget[]): McpMutationTarg
     seen.add(key);
     return true;
   });
+}
+
+async function coalesceMcpMutationTargets<T extends McpMutationTarget>(targets: T[]): Promise<T[]> {
+  const byPhysicalPath = new Map<string, T>();
+  for (const target of targets) {
+    const physicalPath = await resolveSafeMcpConfigWritePath(target.configPath);
+    const existing = byPhysicalPath.get(physicalPath);
+    if (existing) {
+      if (existing.parserKind !== target.parserKind || existing.writeDialect !== target.writeDialect) {
+        throw new Error('MCP resolution cannot combine aliases with incompatible config dialects.');
+      }
+      continue;
+    }
+    byPhysicalPath.set(physicalPath, { ...target, configPath: physicalPath });
+  }
+  return [...byPhysicalPath.values()];
+}
+
+async function assertSafeMcpMutationTargets(
+  targets: McpMutationTarget[],
+  snapshot: SkillInventorySnapshot,
+): Promise<void> {
+  const pluginRoots = (snapshot.plugins ?? []).map((plugin) => plugin.rootPath);
+  const resolvedPluginRoots = await Promise.all(pluginRoots.map((root) =>
+    resolvePathThroughNearestExistingParent(root)));
+  await Promise.all(targets.map(async (target) => {
+    const lexicalPath = path.normalize(target.configPath);
+    if (pluginRoots.some((root) => isPathWithin(root, lexicalPath))) {
+      throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+    }
+    const resolvedPath = await resolvePathThroughNearestExistingParent(lexicalPath);
+    if (pluginRoots.some((root) => isPathWithin(root, resolvedPath))
+      || resolvedPluginRoots.some((root) => isPathWithin(root, resolvedPath))) {
+      throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+    }
+  }));
+}
+
+async function readMcpConfigContents(configPath: string): Promise<string | undefined> {
+  try {
+    return await readFile(configPath, 'utf8');
+  } catch (error) {
+    if (isFileNotFoundError(error)) return undefined;
+    throw error;
+  }
+}
+
+export async function writeMcpDefinitionsTransaction(
+  updates: Array<McpMutationTarget & { definitions: McpServerDefinitions }>,
+  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'> = {},
+): Promise<void> {
+  const targets = await coalesceMcpMutationTargets(updates);
+  await writeMcpResolutionTransaction(
+    await Promise.all(targets.map(async (target) => ({
+      ...target,
+      originalContents: await readMcpConfigContents(target.configPath),
+    }))),
+    options,
+  );
+}
+
+async function writeMcpResolutionTransaction(
+  updates: Array<McpMutationTarget & { definitions: McpServerDefinitions; originalContents: string | undefined }>,
+  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'>,
+): Promise<void> {
+  const written: Array<McpMutationTarget & { originalContents: string | undefined }> = [];
+  try {
+    for (const [index, target] of updates.entries()) {
+      if (options.testFailMcpMutationAt === index) {
+        throw new Error(`MCP mutation failed at staged target ${index}.`);
+      }
+      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect, {
+        failBeforeCommit: options.testFailMcpCommitAt === index,
+      });
+      written.push(target);
+    }
+  } catch (error) {
+    const rollbackErrors: unknown[] = [];
+    for (const target of written.reverse()) {
+      try {
+        if (target.originalContents === undefined) {
+          await rm(target.configPath, { force: true });
+        } else {
+          await writeMcpConfigAtomically(target.configPath, target.originalContents);
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([error, ...rollbackErrors], 'MCP resolution failed and rollback was incomplete.');
+    }
+    throw error;
+  }
 }
 
 function collectAgentLocalDefinitionsForMcp(
@@ -724,20 +1057,25 @@ async function resolveSubagentIssueIfCurrent(
   }
 
   assertSubagentResolutionScopeAllowed(subagent);
+  const scope = getSubagentMutationScope(subagent);
 
   switch (request.issue) {
     case 'missing-universal': {
       const selectedLocation = pickSubagentSelection(subagent, request.selectedVariantPath, {
         allowInvalid: true,
       });
-      const canonicalPath = isInvalidSubagentLocation(selectedLocation)
-        ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths)
-        : (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
+      if (selectedLocation.canonicalRole === 'managed-source') {
+        await promoteManagedSubagentToUniversal(snapshot, subagent, selectedLocation, options);
+      } else {
+        const canonicalPath = isInvalidSubagentLocation(selectedLocation)
+          ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, snapshot, scope, options.paths)
+          : (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
             preferExisting: false,
           })).path;
-      const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
-      await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
-        replaceWithCanonicalSymlink(target.path, canonicalPath)));
+        const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
+        await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
+          replaceWithCanonicalSymlink(target.path, canonicalPath, { canonicalPath, scope, snapshot })));
+      }
       return;
     }
     case 'missing-from-agents': {
@@ -747,7 +1085,7 @@ async function resolveSubagentIssueIfCurrent(
       });
       const targets = collectWritableMissingSubagentTargets(snapshot, subagent.missingLocations ?? []);
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot, scope)));
       return;
     }
     case 'identical-copies': {
@@ -762,7 +1100,7 @@ async function resolveSubagentIssueIfCurrent(
         canonicalLocation?.definitionComparisonKey,
       );
       await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
-        replaceWithCanonicalSymlink(target.path, canonicalPath)));
+        replaceWithCanonicalSymlink(target.path, canonicalPath, { canonicalPath, scope, snapshot })));
       return;
     }
     case 'broken-symlink':
@@ -781,7 +1119,7 @@ async function resolveSubagentIssueIfCurrent(
             : location.resolvedPath !== undefined && path.normalize(location.resolvedPath) !== path.normalize(canonicalPackage.path)))
         .map((location) => locationToSubagentWriteTarget(location, snapshot));
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot, scope)));
       return;
     }
     case 'definition-mismatch': {
@@ -810,10 +1148,52 @@ async function resolveSubagentIssueIfCurrent(
           .map((location) => locationToSubagentWriteTarget(location, snapshot)),
       ];
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-        writeSubagentTarget(target, canonicalPackage, selectedDefinition, snapshot)));
+        writeSubagentTarget(target, canonicalPackage, selectedDefinition, snapshot, scope)));
       return;
     }
   }
+}
+
+export async function updateSubagentUniversalFromPluginSource(
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+  selectedVariantPath: string,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  assertSubagentResolutionScopeAllowed(subagent);
+  const selectedLocation = pickSubagentSelection(subagent, selectedVariantPath, { allowInvalid: true });
+  if (selectedLocation.canonicalRole !== 'managed-source') {
+    throw new Error('Choose a current readable managed plugin source before updating Universal.');
+  }
+  await promoteManagedSubagentToUniversal(snapshot, subagent, selectedLocation, options);
+}
+
+async function promoteManagedSubagentToUniversal(
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+  selectedLocation: SubagentLocationRecord,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
+    ? createInvalidCanonicalSubagentPackage(subagent, selectedLocation, options.paths)
+    : createCanonicalSubagentPackageForPromotion(subagent, snapshot, selectedLocation, options.paths);
+  const targets = collectWritableSubagentTargetsForNewCanonical(
+    snapshot,
+    subagent,
+    canonicalPackage,
+    selectedLocation.scope,
+  );
+  await executeSubagentPromotionTransaction({
+    canonicalPackage,
+    selectedLocation,
+    snapshot,
+    subagent,
+    targets: isInvalidSubagentLocation(selectedLocation) ? [] : dedupeSubagentTargets(targets),
+    options,
+    rawCanonicalContent: isInvalidSubagentLocation(selectedLocation)
+      ? await readFile(selectedLocation.path, 'utf8')
+      : undefined,
+  });
 }
 
 function assertSubagentResolutionScopeAllowed(subagent: SubagentRecord): void {
@@ -824,6 +1204,10 @@ function assertSubagentResolutionScopeAllowed(subagent: SubagentRecord): void {
   if (scopes.size > 1) {
     throw new Error('Subagent resolution currently requires every affected location to stay within one scope.');
   }
+}
+
+function getSubagentMutationScope(subagent: SubagentRecord): SubagentLocationRecord['scope'] {
+  return subagent.locations[0]?.scope ?? subagent.missingLocations?.[0]?.scope ?? 'live';
 }
 
 async function ensureCanonicalSubagentPackage(
@@ -840,6 +1224,7 @@ async function ensureCanonicalSubagentPackage(
     ? findCanonicalSubagentLocation(subagent, { allowInvalid: behavior.allowInvalid })
     : null;
   if (canonicalLocation) {
+    await assertSafeSubagentMutationDestination(canonicalLocation.path, canonicalLocation.scope, snapshot, canonicalLocation.path);
     const definition = stripSubagentLocalExtras(
       readPortableDefinitionForSubagentLocation(snapshot, subagent.name, canonicalLocation, {
         allowInvalid: behavior.allowInvalid,
@@ -861,14 +1246,258 @@ async function ensureCanonicalSubagentPackage(
     }),
   );
   const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, options.paths);
+  const safety = { canonicalPath, scope: selectedLocation.scope, snapshot };
   await writeSubagentDefinitionFile(canonicalPath, 'markdown-frontmatter', definition, {
     allowInvalid: behavior.allowInvalid && isInvalidSubagentLocation(selectedLocation),
-  });
+  }, safety);
   return {
     allowInvalid: isInvalidSubagentLocation(selectedLocation),
     path: canonicalPath,
     definition,
   };
+}
+
+function createCanonicalSubagentPackageForPromotion(
+  subagent: SubagentRecord,
+  snapshot: SkillInventorySnapshot,
+  selectedLocation: SubagentLocationRecord,
+  paths: SkillIndexPaths,
+): CanonicalSubagentPackage {
+  return {
+    path: resolveCanonicalSubagentPath(subagent, selectedLocation, paths),
+    definition: stripSubagentLocalExtras(readPortableDefinitionForSubagentLocation(
+      snapshot,
+      subagent.name,
+      selectedLocation,
+    )),
+  };
+}
+
+function createInvalidCanonicalSubagentPackage(
+  subagent: SubagentRecord,
+  selectedLocation: SubagentLocationRecord,
+  paths: SkillIndexPaths,
+): CanonicalSubagentPackage {
+  return {
+    path: resolveCanonicalSubagentPath(subagent, selectedLocation, paths),
+    definition: { name: '', description: null, prompt: '', extras: {} },
+    allowInvalid: true,
+  };
+}
+
+async function executeSubagentPromotionTransaction({
+  canonicalPackage,
+  selectedLocation,
+  snapshot,
+  subagent,
+  targets,
+  options,
+  rawCanonicalContent,
+}: {
+  canonicalPackage: CanonicalSubagentPackage;
+  selectedLocation: SubagentLocationRecord;
+  snapshot: SkillInventorySnapshot;
+  subagent: SubagentRecord;
+  targets: SubagentWriteTarget[];
+  options: ResolveIssueOptions & { paths: SkillIndexPaths };
+  rawCanonicalContent?: string;
+}): Promise<void> {
+  const mutations = buildSubagentPromotionMutations(
+    canonicalPackage,
+    snapshot,
+    targets,
+    options,
+    rawCanonicalContent,
+  );
+  await assertSubagentPromotionMutationPlan(mutations, canonicalPackage, selectedLocation, snapshot, subagent);
+  await applyStagedSubagentMutations(mutations, options);
+}
+
+function buildSubagentPromotionMutations(
+  canonicalPackage: CanonicalSubagentPackage,
+  snapshot: SkillInventorySnapshot,
+  targets: SubagentWriteTarget[],
+  options: ResolveIssueOptions,
+  rawCanonicalContent?: string,
+): StagedSubagentMutation[] {
+  const mutations: StagedSubagentMutation[] = [{
+    path: canonicalPackage.path,
+    rendered: rawCanonicalContent ?? renderPortableSubagentDefinition(canonicalPackage.definition, 'markdown-frontmatter'),
+  }];
+  for (const [index, target] of targets.entries()) {
+    if (options.testFailSubagentRenderAt === index + 1) {
+      throw new Error(`Injected subagent render failure at ${index + 1}.`);
+    }
+    const family = target.family ?? findSubagentLocationFamily(snapshot, target.agentId);
+    if (target.format === 'markdown-frontmatter'
+      && isMarkdownSubagentSymlinkCompatible(family)
+      && !hasSubagentLocalExtras(target)) {
+      mutations.push({ path: target.path, symlinkTarget: canonicalPackage.path });
+      continue;
+    }
+    const definition = mergeExistingSubagentTargetExtras(target, stripSubagentLocalExtras(canonicalPackage.definition));
+    mutations.push({
+      path: target.path,
+      rendered: renderPortableSubagentDefinition(definition, target.format, { family }),
+    });
+  }
+  return dedupeSubagentMutations(mutations);
+}
+
+function dedupeSubagentMutations(mutations: StagedSubagentMutation[]): StagedSubagentMutation[] {
+  const seen = new Set<string>();
+  return mutations.filter((mutation) => {
+    const key = path.normalize(mutation.path);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function assertSubagentPromotionMutationPlan(
+  mutations: StagedSubagentMutation[],
+  canonicalPackage: CanonicalSubagentPackage,
+  selectedLocation: SubagentLocationRecord,
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+): Promise<void> {
+  const allowedExistingPaths = new Set(subagent.locations.map((location) => path.normalize(location.path)));
+  const resolvedDestinations = new Set<string>();
+  for (const mutation of mutations) {
+    await assertSafeSubagentMutationDestination(mutation.path, selectedLocation.scope, snapshot, canonicalPackage.path);
+    const exists = await lstat(mutation.path).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    });
+    if (exists && !allowedExistingPaths.has(path.normalize(mutation.path))) {
+      throw new Error(`Subagent destination collision: ${mutation.path} belongs to a different subagent.`);
+    }
+    const resolvedDestination = path.join(
+      await resolveSubagentNearestExistingParent(path.dirname(mutation.path)),
+      path.basename(mutation.path),
+    );
+    if (resolvedDestinations.has(path.normalize(resolvedDestination))) {
+      throw new Error('Subagent mutation plan contains overlapping destination aliases.');
+    }
+    resolvedDestinations.add(path.normalize(resolvedDestination));
+  }
+}
+
+async function assertSafeSubagentMutationDestination(
+  destinationPath: string,
+  scope: SubagentLocationRecord['scope'],
+  snapshot: SkillInventorySnapshot,
+  canonicalPath: string,
+): Promise<void> {
+  const roots = [path.dirname(canonicalPath), ...(snapshot.agents ?? [])
+    .filter((agent) => agent.scope === scope && agent.writable && agent.subagentsLocation?.path)
+    .map((agent) => agent.subagentsLocation?.path ?? '')]
+    .filter((root) => root.length > 0);
+  if (!roots.some((root) => isExactSubagentChild(root, destinationPath))) {
+    throw new Error('Subagent mutation requires an exact writable Universal or agent subagent destination in the selected scope.');
+  }
+  const destinationParent = path.dirname(destinationPath);
+  const resolvedParent = await resolveSubagentNearestExistingParent(destinationParent);
+  const resolvedRoots = await Promise.all(roots.map(resolveSubagentNearestExistingParent));
+  if (!resolvedRoots.some((root) => isExactSubagentChild(root, path.join(resolvedParent, path.basename(destinationPath))))) {
+    throw new Error('Subagent mutation destination escapes its writable root through a path alias.');
+  }
+  const pluginRoots = (snapshot.plugins ?? []).map((plugin) => plugin.rootPath);
+  const workspaceRoot = path.dirname(path.dirname(path.dirname(canonicalPath)));
+  const pluginCacheRoots = [
+    path.join(workspaceRoot, '.codex', 'plugins'),
+    path.join(workspaceRoot, '.codex', 'plugins', 'cache'),
+    path.join(workspaceRoot, '.claude', 'plugins'),
+  ];
+  const allPluginRoots = [...new Set([...pluginRoots, ...pluginCacheRoots])];
+  const resolvedPluginRoots = await Promise.all(allPluginRoots.map(resolveSubagentNearestExistingParent));
+  const resolvedCanonicalPath = await resolveSubagentNearestExistingParent(canonicalPath);
+  if (allPluginRoots.concat(resolvedPluginRoots).some((root) => isSubagentPathContainedBy(root, destinationPath)
+    || isSubagentPathContainedBy(root, resolvedParent)
+    || isSubagentPathContainedBy(root, canonicalPath)
+    || isSubagentPathContainedBy(root, resolvedCanonicalPath))) {
+    throw new Error('Subagent mutations cannot write into a plugin-managed cache path.');
+  }
+}
+
+function isExactSubagentChild(root: string, target: string): boolean {
+  const relative = path.relative(path.normalize(root), path.normalize(target));
+  return relative !== '' && !relative.includes(path.sep) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+function isSubagentPathContainedBy(root: string, target: string): boolean {
+  const relative = path.relative(path.normalize(root), path.normalize(target));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function resolveSubagentNearestExistingParent(targetPath: string): Promise<string> {
+  let candidate = path.normalize(targetPath);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return path.join(await realpath(candidate), ...missing.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return candidate;
+    missing.push(path.basename(candidate));
+    candidate = parent;
+  }
+}
+
+async function applyStagedSubagentMutations(
+  mutations: StagedSubagentMutation[],
+  options: ResolveIssueOptions,
+): Promise<void> {
+  const staged: Array<StagedSubagentMutation & { stagePath: string; backupPath: string; installed: boolean; backedUp: boolean }> = [];
+  try {
+    for (const [index, mutation] of mutations.entries()) {
+      const parent = path.dirname(mutation.path);
+      await mkdir(parent, { recursive: true });
+      const stagePath = path.join(parent, `.${path.basename(mutation.path)}.stage-${randomUUID()}`);
+      const stagedMutation = { ...mutation, stagePath, backupPath: path.join(parent, `.${path.basename(mutation.path)}.backup-${randomUUID()}`), installed: false, backedUp: false };
+      staged.push(stagedMutation);
+      if (options.testFailSubagentStageAt === index + 1) {
+        throw new Error(`Injected subagent stage failure at ${index + 1}.`);
+      }
+      if (mutation.symlinkTarget) await symlink(mutation.symlinkTarget, stagePath);
+      else await writeFile(stagePath, mutation.rendered ?? '', 'utf8');
+      if (options.testFailSubagentStageAfterCreateAt === index + 1) {
+        throw new Error(`Injected subagent post-create stage failure at ${index + 1}.`);
+      }
+    }
+  } catch (error) {
+    await Promise.all(staged.map((mutation) => rm(mutation.stagePath, { recursive: true, force: true }).catch(() => undefined)));
+    throw error;
+  }
+  try {
+    for (const [index, mutation] of staged.entries()) {
+      mutation.backedUp = await rename(mutation.path, mutation.backupPath).then(() => true).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      });
+      if (options.testFailSubagentMutationAt === index + 1) {
+        throw new Error(`Injected subagent mutation failure at ${index + 1}.`);
+      }
+      await rename(mutation.stagePath, mutation.path);
+      mutation.installed = true;
+    }
+  } catch (error) {
+    const failures: unknown[] = [];
+    for (const mutation of staged.slice().reverse()) {
+      try {
+        if (mutation.installed) await rm(mutation.path, { recursive: true, force: true });
+        if (mutation.backedUp) await rename(mutation.backupPath, mutation.path);
+      } catch (rollbackError) { failures.push(rollbackError); }
+    }
+    await Promise.all(staged.map((mutation) => rm(mutation.stagePath, { recursive: true, force: true }).catch(() => undefined)));
+    if (failures.length > 0) throw new AggregateError([error, ...failures], 'Subagent promotion failed and rollback was incomplete.');
+    throw error;
+  }
+  await Promise.all(staged.map((mutation) => mutation.backedUp
+    ? rm(mutation.backupPath, { recursive: true, force: true })
+    : Promise.resolve()));
 }
 
 function findCanonicalSubagentLocation(
@@ -884,6 +1513,8 @@ function findCanonicalSubagentLocation(
 async function copySubagentLocationToCanonicalPath(
   subagent: SubagentRecord,
   selectedLocation: SubagentLocationRecord,
+  snapshot: SkillInventorySnapshot,
+  scope: SubagentLocationRecord['scope'],
   paths: SkillIndexPaths,
 ): Promise<string> {
   const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, paths);
@@ -891,6 +1522,7 @@ async function copySubagentLocationToCanonicalPath(
     return canonicalPath;
   }
 
+  await assertSafeSubagentMutationDestination(canonicalPath, scope, snapshot, canonicalPath);
   await mkdir(path.dirname(canonicalPath), { recursive: true });
   await rm(canonicalPath, { recursive: true, force: true });
   await cp(selectedLocation.path, canonicalPath);
@@ -1030,6 +1662,48 @@ function collectWritableMissingSubagentTargets(
     .filter((target) => target.path.length > 0);
 }
 
+function collectWritableSubagentTargetsForNewCanonical(
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+  canonicalPackage: CanonicalSubagentPackage,
+  scope: SubagentLocationRecord['scope'],
+): SubagentWriteTarget[] {
+  const enabledPluginSources = (subagent.managedSourceCandidates ?? [])
+    .filter((candidate) => candidate.plugin.enabled === true)
+    .map((candidate) => candidate.plugin);
+
+  return (snapshot.agents ?? [])
+    .filter((agent) => {
+      const format = agent.subagentParserKind ?? 'unknown';
+      return agent.installState === 'installed'
+        && agent.writable
+        && agent.scope === scope
+        && agent.subagentsLocation?.state === 'available'
+        && Boolean(agent.subagentsLocation.path)
+        && isSubagentFormatRenderableFromUniversal(format, 'markdown-frontmatter')
+        && !isAgentSatisfiedByNativePlugin(agent.family, enabledPluginSources);
+    })
+    .map((agent) => {
+      const format = agent.subagentParserKind ?? 'markdown-frontmatter';
+      const directoryPath = agent.subagentsLocation?.path ?? '';
+      const existingLocation = subagent.locations.find((location) =>
+        location.agentId === agent.id && location.canonicalRole !== 'managed-source');
+      return {
+        agentId: agent.id,
+        family: agent.family,
+        format,
+        localExtrasKeys: existingLocation?.localExtrasKeys,
+        path: existingLocation?.path ?? path.join(directoryPath, getSubagentFileNameForFormat({
+          name: subagent.name,
+          format,
+          family: agent.family,
+          canonicalPath: canonicalPackage.path,
+        })),
+      };
+    })
+    .filter((target) => target.path.length > 0);
+}
+
 function isWritableSubagentAgent(snapshot: SkillInventorySnapshot, agentId: string): boolean {
   const agent = (snapshot.agents ?? []).find((entry) => entry.id === agentId);
   return Boolean(agent?.writable && agent.subagentsLocation?.state === 'available' && agent.subagentsLocation.path);
@@ -1094,11 +1768,13 @@ async function writeSubagentTarget(
   canonicalPackage: CanonicalSubagentPackage,
   definition: PortableSubagentDefinition,
   snapshot: SkillInventorySnapshot,
+  scope: SubagentLocationRecord['scope'],
 ): Promise<void> {
+  const safety = { canonicalPath: canonicalPackage.path, scope, snapshot };
   if (path.normalize(target.path) === path.normalize(canonicalPackage.path)) {
     await writeSubagentDefinitionFile(target.path, 'markdown-frontmatter', stripSubagentLocalExtras(definition), {
       allowInvalid: canonicalPackage.allowInvalid,
-    });
+    }, safety);
     return;
   }
 
@@ -1108,7 +1784,7 @@ async function writeSubagentTarget(
     && isMarkdownSubagentSymlinkCompatible(family)
     && !hasSubagentLocalExtras(target)
   ) {
-    await replaceWithCanonicalSymlink(target.path, canonicalPackage.path);
+    await replaceWithCanonicalSymlink(target.path, canonicalPackage.path, safety);
     return;
   }
 
@@ -1117,6 +1793,7 @@ async function writeSubagentTarget(
     target.format,
     mergeExistingSubagentTargetExtras(target, stripSubagentLocalExtras(definition)),
     { allowInvalid: canonicalPackage.allowInvalid, family },
+    safety,
   );
 }
 
@@ -1125,7 +1802,9 @@ async function writeSubagentDefinitionFile(
   format: AgentSubagentParserKind,
   definition: PortableSubagentDefinition,
   options: { allowInvalid?: boolean; family?: string } = {},
+  safety: SubagentMutationSafetyContext,
 ): Promise<void> {
+  await assertSafeSubagentMutationDestination(filePath, safety.scope, safety.snapshot, safety.canonicalPath);
   await mkdir(path.dirname(filePath), { recursive: true });
   await rm(filePath, { recursive: true, force: true });
   await writeFile(filePath, renderPortableSubagentDefinition(definition, format, options), 'utf8');
@@ -1189,44 +1868,139 @@ async function ensureCanonicalSkillPackage(
   skill: SkillRecord,
   snapshot: SkillInventorySnapshot,
   selectedVariantPath: string | undefined,
+  paths: SkillIndexPaths,
 ): Promise<CanonicalSkillPackage> {
-  const pluginCanonicalLocation = resolvePluginCanonicalSkillLocation(skill, selectedVariantPath);
-  if (pluginCanonicalLocation) {
-    return {
-      path: pluginCanonicalLocation.path,
-      location: pluginCanonicalLocation,
-    };
+  assertSafeSkillPackageName(skill.name);
+  const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, selectedVariantPath, paths);
+  const selectedSourcePath = pickSkillRealFileSelectionPath(skill, selectedVariantPath);
+  const selectedLocation = skill.locations.find((location) => location.path === selectedSourcePath && location.fileType === 'real-file');
+  if (!selectedLocation) {
+    throw new Error('The selected skill version must be a real file before repairing links.');
   }
-
-  const canonicalPath = resolveCanonicalSkillPath(skill, snapshot, selectedVariantPath);
+  const canonicalRoot = snapshot.sources.find((source) =>
+    source.scope === selectedLocation.sourceScope
+    && path.normalize(source.skillsDir) === path.normalize(path.dirname(canonicalPath))
+    && source.writable
+    && source.kind !== 'plugin')?.skillsDir
+    ?? (selectedLocation.sourceScope === 'sandbox' ? paths.sandboxCanonicalUserSkillsDir : paths.liveCanonicalUserSkillsDir);
+  if (path.normalize(selectedLocation.path) !== path.normalize(canonicalPath)) {
+    await assertSkillSourceAndDestinationDoNotOverlap(selectedLocation.path, canonicalPath);
+  }
+  await assertSafeUniversalSkillMutation({
+    destinationPath: canonicalPath,
+    universalRoot: canonicalRoot,
+    skillName: skill.name,
+    scope: selectedLocation.sourceScope,
+    sources: snapshot.sources,
+    allowDefaultUniversalRoot: selectedLocation.provenance?.kind === 'plugin',
+  });
   const canonicalRealFile = skill.locations.find((location) =>
     location.path === canonicalPath && location.fileType === 'real-file');
   if (canonicalRealFile) {
     return {
       path: canonicalPath,
       location: canonicalRealFile,
+      commit: () => Promise.resolve(),
+      rollback: () => Promise.resolve(),
     };
   }
 
-  const selectedSourcePath = pickSkillRealFileSelectionPath(skill, selectedVariantPath);
-  const selectedLocation = skill.locations.find((location) => location.path === selectedSourcePath && location.fileType === 'real-file');
-  if (!selectedLocation) {
-    throw new Error('The selected skill version must be a real file before repairing links.');
-  }
-
-  await mkdir(path.dirname(canonicalPath), { recursive: true });
-  await rm(canonicalPath, { recursive: true, force: true });
-  await cp(selectedLocation.path, canonicalPath, {
-    recursive: true,
-    dereference: true,
-    force: true,
+  await assertSafeUniversalSkillMutation({
+    destinationPath: canonicalPath,
+    universalRoot: canonicalRoot,
+    skillName: skill.name,
+    scope: selectedLocation.sourceScope,
+    sources: snapshot.sources,
+    allowDefaultUniversalRoot: selectedLocation.provenance?.kind === 'plugin',
   });
+  const parentPath = path.dirname(canonicalPath);
+  const stagePath = path.join(parentPath, `.${path.basename(canonicalPath)}.stage-${randomUUID()}`);
+  const backupPath = path.join(parentPath, `.${path.basename(canonicalPath)}.backup-${randomUUID()}`);
+  const selectedSourceIsPluginManaged = selectedLocation.provenance?.kind === 'plugin';
+  if (selectedSourceIsPluginManaged) {
+    await assertPluginManagedSkillPackageSymlinksContained(selectedLocation.path);
+  }
+  await mkdir(parentPath, { recursive: true });
+  try {
+    await cp(selectedLocation.path, stagePath, {
+      recursive: true,
+      dereference: !selectedSourceIsPluginManaged,
+      force: true,
+      verbatimSymlinks: selectedSourceIsPluginManaged,
+    });
+    if (selectedSourceIsPluginManaged) {
+      await assertPluginManagedSkillPackageSymlinksContained(stagePath);
+    }
+    await readFile(path.join(stagePath, 'SKILL.md'), 'utf8');
+    await rename(canonicalPath, backupPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    try {
+      await rename(stagePath, canonicalPath);
+    } catch (error) {
+      await rename(backupPath, canonicalPath).catch(() => undefined);
+      throw error;
+    }
+  } catch (error) {
+    await rm(stagePath, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
   return {
     path: canonicalPath,
-    location: {
-      ...selectedLocation,
-      path: canonicalPath,
+    location: createCanonicalSkillLocation(selectedLocation, canonicalPath, snapshot, paths),
+    commit: async () => {
+      await rm(backupPath, { recursive: true, force: true }).catch(() => undefined);
     },
+    rollback: async () => {
+      await rm(canonicalPath, { recursive: true, force: true });
+      await rename(backupPath, canonicalPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    },
+  };
+}
+
+function createCanonicalSkillLocation(
+  selectedLocation: SkillLocationRecord,
+  canonicalPath: string,
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+): SkillLocationRecord {
+  const source = snapshot.sources.find((candidate) =>
+    path.normalize(candidate.skillsDir) === path.normalize(path.dirname(canonicalPath))
+    && candidate.writable
+    && candidate.kind !== 'plugin');
+  const fallbackSource = selectedLocation.sourceScope === 'sandbox' || selectedLocation.sourceScope === 'live'
+    ? {
+      id: `${selectedLocation.sourceScope}-agents`,
+      label: `${selectedLocation.sourceScope === 'sandbox' ? 'Sandbox' : 'Live'} .agents`,
+      scope: selectedLocation.sourceScope,
+      skillsDir: selectedLocation.sourceScope === 'sandbox'
+        ? paths.sandboxCanonicalUserSkillsDir
+        : paths.liveCanonicalUserSkillsDir,
+    }
+    : null;
+  const universalSource = source ?? fallbackSource;
+  if (!universalSource || path.normalize(universalSource.skillsDir) !== path.normalize(path.dirname(canonicalPath))) {
+    throw new Error(`Unable to locate a writable Universal skills directory for "${canonicalPath}".`);
+  }
+
+  return {
+    ...selectedLocation,
+    path: canonicalPath,
+    entrypointPath: selectedLocation.installKind === 'directory'
+      ? path.join(canonicalPath, 'SKILL.md')
+      : canonicalPath,
+    sourceId: universalSource.id,
+    sourceLabel: universalSource.label,
+    sourceScope: universalSource.scope,
+    fileType: 'real-file',
+    canonical: true,
+    canonicalRole: 'canonical',
+    mutability: 'writable',
+    provenance: undefined,
+    resolvedPath: canonicalPath,
+    symlinkTarget: undefined,
   };
 }
 
@@ -1551,7 +2325,9 @@ export async function writeMcpDefinitions(
   parserKind: McpMutationTarget['parserKind'],
   definitions: McpServerDefinitions,
   writeDialect: AgentMcpWriteDialect,
+  writeOptions: { failBeforeCommit?: boolean } = {},
 ): Promise<void> {
+  configPath = await resolveSafeMcpConfigWritePath(configPath);
   if (parserKind === 'toml') {
     let raw = '';
     try {
@@ -1563,12 +2339,7 @@ export async function writeMcpDefinitions(
     }
 
     const tomlDefinitions = mapRecordValue(definitions, (definition) => toTomlMcpDefinition(definition, writeDialect === 'toml-transport-array' ? 'transport-array' : 'codex'));
-    await mkdir(path.dirname(configPath), { recursive: true });
-    await writeFile(
-      configPath,
-      updateTomlMcpServers(raw, tomlDefinitions),
-      'utf8',
-    );
+    await writeMcpConfigAtomically(configPath, updateTomlMcpServers(raw, tomlDefinitions), writeOptions);
     return;
   }
 
@@ -1582,13 +2353,12 @@ export async function writeMcpDefinitions(
       }
     }
 
-    await mkdir(path.dirname(configPath), { recursive: true });
     const tomlDefinitions = mapRecordValue(definitions, (definition) => toTomlMcpDefinition(definition, writeDialect === 'toml-codex' ? 'codex' : 'transport-array'));
     const sortedDefinitions = sortRecordValue(tomlDefinitions);
-    await writeFile(
+    await writeMcpConfigAtomically(
       configPath,
       updateTomlMcpServerArray(raw, isMcpServerDefinitions(sortedDefinitions) ? sortedDefinitions : tomlDefinitions),
-      'utf8',
+      writeOptions,
     );
     return;
   }
@@ -1606,14 +2376,13 @@ export async function writeMcpDefinitions(
     const preservedConfig = { ...parsedConfig };
     delete preservedConfig.mcp;
     delete preservedConfig.mcpServers;
-    await mkdir(path.dirname(configPath), { recursive: true });
-    await writeFile(
+    await writeMcpConfigAtomically(
       configPath,
       `${JSON.stringify({
         ...preservedConfig,
         mcp: sortRecordValue(mapRecordValue(definitions, (definition) => mapMcpDefinitionForWriteDialect(definition, 'json-opencode'))),
       }, null, 2)}\n`,
-      'utf8',
+      writeOptions,
     );
     return;
   }
@@ -1621,14 +2390,14 @@ export async function writeMcpDefinitions(
   if (parserKind === 'jsonc-dotted-amp-mcpServers' || parserKind === 'jsonc-dotted-zencoder-mcpServers') {
     await writeJsoncMcpDefinitions(configPath, mapMcpDefinitionsForWriteDialect(definitions, writeDialect), {
       field: parserKind === 'jsonc-dotted-amp-mcpServers' ? 'amp.mcpServers' : 'zencoder.mcpServers',
-    });
+    }, writeOptions);
     return;
   }
 
   if (parserKind === 'jsonc-mcp-servers') {
     await writeJsoncMcpDefinitions(configPath, mapMcpDefinitionsForWriteDialect(definitions, writeDialect), {
       fieldPath: ['mcp', 'servers'],
-    });
+    }, writeOptions);
     return;
   }
 
@@ -1637,7 +2406,7 @@ export async function writeMcpDefinitions(
     field: jsonTarget.field,
     jsonc: isJsoncMcpParserKind(parserKind),
     removeFields: jsonTarget.removeFields,
-  });
+  }, writeOptions);
 }
 
 function parseMcpDefinitions(
@@ -1691,6 +2460,7 @@ async function writeJsoncMcpDefinitions(
   configPath: string,
   definitions: Record<string, unknown>,
   target: { field?: string; fieldPath?: string[] },
+  writeOptions: { failBeforeCommit?: boolean },
 ): Promise<void> {
   const parsedConfig = await readJsonConfigObject(configPath, { jsonc: true });
 
@@ -1700,14 +2470,14 @@ async function writeJsoncMcpDefinitions(
     setNestedRecordValue(parsedConfig, target.fieldPath, sortRecordValue(definitions));
   }
 
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, 'utf8');
+  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, writeOptions);
 }
 
 async function writeJsonMcpDefinitions(
   configPath: string,
   definitions: McpServerDefinitions,
   target: { field: 'servers' | 'mcpServers' | 'mcp'; jsonc: boolean; removeFields: Array<'servers' | 'mcpServers' | 'mcp'> },
+  writeOptions: { failBeforeCommit?: boolean },
 ): Promise<void> {
   const parsedConfig = await readJsonConfigObject(configPath, { jsonc: target.jsonc });
   for (const field of target.removeFields) {
@@ -1715,8 +2485,87 @@ async function writeJsonMcpDefinitions(
   }
   parsedConfig[target.field] = sortRecordValue(definitions);
 
+  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, writeOptions);
+}
+
+async function writeMcpConfigAtomically(
+  configPath: string,
+  contents: string,
+  options: { failBeforeCommit?: boolean } = {},
+): Promise<void> {
+  configPath = await resolveSafeMcpConfigWritePath(configPath);
   await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, 'utf8');
+  const stagedPath = `${configPath}.skillindex-${randomUUID()}.tmp`;
+  try {
+    await writeFile(stagedPath, contents, 'utf8');
+    try {
+      const existing = await stat(configPath);
+      await chmodMcpConfig(stagedPath, existing.mode & 0o777);
+    } catch (error) {
+      if (!isFileNotFoundError(error)) throw error;
+    }
+    if (options.failBeforeCommit) {
+      throw new Error('MCP config commit failed before atomic rename.');
+    }
+    await rename(stagedPath, configPath);
+  } finally {
+    await rm(stagedPath, { force: true });
+  }
+}
+
+async function chmodMcpConfig(configPath: string, mode: number): Promise<void> {
+  const { chmod } = await import('node:fs/promises');
+  await chmod(configPath, mode);
+}
+
+export async function resolveSafeMcpConfigWritePath(configPath: string): Promise<string> {
+  const lexicalPath = path.normalize(configPath);
+  if (isConventionalPluginCachePath(lexicalPath)) {
+    throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+  }
+  const physicalPath = await resolvePathThroughNearestExistingParent(lexicalPath);
+  if (isConventionalPluginCachePath(physicalPath)) {
+    throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+  }
+  try {
+    if ((await stat(physicalPath)).nlink > 1) {
+      throw new Error('MCP mutations cannot replace a hard-linked config file.');
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('hard-linked config')) throw error;
+    if (!isFileNotFoundError(error)) throw error;
+  }
+  return physicalPath;
+}
+
+function isConventionalPluginCachePath(targetPath: string): boolean {
+  const segments = path.normalize(targetPath).split(path.sep).map((segment) => segment.toLowerCase());
+  return segments.some((segment, index) =>
+    (segment === '.codex' || segment === '.claude') && segments[index + 1] === 'plugins');
+}
+
+function isPathWithin(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function resolvePathThroughNearestExistingParent(targetPath: string): Promise<string> {
+  const normalizedTarget = path.normalize(targetPath);
+  let candidate = normalizedTarget;
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      return path.join(await realpath(candidate), ...missingSegments.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`Unable to verify filesystem safety for ${normalizedTarget}.`);
+      }
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return normalizedTarget;
+    missingSegments.push(path.basename(candidate));
+    candidate = parent;
+  }
 }
 
 function getJsonMcpDefinitionTarget(
@@ -1770,19 +2619,33 @@ function setNestedRecordValue(target: Record<string, unknown>, pathSegments: str
   }
 }
 
-async function replaceWithCanonicalSymlink(locationPath: string, canonicalPath: string): Promise<void> {
+async function replaceWithCanonicalSymlink(
+  locationPath: string,
+  canonicalPath: string,
+  safety: SubagentMutationSafetyContext,
+): Promise<void> {
+  await assertSafeSubagentMutationDestination(locationPath, safety.scope, safety.snapshot, canonicalPath);
   await mkdir(path.dirname(locationPath), { recursive: true });
   await rm(locationPath, { recursive: true, force: true });
   await symlink(canonicalPath, locationPath);
 }
 
-async function replaceWritableWithCanonicalSymlink(
-  locationPath: string,
+async function replaceWritableWithCanonicalSymlinks(
+  locationPaths: string[],
   canonicalPath: string,
   snapshot: SkillInventorySnapshot,
-): Promise<void> {
-  assertSkillSymlinkTargetWritable(locationPath, snapshot);
-  await replaceWithCanonicalSymlink(locationPath, canonicalPath);
+  options: Pick<ResolveIssueOptions, 'testFailSkillLinkAt'>,
+): ReturnType<typeof replaceSkillLinksTransaction> {
+  const uniquePaths = dedupeNormalizedPaths(locationPaths);
+  await assertWritableSkillLinkMutationPlan(uniquePaths, snapshot);
+  return replaceSkillLinksTransaction(uniquePaths, canonicalPath, snapshot.sources, {
+    failAt: options.testFailSkillLinkAt,
+    validateDestination: (targetPath) => assertSafeWritableSkillLinkMutation(
+      targetPath,
+      snapshot.sources,
+      (snapshot.agents ?? []).flatMap((agent) => agent.writable && agent.skillsLocation.path ? [agent.skillsLocation.path] : []),
+    ),
+  });
 }
 
 function assertSkillSymlinkTargetWritable(locationPath: string, snapshot: SkillInventorySnapshot): void {
@@ -1816,57 +2679,14 @@ function assertSkillSymlinkTargetWritable(locationPath: string, snapshot: SkillI
   }
 }
 
-function resolvePluginCanonicalSkillLocation(
-  skill: SkillRecord,
-  selectedVariantPath: string | undefined,
-): SkillLocationRecord | null {
-  if (selectedVariantPath) {
-    const selectedLocation = skill.locations.find((location) =>
-      location.path === selectedVariantPath
-      && location.fileType === 'real-file'
-      && location.provenance?.kind === 'plugin');
-    return selectedLocation ?? null;
-  }
-
-  const pluginCanonicalLocations = skill.locations
-    .filter((location) =>
-      location.fileType === 'real-file'
-      && location.provenance?.kind === 'plugin'
-      && location.canonical)
-    .sort((left, right) => left.path.localeCompare(right.path));
-  if (pluginCanonicalLocations.length === 0) {
-    return null;
-  }
-
-  const decision = skill.detailDiagnostics.universalDecision;
-  if (decision?.universal.kind === 'plugin') {
-    const universal = decision.universal;
-    const decisionMatches = pluginCanonicalLocations.filter((location) => {
-      const plugin = location.provenance?.plugin;
-      return plugin?.host === universal.host
-        && plugin.pluginId === universal.pluginId
-        && path.basename(location.path) === universal.pluginSkillName;
-    });
-    const decisionMatch = decisionMatches.find((location) =>
-      universal.pluginVersion === undefined
-      || location.provenance?.plugin?.version === universal.pluginVersion)
-      ?? decisionMatches[0];
-    if (decisionMatch) {
-      return decisionMatch;
-    }
-  }
-
-  const realFileGroups = groupSkillRealFiles(skill.locations.filter((location) => location.fileType === 'real-file'));
-  return realFileGroups.length === 1 ? pluginCanonicalLocations[0] : null;
-}
-
-function resolveCanonicalSkillPath(
+export function resolveCanonicalSkillPath(
   skill: SkillRecord,
   snapshot: SkillInventorySnapshot,
   selectedVariantPath: string | undefined,
+  paths: SkillIndexPaths,
 ): string {
   const canonicalScope = resolveSkillMutationScope(skill, selectedVariantPath);
-  const decisionCanonicalPath = resolveUserConfirmedPathDecisionSkillPath(skill);
+  const decisionCanonicalPath = resolveUserConfirmedPathDecisionSkillPath(skill, snapshot);
   if (decisionCanonicalPath) {
     return decisionCanonicalPath;
   }
@@ -1882,10 +2702,20 @@ function resolveCanonicalSkillPath(
     return path.join(canonicalSource.skillsDir, skill.name);
   }
 
+  if (canonicalScope === 'sandbox' || canonicalScope === 'live') {
+    return path.join(
+      canonicalScope === 'sandbox' ? paths.sandboxCanonicalUserSkillsDir : paths.liveCanonicalUserSkillsDir,
+      skill.name,
+    );
+  }
+
   throw new Error(`Unable to locate the canonical ${canonicalScope} skills directory for "${skill.name}".`);
 }
 
-function resolveUserConfirmedPathDecisionSkillPath(skill: SkillRecord): string | null {
+function resolveUserConfirmedPathDecisionSkillPath(
+  skill: SkillRecord,
+  snapshot: SkillInventorySnapshot,
+): string | null {
   const decision = skill.detailDiagnostics.universalDecision;
   if (
     decision?.state !== 'user-confirmed'
@@ -1895,7 +2725,9 @@ function resolveUserConfirmedPathDecisionSkillPath(skill: SkillRecord): string |
     return null;
   }
 
-  return decision.universal.path;
+  return isPluginManagedTarget(decision.universal.path, snapshot.sources)
+    ? null
+    : decision.universal.path;
 }
 
 function resolvePreferredCanonicalSkillPath(

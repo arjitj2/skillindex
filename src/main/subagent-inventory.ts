@@ -18,6 +18,13 @@ import type {
 import type { SkillIndexPaths } from '@shared/skill-index-paths';
 
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
+import {
+  buildPluginManagedSourceCandidate,
+  detectPluginDependencyWarnings,
+  getOperationalLocations,
+  isAgentSatisfiedByNativePlugin,
+  normalizePluginSourceEvidenceByIdentity,
+} from '@main/plugin-managed-sources';
 import { getLeadingWhitespace, parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
 import {
   getRequiredMarkdownSubagentFields,
@@ -51,6 +58,8 @@ interface ParsedSubagentDefinition {
   definitionText?: string;
 }
 
+type PluginSubagentAliases = Map<string, Set<string>>;
+
 export interface PortableSubagentDefinition {
   name: string;
   description: string | null;
@@ -78,6 +87,7 @@ export function collectSubagentRecords({
     includeSandboxSources,
   });
   const pluginSubagentAliases = buildPluginSubagentAliases(plugins);
+  const pluginSourceByLocationPath = new Map<string, PluginSourceRef>();
   const groupedLocations = new Map<string, SubagentLocationRecord[]>();
 
   for (const owner of owners) {
@@ -92,14 +102,7 @@ export function collectSubagentRecords({
   }
 
   for (const plugin of plugins) {
-    const pluginSource: PluginSourceRef = {
-      host: plugin.host,
-      pluginId: plugin.pluginId,
-      pluginName: plugin.pluginName,
-      version: plugin.version,
-      rootPath: plugin.rootPath,
-      manifestPath: plugin.manifestPath,
-    };
+    const pluginSource = createPluginSubagentSource(plugin);
     const owner: SubagentOwnerRecord = {
       agentId: createPluginSubagentOwnerId(plugin),
       agentLabel: `${plugin.host === 'codex' ? 'Codex' : 'Claude'} Plugin ${plugin.pluginName}`,
@@ -112,6 +115,7 @@ export function collectSubagentRecords({
     };
 
     for (const subagent of plugin.bundledSubagents ?? []) {
+      pluginSourceByLocationPath.set(subagent.path, pluginSource);
       const format = inferSubagentParserKindFromPath(subagent.path, owner.format);
       const parsed = readSubagentDefinition(subagent.path, {
         ...owner,
@@ -132,7 +136,7 @@ export function collectSubagentRecords({
 
   const expectedOwners = owners.filter((owner) => !owner.canonical && !owner.plugin);
   return [...groupedLocations.entries()]
-    .map(([name, locations]) => classifySubagentLocations(name, locations, expectedOwners))
+    .map(([name, locations]) => classifySubagentLocations(name, locations, expectedOwners, pluginSourceByLocationPath))
     .sort(compareSubagents);
 }
 
@@ -180,6 +184,97 @@ export function applyDismissedSubagentState(
   return subagents.map((subagent) => applySubagentPresentation(subagent, dismissedSubagentSignatures));
 }
 
+export function reconcileCachedSubagents(
+  cachedSubagents: SubagentRecord[],
+  agents: AgentRecord[],
+  plugins: PluginRecord[],
+): SubagentRecord[] {
+  const expectedOwners = collectExpectedSubagentOwners(agents);
+  const pluginByOwnerId = new Map(plugins.map((plugin) => [createPluginSubagentOwnerId(plugin), plugin]));
+  const pluginSubagentPathsByOwnerId = new Map(plugins.map((plugin) => [
+    createPluginSubagentOwnerId(plugin),
+    new Set((plugin.bundledSubagents ?? []).map((subagent) => path.normalize(subagent.path))),
+  ]));
+  const pluginSubagentAliases = buildPluginSubagentAliases(plugins);
+  const groupedLocations = new Map<string, SubagentLocationRecord[]>();
+  const pluginSourceByLocationPath = new Map<string, PluginSourceRef>();
+
+  for (const subagent of cachedSubagents) {
+    for (const location of subagent.locations) {
+      const plugin = location.agentId.startsWith('plugin:')
+        ? pluginByOwnerId.get(location.agentId)
+        : undefined;
+      const bundledPaths = plugin ? pluginSubagentPathsByOwnerId.get(location.agentId) : undefined;
+      const provenance = location.provenance?.plugin;
+      if (location.agentId.startsWith('plugin:') && (
+        !plugin
+        || !bundledPaths?.has(path.normalize(location.path))
+        || provenance?.host !== plugin.host
+        || provenance?.pluginId !== plugin.pluginId
+        || provenance?.version !== plugin.version
+      )) {
+        continue;
+      }
+
+      const reconciledLocation = plugin
+        ? {
+          ...location,
+          canonical: false,
+          canonicalRole: 'managed-source' as const,
+          mutability: 'read-only-managed' as const,
+        }
+        : location;
+      if (plugin) {
+        pluginSourceByLocationPath.set(location.path, createPluginSubagentSource(plugin));
+      }
+      const name = getCachedGroupedSubagentName(
+        reconciledLocation,
+        expectedOwners,
+        pluginSubagentAliases,
+        plugin ? createPluginSubagentSource(plugin) : undefined,
+      );
+      const locations = groupedLocations.get(name) ?? [];
+      locations.push(reconciledLocation);
+      groupedLocations.set(name, locations);
+    }
+  }
+
+  return [...groupedLocations.entries()]
+    .map(([name, locations]) => classifySubagentLocations(name, locations, expectedOwners, pluginSourceByLocationPath))
+    .sort(compareSubagents);
+}
+
+function getCachedGroupedSubagentName(
+  location: SubagentLocationRecord,
+  expectedOwners: SubagentOwnerRecord[],
+  pluginSubagentAliases: PluginSubagentAliases,
+  plugin?: PluginSourceRef,
+): string {
+  const fallbackName = getSubagentNameFromPath(location.path);
+  const owner = findSubagentOwnerForLocation(location, expectedOwners) ?? {
+    agentId: location.agentId,
+    agentLabel: location.agentLabel,
+    scope: location.scope,
+    directoryPath: location.directoryPath,
+    format: location.format,
+    writable: false,
+    canonical: location.canonical,
+  };
+  const parsed = parseSubagentDefinitionText(location.definitionText ?? '', owner, fallbackName);
+  const baseName = location.fileType === 'symlink' ? fallbackName : parsed.name;
+  if (plugin) {
+    return `${plugin.pluginName}:${baseName}`;
+  }
+  return getUnambiguousPluginSubagentAlias(
+    pluginSubagentAliases,
+    getPluginSubagentAliasKey(location.scope, location.path, parsed.name),
+  )
+    ?? (location.fileType === 'symlink' && isBrokenSubagentSymlink(location.path)
+      ? getUnambiguousPluginSubagentAliasByFilename(location.scope, location.path, pluginSubagentAliases)
+      : undefined)
+    ?? baseName;
+}
+
 function collectSubagentOwners({
   agents,
   paths,
@@ -216,6 +311,14 @@ function collectSubagentOwners({
     });
   }
 
+  owners.push(...collectExpectedSubagentOwners(agents));
+
+  return owners.sort((left, right) =>
+    left.agentLabel.localeCompare(right.agentLabel, undefined, { sensitivity: 'base' }));
+}
+
+function collectExpectedSubagentOwners(agents: AgentRecord[]): SubagentOwnerRecord[] {
+  const owners: SubagentOwnerRecord[] = [];
   for (const agent of agents) {
     const format = agent.subagentParserKind ?? 'unknown';
     if (
@@ -240,8 +343,7 @@ function collectSubagentOwners({
     });
   }
 
-  return owners.sort((left, right) =>
-    left.agentLabel.localeCompare(right.agentLabel, undefined, { sensitivity: 'base' }));
+  return owners;
 }
 
 function collectSubagentFilePaths(owner: SubagentOwnerRecord): string[] {
@@ -331,7 +433,7 @@ function buildSubagentLocation(
     resolvedPath,
     symlinkTarget,
     provenance: createSubagentProvenance(filePath, owner, modifiedAt),
-    canonicalRole: owner.canonical ? 'canonical' : 'materialized-copy',
+    canonicalRole: owner.canonical ? 'canonical' : owner.plugin ? 'managed-source' : 'materialized-copy',
     mutability: owner.writable ? 'writable' : owner.plugin ? 'read-only-managed' : 'unknown',
   };
 }
@@ -353,11 +455,13 @@ function classifySubagentLocations(
   name: string,
   locations: SubagentLocationRecord[],
   expectedOwners: SubagentOwnerRecord[],
+  pluginSourceByLocationPath: Map<string, PluginSourceRef>,
 ): SubagentRecord {
   const sortedLocations = [...locations].sort((left, right) =>
     left.path.localeCompare(right.path) || left.agentId.localeCompare(right.agentId));
-  const canonicalLocation = sortedLocations.find((location) => location.canonical && location.fileType === 'real-file') ?? null;
-  const validLocations = sortedLocations.filter((location) => (location.invalidDetails?.length ?? 0) === 0);
+  const operationalLocations = getOperationalLocations(sortedLocations);
+  const canonicalLocation = operationalLocations.find((location) => location.canonical && location.fileType === 'real-file') ?? null;
+  const validLocations = operationalLocations.filter((location) => (location.invalidDetails?.length ?? 0) === 0);
   const validComparisonKeys = new Set(validLocations
     .map((location) => location.definitionComparisonKey)
     .filter((value): value is string => typeof value === 'string' && value.length > 0));
@@ -371,10 +475,16 @@ function classifySubagentLocations(
     issueReasons.add('missing-universal');
   }
 
+  const enabledPluginSources = sortedLocations.flatMap((location) => {
+    const plugin = pluginSourceByLocationPath.get(location.path);
+    return plugin ? [plugin] : [];
+  });
   const expectedLocations = canonicalLocation
-    ? expectedOwners.map((owner) => buildExpectedLocation(owner, name, canonicalLocation))
+    ? expectedOwners
+      .filter((owner) => !isAgentSatisfiedByNativePlugin(owner.family, enabledPluginSources))
+      .map((owner) => buildExpectedLocation(owner, name, canonicalLocation))
     : [];
-  const presentAgentIds = new Set(sortedLocations.map((location) => location.agentId));
+  const presentAgentIds = new Set(operationalLocations.map((location) => location.agentId));
   const missingLocations = expectedLocations.filter((location) =>
     location.supportStatus !== 'unsupported' && !presentAgentIds.has(location.agentId));
   if (missingLocations.length > 0) {
@@ -387,7 +497,7 @@ function classifySubagentLocations(
 
   if (canonicalLocation) {
     const canonicalResolvedPath = canonicalLocation.resolvedPath ?? canonicalLocation.path;
-    const sameFormatDuplicates = sortedLocations.filter((location) =>
+    const sameFormatDuplicates = operationalLocations.filter((location) =>
       !location.canonical
       && location.fileType === 'real-file'
       && location.mutability === 'writable'
@@ -399,7 +509,7 @@ function classifySubagentLocations(
       issueReasons.add('identical-copies');
     }
 
-    for (const location of sortedLocations) {
+    for (const location of operationalLocations) {
       if (location.canonical || location.fileType !== 'symlink') {
         continue;
       }
@@ -413,6 +523,14 @@ function classifySubagentLocations(
     }
   }
 
+  const managedSourceCandidates = buildManagedSourceCandidates(
+    sortedLocations,
+    pluginSourceByLocationPath,
+    canonicalLocation?.definitionComparisonKey ?? null,
+  );
+  if (managedSourceCandidates?.some((candidate) => candidate.relationship === 'differs-from-universal')) {
+    issueReasons.add('definition-mismatch');
+  }
   const issueReasonsList = [...issueReasons].sort(compareSubagentIssueReasons);
   const status = issueReasonsList.length > 0 ? 'needs-attention' : 'healthy';
 
@@ -426,10 +544,44 @@ function classifySubagentLocations(
     expectedLocations,
     missingLocations,
     issueReasons: issueReasonsList,
+    managedSourceCandidates,
     signature: status === 'needs-attention'
       ? createSubagentSignature(name, sortedLocations, expectedLocations, missingLocations, issueReasonsList)
       : undefined,
   };
+}
+
+function buildManagedSourceCandidates(
+  locations: SubagentLocationRecord[],
+  pluginSourceByLocationPath: Map<string, PluginSourceRef>,
+  universalComparisonKey: string | null,
+): SubagentRecord['managedSourceCandidates'] {
+  const candidates = locations.flatMap((location) => {
+    if (location.fileType !== 'real-file' || location.canonicalRole !== 'managed-source') {
+      return [];
+    }
+    const plugin = pluginSourceByLocationPath.get(location.path);
+    const comparisonKey = location.definitionComparisonKey;
+    if (!plugin || !comparisonKey) {
+      return [];
+    }
+    return [buildPluginManagedSourceCandidate({
+      path: location.path,
+      plugin,
+      comparisonKey,
+      universalComparisonKey,
+      dependencyWarnings: detectPluginDependencyWarnings({
+        text: location.definitionText ?? '',
+        pluginRoot: plugin.rootPath,
+        providerSpecificFields: location.localExtrasKeys,
+      }),
+    })];
+  });
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  return normalizePluginSourceEvidenceByIdentity(candidates);
 }
 
 function buildExpectedLocation(
@@ -1226,34 +1378,66 @@ function getGroupedSubagentName(
   filePath: string,
   parsed: ParsedSubagentDefinition,
   owner: SubagentOwnerRecord,
-  pluginSubagentAliases: Map<string, string>,
+  pluginSubagentAliases: PluginSubagentAliases,
 ): string {
   const baseName = isSymlink(filePath) ? getSubagentNameFromPath(filePath) : parsed.name;
   if (owner.plugin) {
     return `${owner.plugin.pluginName}:${baseName}`;
   }
 
-  return pluginSubagentAliases.get(getPluginSubagentAliasKey(owner.scope, filePath, parsed.name)) ?? baseName;
+  return getUnambiguousPluginSubagentAlias(
+    pluginSubagentAliases,
+    getPluginSubagentAliasKey(owner.scope, filePath, parsed.name),
+  )
+    ?? (isBrokenSubagentSymlink(filePath)
+      ? getUnambiguousPluginSubagentAliasByFilename(owner.scope, filePath, pluginSubagentAliases)
+      : undefined)
+    ?? baseName;
 }
 
 function getSubagentNameFromPath(filePath: string): string {
   return path.basename(filePath).replace(/(?:\.agent)?\.(?:md|toml|jsonc?|ya?ml)$/iu, '');
 }
 
-function buildPluginSubagentAliases(plugins: PluginRecord[]): Map<string, string> {
-  const aliases = new Map<string, string>();
+function buildPluginSubagentAliases(plugins: PluginRecord[]): PluginSubagentAliases {
+  const aliases: PluginSubagentAliases = new Map();
   for (const plugin of plugins) {
     for (const subagent of plugin.bundledSubagents ?? []) {
       const scopedName = `${plugin.pluginName}:${subagent.name}`;
       const fileBaseName = getSanitizedSubagentFileBaseName(scopedName);
-      aliases.set(buildPluginSubagentAliasKey(plugin.scope ?? 'live', fileBaseName, subagent.name), scopedName);
+      const key = buildPluginSubagentAliasKey(plugin.scope ?? 'live', fileBaseName, subagent.name);
+      const scopedNames = aliases.get(key) ?? new Set<string>();
+      scopedNames.add(scopedName);
+      aliases.set(key, scopedNames);
     }
   }
   return aliases;
 }
 
+function getUnambiguousPluginSubagentAlias(
+  aliases: PluginSubagentAliases,
+  key: string,
+): string | undefined {
+  const matches = aliases.get(key);
+  return matches?.size === 1 ? [...matches][0] : undefined;
+}
+
 function getPluginSubagentAliasKey(scope: SkillSourceScope, filePath: string, definitionName: string): string {
   return buildPluginSubagentAliasKey(scope, getSubagentNameFromPath(filePath), definitionName);
+}
+
+function getUnambiguousPluginSubagentAliasByFilename(
+  scope: SkillSourceScope,
+  filePath: string,
+  aliases: PluginSubagentAliases,
+): string | undefined {
+  const prefix = `${scope}:${getSubagentNameFromPath(filePath)}:`;
+  const matches = [...new Set(
+    [...aliases.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .flatMap(([, scopedNames]) => [...scopedNames]),
+  )];
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function buildPluginSubagentAliasKey(scope: SkillSourceScope, fileBaseName: string, definitionName: string): string {
@@ -1304,6 +1488,18 @@ function createSubagentProvenance(
 function createPluginSubagentOwnerId(plugin: Pick<PluginRecord, 'host' | 'pluginId' | 'version' | 'scope'>): string {
   const scopePrefix = plugin.scope === 'sandbox' ? 'sandbox:' : '';
   return `plugin:${scopePrefix}${plugin.host}:${plugin.pluginId}:${plugin.version ?? 'unknown'}:subagents`;
+}
+
+function createPluginSubagentSource(plugin: PluginRecord): PluginSourceRef {
+  return {
+    host: plugin.host,
+    pluginId: plugin.pluginId,
+    pluginName: plugin.pluginName,
+    version: plugin.version,
+    rootPath: plugin.rootPath,
+    manifestPath: plugin.manifestPath,
+    enabled: plugin.enabled,
+  };
 }
 
 function createSubagentSignature(

@@ -80,6 +80,7 @@ export const representativeInventorySnapshot: SkillInventorySnapshot = normalize
         version: '0.1.0',
         rootPath: '~/.skillindex/sandbox/plugins',
         manifestPath: '~/.skillindex/sandbox/plugins/.claude-plugin/plugin.json',
+        enabled: 'unknown',
       },
     },
   ],
@@ -1199,6 +1200,16 @@ export const representativeSeededFixtures: SeedRepresentativeFixturesResult = {
       name: 'plugin-readonly-skill',
       expectedState: 'single-source-noncanonical',
       expectedLocationCount: 1,
+    },
+    {
+      name: 'plugin-update-skill',
+      expectedState: 'healthy',
+      expectedLocationCount: 4,
+    },
+    {
+      name: 'native-plugin-delivery:native-plugin-skill',
+      expectedState: 'healthy',
+      expectedLocationCount: 4,
     },
   ],
 };

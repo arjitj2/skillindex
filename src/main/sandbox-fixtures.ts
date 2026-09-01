@@ -1,4 +1,5 @@
-import { chmod, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import type { AgentRecord, McpServerDefinition, SeedRepresentativeFixturesResult, SkillStructuralState } from '@shared/contracts';
@@ -1277,6 +1278,52 @@ const BASE_FIXTURES: FixtureDefinition[] = [
       },
     ],
   },
+  {
+    // The matching 1.0.0 plugin cache package is written below. The 1.1.0
+    // package intentionally differs so the managed source participates in the
+    // same divergence choice as the Universal version.
+    name: 'plugin-update-skill',
+    expectedState: 'healthy',
+    operations: [
+      {
+        type: 'write',
+        sourceId: 'sandbox-agents',
+        content: buildSkillMarkdown({
+          skillName: 'plugin-update-skill',
+          description: 'Universal copy matching the initial plugin cache version.',
+          title: 'Plugin update skill',
+          bodyLines: ['Plugin update skill version 1.0.0 selected content.'],
+        }),
+        modifiedAt: '2026-01-09T00:00:00.000Z',
+      },
+      { type: 'symlink', sourceId: 'sandbox-claude', targetSourceId: 'sandbox-agents' },
+      { type: 'symlink', sourceId: 'sandbox-factory', targetSourceId: 'sandbox-agents' },
+      { type: 'symlink', sourceId: 'sandbox-windsurf', targetSourceId: 'sandbox-agents' },
+    ],
+  },
+  {
+    // This fixture has no Claude materialization: its enabled Claude plugin is
+    // the sole native delivery for that host. All other installed hosts link
+    // to Universal as usual.
+    name: 'native-plugin-delivery:native-plugin-skill',
+    expectedState: 'healthy',
+    operations: [
+      {
+        type: 'write',
+        sourceId: 'sandbox-agents',
+        content: buildSkillMarkdown({
+          skillName: 'native-plugin-skill',
+          description: 'A Universal skill with native Claude plugin delivery.',
+          title: 'Native plugin skill',
+          bodyLines: ['The enabled native plugin satisfies Claude only.'],
+        }),
+        modifiedAt: '2026-01-09T00:01:00.000Z',
+      },
+      { type: 'symlink', sourceId: 'sandbox-claude', targetSourceId: 'sandbox-agents' },
+      { type: 'symlink', sourceId: 'sandbox-factory', targetSourceId: 'sandbox-agents' },
+      { type: 'symlink', sourceId: 'sandbox-windsurf', targetSourceId: 'sandbox-agents' },
+    ],
+  },
 ];
 
 const FIXTURES: FixtureDefinition[] = [...BASE_FIXTURES, ...buildGeneratedFixtures()];
@@ -1285,6 +1332,7 @@ export async function seedRepresentativeFixtures(
   options: SeedRepresentativeFixturesOptions = {},
 ): Promise<SeedRepresentativeFixturesResult> {
   const paths = resolveSandboxSkillIndexPaths(options);
+  await assertSandboxRootSafeForReset(paths, options);
   await ensureSkillIndexLayout(paths);
   await rm(paths.sandboxRoot, { recursive: true, force: true });
   await ensureSkillIndexSandboxLayout(paths);
@@ -1416,6 +1464,114 @@ export async function seedRepresentativeFixtures(
       expectedLocationCount: new Set(fixture.operations.map((operation) => operation.sourceId)).size,
     })),
   };
+}
+
+/**
+ * Prevent the development reset from ever recursively deleting a real agent
+ * configuration tree. Both lexical paths and a realpath based on the nearest
+ * existing parent are compared, so a symlinked alias cannot bypass the check.
+ *
+ * The destructive target is additionally constrained to the dedicated
+ * <app-data>/sandbox container (or one of its descendants). This keeps a
+ * bad environment override from widening a reset to app state, /tmp, a home
+ * directory, or any arbitrary location outside the sandbox layout.
+ */
+export async function assertSandboxRootSafeForReset(
+  paths: SkillIndexPaths,
+  options: ResolveSkillIndexPathOptions & { paths?: SkillIndexPaths } = {},
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const appDataDir = resolveAppDataDir(paths);
+  const sandboxContainer = path.join(appDataDir, 'sandbox');
+  const sandboxAliases = await resolvePathAliases(paths.sandboxRoot);
+  const sandboxContainerAliases = await resolvePathAliases(sandboxContainer);
+  const appDataAliases = await resolvePathAliases(appDataDir);
+
+  if (!allPathsAreContainedBy(sandboxAliases, sandboxContainerAliases)
+    || !allPathsAreContainedBy(sandboxContainerAliases, appDataAliases)) {
+    throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it is outside the dedicated sandbox container ${sandboxContainer}.`);
+  }
+
+  const callerHomeRoot = path.resolve(options.homeDir ?? (options.paths ? path.dirname(paths.liveAgentsDir) : homedir()));
+  const homeRoots = [...new Set([callerHomeRoot, path.resolve(homedir())])];
+  for (const homeRoot of homeRoots) {
+    const homeAliases = await resolvePathAliases(homeRoot);
+    if (pathsOverlapAsResetRoot(sandboxAliases, homeAliases)) {
+      throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it is a home directory or contains one.`);
+    }
+  }
+
+  for (const protectedRoot of protectedLiveRoots(homeRoots, env)) {
+    const protectedAliases = await resolvePathAliases(protectedRoot);
+    if (pathsOverlap(sandboxAliases, protectedAliases)) {
+      throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it overlaps protected live path ${protectedRoot}.`);
+    }
+  }
+}
+
+function resolveAppDataDir(paths: SkillIndexPaths): string {
+  return path.basename(paths.dataDir) === 'sandbox-state' ? path.dirname(paths.dataDir) : paths.dataDir;
+}
+
+function protectedLiveRoots(homeRoots: string[], env: NodeJS.ProcessEnv): string[] {
+  const relativeRoots = [
+    '.agents',
+    '.claude',
+    '.codex',
+    '.cursor',
+    '.factory',
+    '.codeium',
+    '.config',
+    path.join('Library', 'Application Support', 'Claude'),
+    path.join('Library', 'Application Support', 'Cursor'),
+    path.join('Library', 'Application Support', 'Code'),
+  ];
+  const roots = homeRoots.flatMap((homeRoot) => relativeRoots.map((relativePath) => path.join(homeRoot, relativePath)));
+
+  for (const value of [env.CODEX_HOME, env.CLAUDE_CONFIG_DIR, env.CURSOR_HOME, env.FACTORY_HOME]) {
+    if (value) {
+      roots.push(path.resolve(value));
+    }
+  }
+
+  return [...new Set(roots)];
+}
+
+function allPathsAreContainedBy(candidates: string[], containers: string[]): boolean {
+  return candidates.every((candidate) => containers.some((container) => isSameOrAncestor(container, candidate)));
+}
+
+async function resolvePathAliases(candidate: string): Promise<string[]> {
+  const lexical = path.resolve(candidate);
+  const suffix: string[] = [];
+  let existingParent = lexical;
+
+  while (true) {
+    try {
+      const resolvedParent = await realpath(existingParent);
+      return [...new Set([lexical, path.join(resolvedParent, ...suffix)])];
+    } catch {
+      const parent = path.dirname(existingParent);
+      if (parent === existingParent) {
+        return [lexical];
+      }
+      suffix.unshift(path.basename(existingParent));
+      existingParent = parent;
+    }
+  }
+}
+
+function pathsOverlapAsResetRoot(sandboxAliases: string[], homeAliases: string[]): boolean {
+  return sandboxAliases.some((sandboxPath) => homeAliases.some((homePath) => isSameOrAncestor(sandboxPath, homePath)));
+}
+
+function pathsOverlap(leftAliases: string[], rightAliases: string[]): boolean {
+  return leftAliases.some((leftPath) => rightAliases.some((rightPath) =>
+    isSameOrAncestor(leftPath, rightPath) || isSameOrAncestor(rightPath, leftPath)));
+}
+
+function isSameOrAncestor(parent: string, child: string): boolean {
+  return parent === child || child.startsWith(`${parent}${path.sep}`);
 }
 
 function getCanonicalMirrorSourceIds(
@@ -1809,6 +1965,18 @@ async function writeSandboxSubagentFixtures(sandboxRoot: string, agents: AgentRe
       'Canonical definition with a broken link and missing supported agent targets.',
       ['Repair the broken link while still showing absent agent locations.'],
     ),
+    writeMarkdown(
+      canonicalPath('plugin-update-subagent-plugin-update-subagent'),
+      'plugin-update-subagent',
+      'Universal subagent source matching plugin version one.',
+      ['Plugin subagent update version 1.0.0 selected content.'],
+    ),
+    writeMarkdown(
+      canonicalPath('native-plugin-delivery-native-plugin-subagent'),
+      'native-plugin-subagent',
+      'A subagent supplied natively to Claude by its enabled plugin.',
+      ['The enabled native plugin satisfies Claude only.'],
+    ),
   ];
 
   await Promise.all(canonicalDefinitions);
@@ -1886,6 +2054,10 @@ async function writeSandboxSubagentFixtures(sandboxRoot: string, agents: AgentRe
           '',
         ].join('\n'),
       ),
+      writeSubagentFixtureSymlink(
+        claudePath('plugin-update-subagent-plugin-update-subagent'),
+        canonicalPath('plugin-update-subagent-plugin-update-subagent'),
+      ),
     );
   }
 
@@ -1945,6 +2117,18 @@ async function writeSandboxSubagentFixtures(sandboxRoot: string, agents: AgentRe
           '',
         ].join('\n'),
       ),
+      writeCodex(
+        codexPath('plugin-update-subagent-plugin-update-subagent'),
+        'plugin-update-subagent',
+        'Universal subagent source matching plugin version one.',
+        'Plugin subagent update version 1.0.0 selected content.',
+      ),
+      writeCodex(
+        codexPath('native-plugin-delivery-native-plugin-subagent'),
+        'native-plugin-subagent',
+        'A subagent supplied natively to Claude by its enabled plugin.',
+        'The enabled native plugin satisfies Claude only.',
+      ),
     );
   }
 
@@ -1981,6 +2165,14 @@ async function writeSandboxSubagentFixtures(sandboxRoot: string, agents: AgentRe
           bodyLines: ['Factory droids document name as the required frontmatter field.'],
         }),
       ),
+      writeSubagentFixtureSymlink(
+        factoryPath('plugin-update-subagent-plugin-update-subagent'),
+        canonicalPath('plugin-update-subagent-plugin-update-subagent'),
+      ),
+      writeSubagentFixtureSymlink(
+        factoryPath('native-plugin-delivery-native-plugin-subagent'),
+        canonicalPath('native-plugin-delivery-native-plugin-subagent'),
+      ),
     );
   }
 
@@ -2006,6 +2198,7 @@ async function writeSandboxClaudePluginState(sandboxRoot: string): Promise<void>
         'example-workflow-kit@sandbox-gallery': true,
         'version-shadow-kit@sandbox-gallery': true,
         'alloy-kit@sandbox-gallery': true,
+        'native-plugin-delivery@sandbox-fixtures': true,
         'data-lens@sandbox-gallery': false,
       },
     }),
@@ -2035,6 +2228,27 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
   const alloyKitRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'alloy-kit', '1.1.0');
   const versionShadowOldRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'version-shadow-kit', '1.0.0');
   const versionShadowNewRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-gallery', 'version-shadow-kit', '1.1.0');
+  // These bundles are deliberately confined to the disposable Sandbox cache.
+  // They model managed sources without ever reading or writing the user's real
+  // plugin installation directories.
+  const singleSourceRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-single-source-skill', '1.0.0');
+  const versionChoiceSemverRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-skill', '1.0.0');
+  const versionChoiceNewRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-skill', '1.1.0');
+  const incomparableVersionSemverRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-incomparable-version-skill', '1.0.0');
+  const incomparableVersionHashRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-incomparable-version-skill', 'd6169bef');
+  const updateOldRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-skill', '1.0.0');
+  const updateNewRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-skill', '1.1.0');
+  const legacyLiveRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'legacy-plugin-link-skill', '2.0.0');
+  const legacyDeletedRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'legacy-plugin-link-skill', '1.0.0');
+  const versionChoiceSubagentSemverRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-subagent', '1.0.0');
+  const versionChoiceSubagentHashRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-subagent', 'd6169bef');
+  const updateSubagentOldRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-subagent', '1.0.0');
+  const updateSubagentNewRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-subagent', '1.1.0');
+  const remoteMcpRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-remote-mcp', '1.0.0');
+  const boundMcpRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-bound-mcp', '1.0.0');
+  const updateMcpOldRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-mcp', '1.0.0');
+  const updateMcpNewRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-mcp', '1.1.0');
+  const nativeDeliveryRoot = path.join(sandboxRoot, '.claude', 'plugins', 'cache', 'sandbox-fixtures', 'native-plugin-delivery', '1.0.0');
   const signalMapServerPath = path.join(signalToolsRoot, 'servers', 'signal-map.js');
   const relayHubServerPath = path.join(relayHubRoot, 'servers', 'relay-hub.js');
   const alloyPlannerServerPath = path.join(alloyKitRoot, 'servers', 'alloy-planner.js');
@@ -2158,6 +2372,60 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
     title: 'Cache shadow',
     bodyLines: ['Two read-only plugin cache versions should not create copy-conversion work.'],
   });
+  const singleSourceSkill = buildSkillMarkdown({
+    skillName: 'plugin-single-source-skill',
+    description: 'A plugin-managed skill with no Universal package.',
+    title: 'Plugin single source skill',
+    bodyLines: ['Plugin single source version 1.0.0 selected content.'],
+  });
+  const versionChoiceSemverSkill = buildSkillMarkdown({
+    skillName: 'plugin-version-choice-skill',
+    description: 'A managed source that requires an explicit cache-version choice.',
+    title: 'Plugin version choice skill',
+    bodyLines: ['Plugin version choice version 1.0.0 selected content.'],
+  });
+  const versionChoiceNewSkill = buildSkillMarkdown({
+    skillName: 'plugin-version-choice-skill',
+    description: 'A second managed source that still needs an explicit cache-version choice.',
+    title: 'Plugin version choice skill',
+    bodyLines: ['Plugin version choice version 1.1.0 selected content.'],
+  });
+  const incomparableVersionSemverSkill = buildSkillMarkdown({
+    skillName: 'plugin-incomparable-version-skill',
+    description: 'A managed source from a semver cache version.',
+    title: 'Plugin incomparable version skill',
+    bodyLines: ['Plugin incomparable version 1.0.0 selected content.'],
+  });
+  const incomparableVersionHashSkill = buildSkillMarkdown({
+    skillName: 'plugin-incomparable-version-skill',
+    description: 'A managed source from a hash-like cache version.',
+    title: 'Plugin incomparable version skill',
+    bodyLines: ['Plugin incomparable revision d6169bef selected content.'],
+  });
+  const updateOldSkill = buildSkillMarkdown({
+    skillName: 'plugin-update-skill',
+    description: 'Universal copy matching the initial plugin cache version.',
+    title: 'Plugin update skill',
+    bodyLines: ['Plugin update skill version 1.0.0 selected content.'],
+  });
+  const updateNewSkill = buildSkillMarkdown({
+    skillName: 'plugin-update-skill',
+    description: 'A newer plugin source available for an explicit Universal update.',
+    title: 'Plugin update skill',
+    bodyLines: ['Plugin update skill version 1.1.0 selected content.'],
+  });
+  const legacyLiveSkill = buildSkillMarkdown({
+    skillName: 'legacy-plugin-link-skill',
+    description: 'A surviving managed source for repairing a stale plugin link.',
+    title: 'Legacy plugin link skill',
+    bodyLines: ['Legacy plugin link version 2.0.0 selected content.'],
+  });
+  const nativeDeliverySkill = buildSkillMarkdown({
+    skillName: 'native-plugin-skill',
+    description: 'A skill supplied natively to Claude by an enabled plugin.',
+    title: 'Native plugin skill',
+    bodyLines: ['The enabled native plugin satisfies Claude only.'],
+  });
 
   await Promise.all([
     writePluginManifest(path.join(codexRoot, '.codex-plugin', 'plugin.json'), 'example-workflow-kit'),
@@ -2231,7 +2499,100 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
     writePluginManifest(path.join(versionShadowNewRoot, '.claude-plugin', 'plugin.json'), 'version-shadow-kit', '1.1.0'),
     writeFileWithParents(path.join(versionShadowOldRoot, 'skills', 'cache-shadow', 'SKILL.md'), cacheShadowSkill),
     writeFileWithParents(path.join(versionShadowNewRoot, 'skills', 'cache-shadow', 'SKILL.md'), cacheShadowSkill),
+    writePluginManifest(path.join(singleSourceRoot, '.codex-plugin', 'plugin.json'), 'plugin-single-source-skill', '1.0.0'),
+    writeFileWithParents(path.join(singleSourceRoot, 'skills', 'plugin-single-source-skill', 'SKILL.md'), singleSourceSkill),
+    writePluginManifest(path.join(versionChoiceSemverRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-skill', '1.0.0'),
+    writePluginManifest(path.join(versionChoiceNewRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-skill', '1.1.0'),
+    writeFileWithParents(path.join(versionChoiceSemverRoot, 'skills', 'plugin-version-choice-skill', 'SKILL.md'), versionChoiceSemverSkill),
+    writeFileWithParents(path.join(versionChoiceNewRoot, 'skills', 'plugin-version-choice-skill', 'SKILL.md'), versionChoiceNewSkill),
+    writePluginManifest(path.join(incomparableVersionSemverRoot, '.codex-plugin', 'plugin.json'), 'plugin-incomparable-version-skill', '1.0.0'),
+    writePluginManifest(path.join(incomparableVersionHashRoot, '.codex-plugin', 'plugin.json'), 'plugin-incomparable-version-skill', 'd6169bef'),
+    writeFileWithParents(path.join(incomparableVersionSemverRoot, 'skills', 'plugin-incomparable-version-skill', 'SKILL.md'), incomparableVersionSemverSkill),
+    writeFileWithParents(path.join(incomparableVersionHashRoot, 'skills', 'plugin-incomparable-version-skill', 'SKILL.md'), incomparableVersionHashSkill),
+    writePluginManifest(path.join(updateOldRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-skill', '1.0.0'),
+    writePluginManifest(path.join(updateNewRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-skill', '1.1.0'),
+    writeFileWithParents(path.join(updateOldRoot, 'skills', 'plugin-update-skill', 'SKILL.md'), updateOldSkill),
+    writeFileWithParents(path.join(updateNewRoot, 'skills', 'plugin-update-skill', 'SKILL.md'), updateNewSkill),
+    writePluginManifest(path.join(legacyLiveRoot, '.codex-plugin', 'plugin.json'), 'legacy-plugin-link-skill', '2.0.0'),
+    writeFileWithParents(path.join(legacyLiveRoot, 'skills', 'legacy-plugin-link-skill', 'SKILL.md'), legacyLiveSkill),
+    writePluginManifest(path.join(legacyDeletedRoot, '.codex-plugin', 'plugin.json'), 'legacy-plugin-link-skill', '1.0.0'),
+    writeFileWithParents(path.join(legacyDeletedRoot, 'skills', 'legacy-plugin-link-skill', 'SKILL.md'), buildSkillMarkdown({
+      skillName: 'legacy-plugin-link-skill',
+      description: 'A deliberately removed legacy cache package.',
+      title: 'Legacy plugin link skill',
+      bodyLines: ['This cache package is removed after fixture setup.'],
+    })),
+    writePluginManifest(path.join(versionChoiceSubagentSemverRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-subagent', '1.0.0'),
+    writePluginManifest(path.join(versionChoiceSubagentHashRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-subagent', 'd6169bef'),
+    writeFileWithParents(path.join(versionChoiceSubagentSemverRoot, 'agents', 'plugin-version-choice-subagent.md'), buildSubagentMarkdown({
+      name: 'plugin-version-choice-subagent',
+      description: 'A plugin subagent that requires explicit source selection.',
+      bodyLines: ['Plugin subagent version 1.0.0 selected content.'],
+    })),
+    writeFileWithParents(path.join(versionChoiceSubagentHashRoot, 'agents', 'plugin-version-choice-subagent.md'), buildSubagentMarkdown({
+      name: 'plugin-version-choice-subagent',
+      description: 'A hash-version plugin subagent that requires explicit source selection.',
+      bodyLines: ['Plugin subagent revision d6169bef selected content.'],
+    })),
+    writePluginManifest(path.join(updateSubagentOldRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-subagent', '1.0.0'),
+    writePluginManifest(path.join(updateSubagentNewRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-subagent', '1.1.0'),
+    writeFileWithParents(path.join(updateSubagentOldRoot, 'agents', 'plugin-update-subagent.md'), buildSubagentMarkdown({
+      name: 'plugin-update-subagent',
+      description: 'Universal subagent source matching plugin version one.',
+      bodyLines: ['Plugin subagent update version 1.0.0 selected content.'],
+    })),
+    writeFileWithParents(path.join(updateSubagentNewRoot, 'agents', 'plugin-update-subagent.md'), buildSubagentMarkdown({
+      name: 'plugin-update-subagent',
+      description: 'A plugin subagent source available for explicit update.',
+      bodyLines: ['Plugin subagent update version 1.1.0 selected content.'],
+    })),
+    writePluginManifest(path.join(remoteMcpRoot, '.codex-plugin', 'plugin.json'), 'plugin-remote-mcp', '1.0.0'),
+    writePluginMcpConfig(path.join(remoteMcpRoot, '.mcp.json'), {
+      'plugin-remote-mcp': { type: 'http', url: 'https://example.test/plugin-remote-mcp' },
+    }),
+    writePluginManifest(path.join(boundMcpRoot, '.codex-plugin', 'plugin.json'), 'plugin-bound-mcp', '1.0.0'),
+    writePluginMcpConfig(path.join(boundMcpRoot, '.mcp.json'), {
+      'plugin-bound-mcp': {
+        command: 'node',
+        args: ['${CODEX_PLUGIN_ROOT}/servers/plugin-bound-mcp.js', path.join(boundMcpRoot, 'assets', 'rules.json')],
+        startup_timeout_ms: 5_000,
+      },
+    }),
+    writeFileWithParents(path.join(boundMcpRoot, 'servers', 'plugin-bound-mcp.js'), buildSandboxMcpServerScript('plugin-bound-mcp')),
+    writeFileWithParents(path.join(boundMcpRoot, 'assets', 'rules.json'), '{"fixture":true}\n'),
+    writePluginManifest(path.join(updateMcpOldRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-mcp', '1.0.0'),
+    writePluginManifest(path.join(updateMcpNewRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-mcp', '1.1.0'),
+    writePluginMcpConfig(path.join(updateMcpOldRoot, '.mcp.json'), {
+      'plugin-update-mcp': { command: 'node', args: ['plugin-update-mcp-v1.js'] },
+    }),
+    writePluginMcpConfig(path.join(updateMcpNewRoot, '.mcp.json'), {
+      'plugin-update-mcp': { command: 'node', args: ['plugin-update-mcp-v2.js'] },
+    }),
+    writePluginManifest(path.join(nativeDeliveryRoot, '.claude-plugin', 'plugin.json'), 'native-plugin-delivery', '1.0.0'),
+    writeFileWithParents(path.join(nativeDeliveryRoot, 'skills', 'native-plugin-skill', 'SKILL.md'), nativeDeliverySkill),
+    writeFileWithParents(path.join(nativeDeliveryRoot, 'agents', 'native-plugin-subagent.md'), buildSubagentMarkdown({
+      name: 'native-plugin-subagent',
+      description: 'A subagent supplied natively to Claude by its enabled plugin.',
+      bodyLines: ['The enabled native plugin satisfies Claude only.'],
+    })),
+    writePluginMcpConfig(path.join(nativeDeliveryRoot, '.mcp.json'), {
+      'native-plugin-mcp': { command: 'node', args: ['native-plugin-mcp.js'] },
+    }),
   ]);
+
+  const legacyDeletedSkillPath = path.join(legacyDeletedRoot, 'skills', 'legacy-plugin-link-skill');
+  const legacySkillLinkPaths = [
+    path.join(sandboxRoot, '.claude', 'skills', 'legacy-plugin-link-skill'),
+    path.join(sandboxRoot, '.factory', 'skills', 'legacy-plugin-link-skill'),
+  ];
+  await Promise.all(legacySkillLinkPaths.map(async (linkPath) => {
+    await mkdir(path.dirname(linkPath), { recursive: true });
+    await symlink(legacyDeletedSkillPath, linkPath);
+  }));
+  // The stale target was real during setup, then genuinely removed. Keeping the
+  // link lets the resolver exercise a legacy cache-backed broken-link repair.
+  await rm(legacyDeletedRoot, { recursive: true, force: true });
+  await rm(path.join(sandboxRoot, '.claude', 'skills', 'native-plugin-delivery:native-plugin-skill'), { recursive: true, force: true });
 }
 
 function buildSandboxMcpServerScript(name: string): string {
@@ -2667,6 +3028,14 @@ function buildRepresentativeMcpConfigs(
       'double-invalid-definition-mcp': {
         args: ['double-invalid-definition-agents.js'],
       },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
+      'native-plugin-mcp': {
+        command: 'node',
+        args: ['native-plugin-mcp.js'],
+      },
     },
     'sandbox-amp': {},
     'sandbox-codebuddy': {},
@@ -2686,6 +3055,14 @@ function buildRepresentativeMcpConfigs(
       'double-definition-mismatch-mcp': {
         command: 'node',
         args: ['double-definition-mismatch-agents.js'],
+      },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
+      'native-plugin-mcp': {
+        command: 'node',
+        args: ['native-plugin-mcp.js'],
       },
     },
     'sandbox-crush': {},
@@ -2734,6 +3111,10 @@ function buildRepresentativeMcpConfigs(
         command: 'node',
         args: ['double-invalid-definition-claude.js'],
       },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
     },
     'sandbox-claude-desktop': {
       'claude-desktop-only-mcp': {
@@ -2752,6 +3133,14 @@ function buildRepresentativeMcpConfigs(
         command: 'node',
         args: ['double-definition-mismatch-agents.js'],
       },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
+      'native-plugin-mcp': {
+        command: 'node',
+        args: ['native-plugin-mcp.js'],
+      },
     },
     'sandbox-cursor': {
       'healthy-mcp': {
@@ -2765,6 +3154,14 @@ function buildRepresentativeMcpConfigs(
       'double-definition-mismatch-mcp': {
         command: 'node',
         args: ['double-definition-mismatch-agents.js'],
+      },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
+      'native-plugin-mcp': {
+        command: 'node',
+        args: ['native-plugin-mcp.js'],
       },
     },
     'sandbox-mistral-vibe': {},
@@ -2808,6 +3205,14 @@ function buildRepresentativeMcpConfigs(
       'double-invalid-definition-mcp': {
         args: ['double-invalid-definition-factory.js'],
       },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
+      'native-plugin-mcp': {
+        command: 'node',
+        args: ['native-plugin-mcp.js'],
+      },
     },
     'sandbox-windsurf': {
       'healthy-mcp': {
@@ -2821,6 +3226,14 @@ function buildRepresentativeMcpConfigs(
       'double-definition-mismatch-mcp': {
         command: 'node',
         args: ['double-definition-mismatch-agents.js'],
+      },
+      'plugin-update-mcp': {
+        command: 'node',
+        args: ['plugin-update-mcp-v1.js'],
+      },
+      'native-plugin-mcp': {
+        command: 'node',
+        args: ['native-plugin-mcp.js'],
       },
     },
     'sandbox-zencoder': {},

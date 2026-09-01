@@ -36,6 +36,7 @@ import {
   WorkspaceFilterBar,
 } from '../components/ui';
 import { scrollSelectedInventoryRowIntoView, useCloseOnEscape } from '../lib/inventory-workspace-dom';
+import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 
 export function SkillsWorkspaceView({
   autoResolvableRequests = [],
@@ -219,6 +220,7 @@ export function SkillsWorkspaceView({
 
             {selectedSkill ? (
               <SkillDetailPanel
+                inventorySnapshot={inventorySnapshot}
                 isDismissingDrift={isDismissingDrift}
                 isApplyingCapabilityAction={isApplyingCapabilityAction}
                 isResolvingIssue={isResolvingIssue}
@@ -276,6 +278,7 @@ function getSkillsEmptyStateMessage({
 }
 
 function SkillDetailPanel({
+  inventorySnapshot,
   isDismissingDrift,
   isApplyingCapabilityAction,
   isResolvingIssue,
@@ -294,6 +297,7 @@ function SkillDetailPanel({
   setSelectedSkillVariantPath,
   sourceIndex,
 }: {
+  inventorySnapshot: SkillInventorySnapshot | null;
   isDismissingDrift: boolean;
   isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
@@ -315,6 +319,9 @@ function SkillDetailPanel({
   const inspectorModel = selectedSkillInspectorModel;
   const resolveAction = getSkillResolveActionState(selectedSkill, inspectorModel, sourceIndex);
   const activeProblem = inspectorModel?.activeProblem ?? null;
+  const removalPresentation = getInventoryRemovalPresentation(inventorySnapshot, {
+    entity: 'skill', skillName: selectedSkill.name,
+  });
 
   if (!inspectorModel) {
     return null;
@@ -326,8 +333,8 @@ function SkillDetailPanel({
       footerActions={[
         ...(activeProblem?.primaryActionLabel
           ? [{
-            disabled: !resolveAction.request || isResolvingIssue,
-            label: isResolvingIssue ? 'Applying…' : activeProblem.primaryActionLabel,
+            disabled: !resolveAction.request || isResolvingIssue || isApplyingCapabilityAction,
+            label: isResolvingIssue || isApplyingCapabilityAction ? 'Applying…' : activeProblem.primaryActionLabel,
             onClick: () => {
               if (!resolveAction.request) {
                 return;
@@ -360,8 +367,8 @@ function SkillDetailPanel({
             variant: 'subtle' as const,
           }]
           : []),
-        {
-          disabled: isRemovingInventoryItem,
+        ...(removalPresentation.canRemove ? [{
+          disabled: isRemovingInventoryItem || isResolvingIssue || isApplyingCapabilityAction,
           label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
           onClick: () => {
             onRequestRemove({
@@ -371,23 +378,21 @@ function SkillDetailPanel({
           },
           shortcut: 'R',
           variant: 'danger' as const,
-        },
+        }] : []),
       ]}
       model={inspectorModel}
       ariaLabel="Skill detail"
       paneClassName={`skill-inspector-panel${selectedSkillProblemKey ? ' skill-inspector-panel--problem-selected' : ''}`}
       sandboxRoot={sandboxRoot}
-      isLocationActionPending={isApplyingCapabilityAction}
+      isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
       onLocationAction={(action: InspectorLocationAction) => {
-        if (action.kind === 'choose-skill-universal-version') {
-          void onApplyCapabilityAction({
-            entity: 'skill',
-            action: 'choose-universal-version',
-            skillName: selectedSkill.name,
-            selectedVariantPath: action.path,
-          });
-        }
+        void onApplyCapabilityAction({
+          entity: 'skill',
+          action: 'choose-universal-version',
+          skillName: selectedSkill.name,
+          selectedVariantPath: action.path,
+        });
       }}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => {

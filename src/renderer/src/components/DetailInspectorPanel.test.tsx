@@ -13,7 +13,132 @@ const agentIndex = new Map((representativeInventorySnapshot.agents ?? []).map((a
 const openPathInEditorMock = vi.fn<SkillIndexDesktopApi['openPathInEditor']>();
 const packagePath = (value: string) => value.replace(/\.md$/, '');
 
+function createPluginBoundMcp(): McpRecord {
+  const pluginRoot = '/Users/tester/.codex/plugins/cache/openai-curated/plugin-bound-mcp/1.0.0';
+  const configPath = `${pluginRoot}/.mcp.json`;
+  return {
+    name: 'plugin-bound-mcp',
+    status: 'needs-attention',
+    presentation: 'active',
+    issueReasons: ['missing-universal'],
+    locations: [{
+      agentId: 'plugin:codex:plugin-bound-mcp',
+      agentLabel: 'Codex Plugin plugin-bound-mcp',
+      scope: 'sandbox',
+      configPath,
+      configName: 'plugin-bound-mcp',
+      transport: 'stdio',
+      command: 'node',
+      args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+      definitionText: JSON.stringify({
+        command: 'node',
+        args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+      }),
+      definitionComparisonKey: 'plugin-bound-mcp-definition',
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+    }],
+    managedSourceCandidates: [{
+      path: configPath,
+      plugin: {
+        host: 'codex',
+        pluginId: 'plugin-bound-mcp@openai-curated',
+        pluginName: 'plugin-bound-mcp',
+        version: '1.0.0',
+        rootPath: pluginRoot,
+        enabled: true,
+      },
+      evidence: 'enabled-installation',
+      relationship: 'universal-missing',
+      dependencyWarnings: [
+        { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
+        { kind: 'plugin-contained-path', detail: `References a path inside ${pluginRoot}.` },
+      ],
+    }],
+  };
+}
+
 describe('DetailInspectorPanel', () => {
+  it('shows evidence hints on managed-source version choices', () => {
+    const model: InspectorModel = {
+      header: { title: 'plugin-choice', description: null, updatedLabel: 'Updated now', metadata: [] },
+      definition: { listTitle: 'Detected Versions', variants: [], selectedVariant: null, selectedVariantPath: null, files: [], emptySummary: '' },
+      locations: [],
+      problemCountLabel: '1 problem',
+      problems: [{
+        key: 'missing-canonical',
+        label: 'Missing Universal',
+        detail: 'Choose a plugin source',
+        summary: '2 versions',
+        isActive: true,
+      }],
+      problemSections: [{ title: 'Variant resolution', problemKeys: ['missing-canonical'] }],
+      activeProblem: {
+        kind: 'variant-resolution',
+        key: 'missing-canonical',
+        title: 'Missing Universal',
+        listTitle: 'Detected Versions',
+        variants: [{
+          id: 'one',
+          path: '/cache/tools/1.0.0/skills/plugin-choice',
+          label: 'Codex Plugin tools',
+          secondaryLabel: '/cache/tools/1.0.0/skills/plugin-choice',
+          isBaseline: false,
+          locations: [],
+          updatedLabel: 'Updated now',
+          evidenceLabel: 'Currently used in Codex',
+        }],
+        changedFiles: [],
+        selectedVariant: null,
+        baselineVariant: null,
+        diffTitle: 'Selected Version Preview',
+        diffLines: [],
+        diffPath: null,
+        primaryActionLabel: null,
+      },
+      selectedVariantPath: null,
+      provenanceRows: [],
+      provenanceSummary: [],
+    };
+
+    render(<DetailInspectorPanel model={model} onClose={vi.fn()} />);
+
+    const evidence = screen.getByText('Currently used in Codex');
+    expect(evidence).toBeVisible();
+    expect(evidence).toHaveClass('detail-inspector-panel__variant-evidence');
+    expect(evidence).not.toHaveClass('detail-inspector-panel__badge');
+  });
+
+  it('shows selected plugin MCP dependency warnings without disabling promotion', () => {
+    const mcp = createPluginBoundMcp();
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: mcp.locations[0]?.configPath,
+    }, agentIndex, sourceIndex);
+
+    render(
+      <DetailInspectorPanel
+        entityKind="mcp"
+        footerActions={[{
+          disabled: false,
+          label: 'Promote to Universal',
+          onClick: vi.fn(),
+          shortcut: 'F',
+          variant: 'strong',
+        }]}
+        model={model}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const warnings = screen.getByRole('list', { name: 'Selected plugin candidate dependency warnings' });
+    expect(within(warnings).getByText('Plugin root variable')).toBeVisible();
+    expect(within(warnings).getByText('References a plugin-root environment variable.')).toBeVisible();
+    expect(within(warnings).getByText('Plugin cache path')).toBeVisible();
+    expect(within(warnings).getByText(/References a path inside .*plugin-bound-mcp\/1\.0\.0/)).toBeVisible();
+    expect(screen.getByRole('button', { name: /Promote to Universal/i })).toBeEnabled();
+  });
+
   beforeEach(() => {
     openPathInEditorMock.mockReset();
     openPathInEditorMock.mockResolvedValue(undefined);

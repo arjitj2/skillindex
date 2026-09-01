@@ -314,6 +314,8 @@ describe('plugin inventory', () => {
 
     expect(plugins[0].skillRoots).toEqual([moreSkillsRoot, toolingSkillsRoot]);
     expect(sources.map((source) => source.skillsDir)).toEqual([moreSkillsRoot, toolingSkillsRoot]);
+    expect(sources.every((source) => source.canonical === false && source.writable === false)).toBe(true);
+    expect(sources.map((source) => source.plugin?.enabled)).toEqual(['unknown', 'unknown']);
     expect(plugins[0].bundledSkills).toEqual([
       expect.objectContaining({
         name: 'alpha',
@@ -363,20 +365,20 @@ describe('plugin inventory', () => {
       id: 'plugin:codex:github-tools@openai-curated:abc123',
       kind: 'plugin',
       writable: false,
-      canonical: true,
+      canonical: false,
       skillsDir: path.join(pluginRoot, 'skills'),
     }));
     const pluginSkill = inventory.skills.find((skill) => skill.name === 'github-tools:github');
     expect(pluginSkill).toMatchObject({
       displayName: 'github',
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
     expect(pluginSkill?.locations[0]).toMatchObject({
-      canonical: true,
+      canonical: false,
       mutability: 'read-only-managed',
-      canonicalRole: 'canonical',
+      canonicalRole: 'managed-source',
       provenance: {
         kind: 'plugin',
         plugin: {
@@ -387,6 +389,18 @@ describe('plugin inventory', () => {
         sourcePath: path.join(pluginRoot, 'skills', 'github'),
       },
     });
+    expect(pluginSkill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    const managedSourceCandidate = pluginSkill?.managedSourceCandidates?.[0];
+    expect(pluginSkill?.managedSourceCandidates).toHaveLength(1);
+    expect(managedSourceCandidate?.path).toBe(path.join(pluginRoot, 'skills', 'github'));
+    expect(managedSourceCandidate?.relationship).toBe('universal-missing');
+    expect(managedSourceCandidate?.plugin).toMatchObject({
+      host: 'codex',
+      pluginId: 'github-tools@openai-curated',
+      pluginName: 'github-tools',
+      version: 'abc123',
+      rootPath: pluginRoot,
+    });
     const pluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'github-tools:github');
     expect(pluginMcp).toMatchObject({
       status: 'needs-attention',
@@ -396,7 +410,7 @@ describe('plugin inventory', () => {
     expect(pluginMcp?.locations[0]).toMatchObject({
       agentId: 'plugin:codex:github-tools@openai-curated:abc123',
       mutability: 'read-only-managed',
-      canonicalRole: 'canonical',
+      canonicalRole: 'managed-source',
       provenance: {
         kind: 'plugin',
         plugin: {
@@ -406,6 +420,14 @@ describe('plugin inventory', () => {
         },
       },
     });
+    expect(pluginMcp?.managedSourceCandidates).toEqual([
+      expect.objectContaining({
+        path: path.join(pluginRoot, '.mcp.json'),
+        relationship: 'universal-missing',
+      }),
+    ]);
+    expect(pluginMcp?.managedSourceCandidates?.[0]?.dependencyWarnings
+      .some((warning) => warning.kind === 'plugin-root-variable')).toBe(true);
     expect(pluginMcp?.missingLocations?.every((location) => !location.agentId.startsWith('plugin:'))).toBe(true);
   });
 
@@ -452,6 +474,43 @@ describe('plugin inventory', () => {
       ],
     });
     expect(pluginMcp?.locations[0]?.definitionText).toContain('@upstash/context7-mcp');
+  });
+
+  it('treats differing cached plugin MCP versions as ordinary definition alternatives', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-versions-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: dataDir }, homeDir });
+    const oldRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'repeat-tools', '1.0.0');
+    const newRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'repeat-tools', '1.1.0');
+
+    await writeJson(path.join(oldRoot, '.codex-plugin', 'plugin.json'), { name: 'repeat-tools', version: '1.0.0' });
+    await writeJson(path.join(newRoot, '.codex-plugin', 'plugin.json'), { name: 'repeat-tools', version: '1.1.0' });
+    await writeJson(path.join(oldRoot, '.mcp.json'), { mcpServers: { repeat: { command: 'node', args: ['old.js'] } } });
+    await writeJson(path.join(newRoot, '.mcp.json'), { mcpServers: { repeat: { command: 'node', args: ['new.js'] } } });
+
+    const env = { SKILL_INDEX_AGENT_SUBSET: 'codex' };
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), [
+      '[plugins."repeat-tools@openai-curated"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+    let inventory = await scanInventory({ paths, homeDir, env, includeLiveSources: true, includeSandboxSources: false });
+    const pluginOnly = inventory.mcps?.find((mcp) => mcp.name === 'repeat-tools:repeat');
+    expect(pluginOnly).toMatchObject({ issueReasons: ['missing-universal'] });
+    expect(pluginOnly?.managedSourceCandidates).toHaveLength(2);
+    expect(pluginOnly?.issueReasons).not.toContain('definition-mismatch');
+
+    await writeJson(path.join(homeDir, '.agents', 'mcp.json'), {
+      servers: { repeat: { command: 'node', args: ['old.js'] } },
+    });
+    inventory = await scanInventory({ paths, homeDir, env, includeLiveSources: true, includeSandboxSources: false });
+    const synchronized = inventory.mcps?.find((mcp) => mcp.name === 'repeat-tools:repeat');
+    expect(synchronized).toMatchObject({ status: 'needs-attention', issueReasons: ['definition-mismatch'] });
+    expect(synchronized?.managedSourceCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relationship: 'matches-universal' }),
+      expect.objectContaining({ relationship: 'differs-from-universal' }),
+    ]));
   });
 
   it('groups plugin MCPs with same-name agent config entries without requiring normal MCPs in plugin configs', async () => {
@@ -547,9 +606,9 @@ describe('plugin inventory', () => {
 
     const skill = inventory.skills.find((candidate) => candidate.name === 'example-workflow-kit:idea-shaping');
     expect(skill).toMatchObject({
-      structuralState: 'missing-symlinks',
+      structuralState: 'single-source-noncanonical',
       isDrifted: true,
-      issueReasons: ['missing-symlinks'],
+      issueReasons: ['missing-canonical'],
     });
     expect(skill?.locations).toHaveLength(2);
     expect(skill?.diff).toBeUndefined();
@@ -597,20 +656,20 @@ describe('plugin inventory', () => {
       kind: 'plugin',
       scope: 'sandbox',
       writable: false,
-      canonical: true,
+      canonical: false,
       skillsDir: path.join(pluginRoot, 'skills'),
     }));
     expect(inventory.skills.find((skill) => skill.name === 'signal-tools:signal-map')?.locations[0]).toMatchObject({
       sourceId: 'plugin:sandbox:codex:signal-tools@sandbox-curated:abc123',
       sourceScope: 'sandbox',
       mutability: 'read-only-managed',
-      canonicalRole: 'canonical',
+      canonicalRole: 'managed-source',
     });
     expect(inventory.mcps?.find((mcp) => mcp.name === 'signal-tools:signalMap')?.locations[0]).toMatchObject({
       agentId: 'plugin:sandbox:codex:signal-tools@sandbox-curated:abc123',
       scope: 'sandbox',
       mutability: 'read-only-managed',
-      canonicalRole: 'canonical',
+      canonicalRole: 'managed-source',
     });
   });
 
@@ -784,9 +843,9 @@ describe('plugin inventory', () => {
       reason: 'kept-separate',
     });
     expect(inventory.skills.find((skill) => skill.name === 'github-tools:github')).toMatchObject({
-      structuralState: 'healthy',
-      isDrifted: false,
-      issueReasons: [],
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      issueReasons: ['missing-canonical'],
     });
   });
 });

@@ -7,6 +7,7 @@ import {
   type AppShellState,
   type AuditOperation,
   type AutoUpdateStatus,
+  type McpRecord,
   type SettingsState,
   type SkillInventorySnapshot,
   type SkillRecord,
@@ -959,7 +960,13 @@ describe('App shell inventory views', () => {
     expect(within(universalLocations).getByText(`${DEFAULT_SANDBOX_ROOT}/.agents/mcp.json`)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Inventory refresh' })).toBeInTheDocument();
     expect(screen.getByText('Watch files for changes')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Re-index existing watched skill roots when their files change. New plugin versions, plugin MCPs, and plugin subagents refresh on startup or manual Rescan.',
+    )).toBeInTheDocument();
     expect(screen.getByText('Rescan when Skill Index opens')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Run a fresh inventory refresh when Skill Index opens, including plugin versions, MCPs, and subagents.',
+    )).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Custom scan paths for skills' })).toBeInTheDocument();
     const settingsSourceControl = screen.getByRole('radiogroup', { name: 'Inventory source' });
     expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toHaveAttribute('aria-checked', 'true');
@@ -1441,6 +1448,37 @@ describe('App shell inventory views', () => {
     expect(screen.getByText('Compared Fields')).toBeInTheDocument();
   });
 
+  it('shows plugin dependency warnings before allowing a missing Universal MCP promotion', async () => {
+    const snapshot = createPluginBoundMcpInventorySnapshot();
+    const selectedVariantPath = `${DEFAULT_SANDBOX_ROOT}/.codex/plugins/cache/sandbox-fixtures/plugin-bound-mcp/1.0.0/.mcp.json`;
+    readCachedInventoryMock.mockResolvedValue(structuredClone(snapshot));
+    scanInventoryMock.mockResolvedValue(structuredClone(snapshot));
+    render(<App />);
+    await openMcps();
+
+    fireEvent.click(getMcpRow('plugin-bound-mcp'));
+    expect(await screen.findByRole('heading', { name: 'plugin-bound-mcp', level: 3 })).toBeInTheDocument();
+
+    const warnings = screen.getByRole('list', { name: 'Selected plugin candidate dependency warnings' });
+    expect(within(warnings).getByText('Plugin root variable')).toBeVisible();
+    expect(within(warnings).getByText('References a plugin-root environment variable.')).toBeVisible();
+    expect(within(warnings).getByText('Plugin cache path')).toBeVisible();
+    expect(within(warnings).getByText(/References a path inside .*plugin-bound-mcp\/1\.0\.0/)).toBeVisible();
+
+    const promoteButton = screen.getByRole('button', { name: /Promote to Universal/i });
+    expect(promoteButton).toBeEnabled();
+    expect(promoteButton).toHaveAttribute('aria-keyshortcuts', 'F');
+    fireEvent.click(promoteButton);
+    await waitFor(() => {
+      expect(makeCanonicalMock).toHaveBeenCalledWith({
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'plugin-bound-mcp',
+        selectedVariantPath,
+      });
+    });
+  });
+
   it('opens the Add Server modal and submits a command server through the desktop API', async () => {
     render(<App />);
     await openMcps();
@@ -1912,6 +1950,47 @@ describe('App shell inventory views', () => {
         subagentName: 'reviewer',
       });
     });
+  });
+
+  it('does not offer Remove for a plugin-only MCP source', async () => {
+    const snapshot = createPluginBoundMcpInventorySnapshot();
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+
+    render(<App />);
+    await openMcps();
+    fireEvent.click(getMcpRow('plugin-bound-mcp'));
+    expect(await screen.findByRole('heading', { name: 'plugin-bound-mcp', level: 3 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove$/i })).not.toBeInTheDocument();
+  });
+
+  it('describes mixed plugin removal as removing only Universal and agent copies and keeps the source selected', async () => {
+    const snapshot = createInventorySnapshotWithAcceptedPluginAlternate();
+    const afterRemoval = structuredClone(snapshot);
+    const skillName = 'example-workflow-kit:handoff-notes-with-static';
+    const remaining = afterRemoval.skills.find((skill) => skill.name === skillName)!;
+    remaining.locations = remaining.locations.filter((location) => location.provenance?.kind === 'plugin');
+    remaining.structuralState = 'single-source-noncanonical';
+    remaining.issueReasons = ['missing-canonical'];
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+    removeInventoryItemMock.mockResolvedValue(afterRemoval);
+
+    render(<App />);
+    await openSkills();
+    fireEvent.click(getSkillRow('handoff-notes-with-static'));
+    expect(await screen.findByRole('heading', { name: /handoff-notes-with-static/i, level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /^Remove skill$/i });
+    expect(within(dialog).getByText(/Universal and agent copies will be removed/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/plugin source will stay unchanged/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/removed from every location/i)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Yes, remove$/i }));
+
+    expect(await screen.findByText(/was removed from Universal and agent locations/i)).toBeInTheDocument();
+    expect(screen.getByText(/plugin source was not changed/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /handoff-notes-with-static/i, level: 3 })).toBeInTheDocument();
   });
 
   it('shows subagent dismissal failures as toasts instead of inline banners', async () => {
@@ -2431,6 +2510,26 @@ describe('App shell inventory views', () => {
     });
   });
 
+  it('disables issue resolution while a capability action is applying', async () => {
+    const snapshot = createInventorySnapshotWithAcceptedPluginAlternate();
+    const deferred = createDeferred<SkillInventorySnapshot>();
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+    applyCapabilityActionMock.mockReturnValue(deferred.promise);
+
+    render(<App />);
+    await openSkills();
+    fireEvent.click(getSkillRow('handoff-notes-with-static'));
+    expect(await screen.findByRole('heading', { name: /handoff-notes-with-static/i, level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Locations/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Make Universal$/i }));
+
+    fireEvent.click(screen.getByRole('tab', { name: /Problems/i }));
+    expect(screen.getByRole('button', { name: /Applying/i })).toBeDisabled();
+    deferred.resolve(snapshot);
+    await waitFor(() => expect(applyCapabilityActionMock).toHaveBeenCalledTimes(1));
+  });
+
   it('renders the redesigned MCP inspector with problem rows and one focused diff surface', async () => {
     render(<App />);
     await openMcps();
@@ -2558,26 +2657,32 @@ describe('App shell inventory views', () => {
     if (!pluginSkill) {
       throw new Error('Missing representative plugin skill fixture: plugin-readonly-skill');
     }
-    pluginSkill.structuralState = 'missing-symlinks';
+    pluginSkill.structuralState = 'single-source-noncanonical';
     pluginSkill.isDrifted = true;
     pluginSkill.driftPresentation = 'active';
-    pluginSkill.issueReasons = ['missing-symlinks'];
+    pluginSkill.issueReasons = ['missing-canonical'];
     pluginSkill.locations = pluginSkill.locations.map((location) => ({
       ...location,
-      canonical: true,
+      canonical: false,
+      canonicalRole: 'managed-source',
+    }));
+    pluginSkill.managedSourceCandidates = pluginSkill.locations.map((location) => ({
+      path: location.path,
+      plugin: {
+        host: 'claude',
+        pluginId: 'sandbox-plugin-pack',
+        pluginName: 'sandbox-plugin-pack',
+        version: '0.1.0',
+        rootPath: '~/.skillindex/sandbox/plugins',
+        enabled: true,
+      },
+      evidence: 'enabled-installation',
+      relationship: 'universal-missing',
+      dependencyWarnings: [],
     }));
     pluginSkill.detailDiagnostics = {
       ...pluginSkill.detailDiagnostics,
-      missingInstallSources: [
-        {
-          sourceId: 'sandbox-agents',
-          label: 'Sandbox .agents',
-          kind: 'canonical',
-          scope: 'sandbox',
-          writable: true,
-          canonical: false,
-        },
-      ],
+      missingInstallSources: [],
     };
     readCachedInventoryMock.mockResolvedValue(snapshot);
     scanInventoryMock.mockResolvedValue(snapshot);
@@ -2593,7 +2698,7 @@ describe('App shell inventory views', () => {
     fireEvent.click(getSkillRow('plugin-readonly-skill'));
     expect(await screen.findByRole('heading', { name: /^plugin-readonly-skill/i, level: 3 })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Create Missing Symlinks$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Use as Universal$/i }));
 
     expect(await screen.findByRole('button', { name: /^Applying/i })).toBeDisabled();
 
@@ -2616,7 +2721,7 @@ describe('App shell inventory views', () => {
       vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
-    expect(screen.getByRole('button', { name: /^Create Missing Symlinks$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Use as Universal$/i })).toBeEnabled();
   });
 
   it('routes missing-symlink skill repairs through the shared canonicalization action', async () => {
@@ -2668,6 +2773,22 @@ describe('App shell inventory views', () => {
         selectedVariantPath: '~/.skillindex/sandbox/.agents/skills/missing-symlink-skill',
       });
     });
+  });
+
+  it('disables broken symlink repair until a missing Universal is created', async () => {
+    const snapshot = createRepresentativeBrokenSymlinkWithoutUniversalSnapshot();
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+
+    render(<App />);
+    await openSkills();
+
+    fireEvent.click(getSkillRow('broken-symlink-without-universal'));
+    expect(await screen.findByRole('heading', { name: 'broken-symlink-without-universal', level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Broken Symlink 1 issue/i }));
+
+    expect(screen.getByRole('button', { name: /^Repair Symlinks$/i })).toBeDisabled();
+    expect(screen.getByText('Choose a Universal version first. Symlink repairs need a Universal target.')).toBeVisible();
   });
 
   it('routes wrong symlink target repairs through the shared canonicalization action', async () => {
@@ -3196,6 +3317,71 @@ function createInventorySnapshot(): SkillInventorySnapshot {
   });
 }
 
+function createPluginBoundMcpInventorySnapshot(): SkillInventorySnapshot {
+  const snapshot = createInventorySnapshot();
+  const pluginMcp = createPluginBoundMcpRecord();
+  const mcps = [...(snapshot.mcps ?? []), pluginMcp];
+  const nextSnapshot: SkillInventorySnapshot = {
+    ...snapshot,
+    mcps,
+    mcpCounts: {
+      totalMcps: mcps.length,
+      attentionMcps: mcps.filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'active').length,
+      healthyMcps: mcps.filter((mcp) => mcp.status === 'healthy').length,
+      dismissedAttentionMcps: mcps.filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'dismissed').length,
+    },
+  };
+  return {
+    ...nextSnapshot,
+    homeSummary: getHomeSummary(nextSnapshot),
+  };
+}
+
+function createPluginBoundMcpRecord(): McpRecord {
+  const pluginRoot = `${DEFAULT_SANDBOX_ROOT}/.codex/plugins/cache/sandbox-fixtures/plugin-bound-mcp/1.0.0`;
+  const configPath = `${pluginRoot}/.mcp.json`;
+  return {
+    name: 'plugin-bound-mcp',
+    status: 'needs-attention',
+    presentation: 'active',
+    issueReasons: ['missing-universal'],
+    locations: [{
+      agentId: 'plugin:codex:plugin-bound-mcp',
+      agentLabel: 'Codex Plugin plugin-bound-mcp',
+      scope: 'sandbox',
+      configPath,
+      configName: 'plugin-bound-mcp',
+      transport: 'stdio',
+      command: 'node',
+      args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+      definitionText: JSON.stringify({
+        command: 'node',
+        args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+      }),
+      definitionComparisonKey: 'plugin-bound-mcp-definition',
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+    }],
+    managedSourceCandidates: [{
+      path: configPath,
+      plugin: {
+        host: 'codex',
+        pluginId: 'plugin-bound-mcp@sandbox-fixtures',
+        pluginName: 'plugin-bound-mcp',
+        version: '1.0.0',
+        rootPath: pluginRoot,
+        enabled: true,
+      },
+      evidence: 'enabled-installation',
+      relationship: 'universal-missing',
+      dependencyWarnings: [
+        { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
+        { kind: 'plugin-contained-path', detail: `References a path inside ${pluginRoot}.` },
+      ],
+    }],
+  };
+}
+
 function createInventorySnapshotWithAddedSubagent(name: string): SkillInventorySnapshot {
   const snapshot = structuredClone(representativeInventorySnapshot);
   const addedSubagent: NonNullable<SkillInventorySnapshot['subagents']>[number] = {
@@ -3512,6 +3698,7 @@ function createPluginSource({
       version: '5.1.0',
       rootPath,
       manifestPath: `${rootPath}/${host === 'claude' ? '.claude-plugin' : '.codex-plugin'}/plugin.json`,
+      enabled: 'unknown',
     },
   };
 }
@@ -4514,6 +4701,36 @@ function createRepresentativeWrongSymlinkTargetSkillSnapshot(): SkillInventorySn
           resolvedPath: '~/.skillindex/sandbox/.agents/skills/healthy-skill.md',
           symlinkTarget: '~/.skillindex/sandbox/.agents/skills/healthy-skill.md',
         },
+      ],
+    };
+  });
+
+  return snapshot;
+}
+
+function createRepresentativeBrokenSymlinkWithoutUniversalSnapshot(): SkillInventorySnapshot {
+  const snapshot = createRepresentativeBrokenSymlinkSkillSnapshot();
+
+  snapshot.skills = snapshot.skills.map((skill) => {
+    if (skill.name !== 'broken-symlink-skill') {
+      return skill;
+    }
+
+    return {
+      ...skill,
+      name: 'broken-symlink-without-universal',
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical', 'broken-symlink'],
+      locations: [
+        {
+          ...skill.locations[0],
+          path: '~/.skillindex/sandbox/.factory/skills/broken-symlink-without-universal',
+          sourceId: 'sandbox-factory',
+          sourceLabel: 'Sandbox Factory',
+          canonical: false,
+          resolvedPath: '~/.skillindex/sandbox/.factory/skills/broken-symlink-without-universal',
+        },
+        ...skill.locations.filter((location) => !location.canonical),
       ],
     };
   });

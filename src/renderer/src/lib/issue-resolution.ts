@@ -75,16 +75,19 @@ export function getSkillResolveActionState(
 
   const selectedVariantPath = getSkillSelectedVariantPath(skill, inspectorModel?.selectedVariantPath ?? null, activeProblem.key);
   const hasUniversalRealFile = hasCanonicalRealFile(skill);
+  const missingUniversalTargetReason = getSkillMissingUniversalTargetReason(activeProblem.key, hasUniversalRealFile);
+  if (missingUniversalTargetReason) {
+    return {
+      disabledReason: missingUniversalTargetReason,
+      request: null,
+    };
+  }
   const requiresVariantSelection = activeProblem.key === 'diverged-copies'
-    || activeProblem.key === 'missing-canonical'
-    || ((activeProblem.key === 'missing-symlinks'
-      || activeProblem.key === 'broken-symlink'
-      || activeProblem.key === 'wrong-symlink-target')
-      && !hasUniversalRealFile);
+    || activeProblem.key === 'missing-canonical';
 
   if (requiresVariantSelection && !selectedVariantPath) {
     return {
-      disabledReason: getSkillMissingUniversalTargetReason(activeProblem.key, hasUniversalRealFile),
+      disabledReason: null,
       request: null,
     };
   }
@@ -361,7 +364,11 @@ function hasSubagentLocalExtras(location: { localExtrasKeys?: string[] }): boole
 }
 
 function hasCanonicalRealFile(skill: SkillRecord): boolean {
-  return skill.locations.some((location) => location.canonical && location.fileType === 'real-file');
+  return skill.locations.some((location) =>
+    location.canonical
+    && location.fileType === 'real-file'
+    && location.canonicalRole !== 'managed-source'
+    && location.provenance?.kind !== 'plugin');
 }
 
 function hasWritableIdenticalSkillCopyTarget(
@@ -602,8 +609,11 @@ export function getAutoResolvableSkillRequests(
         continue;
       }
 
-      const requiresVariantSelection = reason === 'missing-canonical'
-        || ((reason === 'missing-symlinks' || reason === 'broken-symlink') && !hasCanonicalRealFile(skill));
+      if ((reason === 'missing-symlinks' || reason === 'broken-symlink') && !hasCanonicalRealFile(skill)) {
+        continue;
+      }
+
+      const requiresVariantSelection = reason === 'missing-canonical';
 
       const selectedVariantPath = getSkillSelectedVariantPath(skill, null, reason);
 

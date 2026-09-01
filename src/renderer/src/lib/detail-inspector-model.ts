@@ -7,6 +7,8 @@ import type {
   McpRecord,
   McpServerDefinition,
   McpTransportKind,
+  PluginDependencyWarning,
+  PluginManagedSourceCandidate,
   PluginHost,
   SkillDefinitionIssue,
   SkillDiffFileRecord,
@@ -127,6 +129,8 @@ export interface InspectorVariantModel {
   locations: Array<{ label: string; path: string }>;
   updatedLabel: string;
   definitionText?: string;
+  evidenceLabel?: string;
+  dependencyWarnings?: PluginDependencyWarning[];
 }
 
 export interface InspectorChangedFileModel {
@@ -286,6 +290,47 @@ interface SubagentVariantGroup {
 type InternalSkillDiffFileRecord = SkillDiffFileRecord & {
   __displayKind?: InspectorChangedFileModel['displayKind'];
 };
+
+function formatPluginCandidateEvidence(candidate: PluginManagedSourceCandidate): string {
+  switch (candidate.evidence) {
+    case 'enabled-installation':
+      return `Currently used in ${candidate.plugin.host === 'codex' ? 'Codex' : 'Claude'}`;
+    case 'cached-unknown':
+      return 'Usage unknown';
+  }
+}
+
+function requiresExplicitManagedSourceSelection(
+  candidates: PluginManagedSourceCandidate[] | undefined,
+  selectedVariantPath: string | null | undefined,
+  variantPathGroups: string[][],
+): boolean {
+  if (selectedVariantPath) return false;
+  const missingUniversalPaths = new Set((candidates ?? [])
+    .filter((candidate) => candidate.relationship === 'universal-missing')
+    .map((candidate) => candidate.path));
+  const selectableManagedVersions = variantPathGroups.filter((paths) =>
+    paths.some((path) => missingUniversalPaths.has(path)));
+  return selectableManagedVersions.length > 1;
+}
+
+function getManagedCandidateForPath(
+  path: string,
+  candidates: PluginManagedSourceCandidate[] | undefined,
+): PluginManagedSourceCandidate | undefined {
+  return (candidates ?? []).find((candidate) => candidate.path === path);
+}
+
+function getManagedCandidateWarningsForPaths(
+  paths: string[],
+  candidates: PluginManagedSourceCandidate[] | undefined,
+): PluginDependencyWarning[] {
+  const pathSet = new Set(paths);
+  const warnings = (candidates ?? [])
+    .filter((candidate) => pathSet.has(candidate.path))
+    .flatMap((candidate) => candidate.dependencyWarnings);
+  return [...new Map(warnings.map((warning) => [`${warning.kind}\u0000${warning.detail}`, warning])).values()];
+}
 
 export function buildSkillInspectorModel(
   skill: SkillRecord,
@@ -687,7 +732,15 @@ function buildSkillVariantProblem(
   const groupedVariants = groupSkillVariants(getSkillVariantCandidates(skill, problemKey, sourceIndex));
   const baselineVariant = getSkillBaselineVariant(problemKey, groupedVariants);
   const orderedVariants = orderSkillVariantsForInspector(groupedVariants, baselineVariant);
-  const selectedVariant = selectSkillVariant(orderedVariants, selectedVariantPath);
+  const requiresExplicitSelection = problemKey === 'missing-canonical'
+    && requiresExplicitManagedSourceSelection(
+      skill.managedSourceCandidates,
+      selectedVariantPath,
+      orderedVariants.map((variant) => variant.locations.map((location) => location.path)),
+    );
+  const selectedVariant = requiresExplicitSelection
+    ? null
+    : selectSkillVariant(orderedVariants, selectedVariantPath);
   const diffInventory = buildSkillVariantDiffInventory(skill, orderedVariants, selectedVariant, baselineVariant);
   const primaryDiffFile = diffInventory.changedFiles[0] ?? null;
 
@@ -696,7 +749,12 @@ function buildSkillVariantProblem(
     key: problemKey,
     title: formatSkillIssueReason(problemKey),
     listTitle: 'Detected Versions',
-    variants: orderedVariants.map((variant) => mapSkillVariant(variant, baselineVariant, selectedVariant)),
+    variants: orderedVariants.map((variant) => mapSkillVariant(
+      variant,
+      baselineVariant,
+      selectedVariant,
+      skill.managedSourceCandidates,
+    )),
     changedFiles: diffInventory.changedFiles.map((file): InspectorChangedFileModel => ({
       path: file.relativePath,
       absolutePath: resolveSkillPackageDiffPath(file.relativePath, file, selectedVariant, baselineVariant),
@@ -705,14 +763,18 @@ function buildSkillVariantProblem(
       hasInlineDiff: Array.isArray(file.lines) && file.lines.length > 0,
       diffLines: file.lines ?? [],
     })),
-    selectedVariant: selectedVariant ? mapSkillVariant(selectedVariant, baselineVariant, selectedVariant) : null,
-    baselineVariant: baselineVariant ? mapSkillVariant(baselineVariant, baselineVariant, selectedVariant) : null,
+    selectedVariant: selectedVariant
+      ? mapSkillVariant(selectedVariant, baselineVariant, selectedVariant, skill.managedSourceCandidates)
+      : null,
+    baselineVariant: baselineVariant
+      ? mapSkillVariant(baselineVariant, baselineVariant, selectedVariant, skill.managedSourceCandidates)
+      : null,
     diffTitle: DETAIL_DIFF_TITLE,
     diffLines: primaryDiffFile?.lines ?? [],
     diffPath: primaryDiffFile
       ? resolveSkillPackageDiffPath(primaryDiffFile.relativePath, primaryDiffFile, selectedVariant, baselineVariant)
       : null,
-    primaryActionLabel: selectedVariant ? SKILL_ACTION_LABELS.useAsUniversal : null,
+    primaryActionLabel: selectedVariant || requiresExplicitSelection ? SKILL_ACTION_LABELS.useAsUniversal : null,
     actionSummary: buildSkillUseAsUniversalSummary(skill, problemKey, selectedVariant, sourceIndex),
   };
 }
@@ -801,8 +863,28 @@ function buildMcpVariantProblem(
     ? null
     : getMcpBaselineVariant(groupedVariants, getMcpReferencePath(mcp));
   const orderedVariants = orderMcpVariantsForInspector(groupedVariants, baselineVariant);
-  const selectedVariant = selectMcpVariant(orderedVariants, selectedVariantPath, baselineVariant);
-  const selectedModel = selectedVariant ? mapMcpVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const requiresExplicitSelection = problemKey === 'missing-universal'
+    && requiresExplicitManagedSourceSelection(
+      mcp.managedSourceCandidates,
+      selectedVariantPath,
+      orderedVariants.map((variant) => variant.locations.map((location) => location.configPath)),
+    );
+  const selectedVariant = requiresExplicitSelection
+    ? null
+    : selectMcpVariant(orderedVariants, selectedVariantPath, baselineVariant);
+  const selectedModel = selectedVariant
+    ? mapMcpVariant(
+      selectedVariant,
+      baselineVariant,
+      selectedVariant,
+      agentIndex,
+      getManagedCandidateWarningsForPaths(
+        selectedVariant.locations.map((location) => location.configPath),
+        mcp.managedSourceCandidates,
+      ),
+      mcp.managedSourceCandidates,
+    )
+    : null;
   const baselineModel = baselineVariant ? mapMcpVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex) : null;
   const diffLines = selectedVariant
     ? baselineVariant
@@ -815,7 +897,17 @@ function buildMcpVariantProblem(
     key: problemKey,
     title: formatMcpIssueReason(problemKey),
     listTitle: 'Detected Definitions',
-    variants: orderedVariants.map((variant) => mapMcpVariant(variant, baselineVariant, selectedVariant, agentIndex)),
+    variants: orderedVariants.map((variant) => mapMcpVariant(
+      variant,
+      baselineVariant,
+      selectedVariant,
+      agentIndex,
+      getManagedCandidateWarningsForPaths(
+        variant.locations.map((location) => location.configPath),
+        mcp.managedSourceCandidates,
+      ),
+      mcp.managedSourceCandidates,
+    )),
     changedFiles: [],
     selectedVariant: selectedModel,
     baselineVariant: baselineModel,
@@ -825,7 +917,7 @@ function buildMcpVariantProblem(
     definitionBreakdown: selectedVariant
       ? buildMcpDefinitionBreakdown(mcp.name, selectedVariant, baselineVariant ?? selectedVariant)
       : undefined,
-    primaryActionLabel: selectedVariant
+    primaryActionLabel: selectedVariant || requiresExplicitSelection
       ? problemKey === 'missing-universal'
         ? MCP_ACTION_LABELS.promoteToUniversal
         : MCP_ACTION_LABELS.applySelectedDefinition
@@ -909,9 +1001,21 @@ function buildSubagentVariantProblem(
     ? null
     : getSubagentBaselineVariant(groupedVariants, getCanonicalSubagentPath(subagent));
   const orderedVariants = orderSubagentVariantsForInspector(groupedVariants, baselineVariant);
-  const selectedVariant = selectSubagentVariant(orderedVariants, selectedVariantPath, baselineVariant);
-  const selectedModel = selectedVariant ? mapSubagentVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null;
-  const baselineModel = baselineVariant ? mapSubagentVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const requiresExplicitSelection = problemKey === 'missing-universal'
+    && requiresExplicitManagedSourceSelection(
+      subagent.managedSourceCandidates,
+      selectedVariantPath,
+      orderedVariants.map((variant) => variant.locations.map((location) => location.path)),
+    );
+  const selectedVariant = requiresExplicitSelection
+    ? null
+    : selectSubagentVariant(orderedVariants, selectedVariantPath, baselineVariant);
+  const selectedModel = selectedVariant
+    ? mapSubagentVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex, subagent.managedSourceCandidates)
+    : null;
+  const baselineModel = baselineVariant
+    ? mapSubagentVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex, subagent.managedSourceCandidates)
+    : null;
   const diffLines = selectedVariant
     ? baselineVariant
       ? buildTextDiffLines(selectedVariant.definitionText, baselineVariant.definitionText)
@@ -923,14 +1027,20 @@ function buildSubagentVariantProblem(
     key: problemKey,
     title: formatSubagentIssueReason(problemKey),
     listTitle: 'Detected Definitions',
-    variants: orderedVariants.map((variant) => mapSubagentVariant(variant, baselineVariant, selectedVariant, agentIndex)),
+    variants: orderedVariants.map((variant) => mapSubagentVariant(
+      variant,
+      baselineVariant,
+      selectedVariant,
+      agentIndex,
+      subagent.managedSourceCandidates,
+    )),
     changedFiles: [],
     selectedVariant: selectedModel,
     baselineVariant: baselineModel,
     diffTitle: baselineVariant ? 'Diff: Selected Definition vs Universal' : 'Selected Definition Preview',
     diffLines,
     diffPath: selectedVariant?.representative.path ?? null,
-    primaryActionLabel: selectedVariant
+    primaryActionLabel: selectedVariant || requiresExplicitSelection
       ? problemKey === 'missing-universal'
         ? SUBAGENT_ACTION_LABELS.addToUniversal
         : SUBAGENT_ACTION_LABELS.applySelectedDefinition
@@ -1205,7 +1315,7 @@ function getSkillProblemSummary(
 ): string {
   switch (key) {
     case 'diverged-copies': {
-      const groupedCount = groupSkillVariants(skill.detailDiagnostics.duplicateCandidates).length;
+      const groupedCount = groupSkillVariants(getSkillVariantCandidates(skill, key, sourceIndex)).length;
       const count = groupedCount || skill.locations.filter((location) => location.fileType === 'real-file').length;
       return `${count} version${count === 1 ? '' : 's'}`;
     }
@@ -2479,8 +2589,12 @@ function mapSkillVariant(
   variant: SkillVariantGroup,
   baselineVariant: SkillVariantGroup | null,
   selectedVariant: SkillVariantGroup | null,
+  managedSourceCandidates?: PluginManagedSourceCandidate[],
 ): InspectorVariantModel {
   const representative = variant.representative;
+  const candidatePaths = variant.locations.map((location) => location.path);
+  const managedCandidate = getManagedCandidateForPath(representative.path, managedSourceCandidates);
+  const dependencyWarnings = getManagedCandidateWarningsForPaths(candidatePaths, managedSourceCandidates);
   const badge = representative.path === baselineVariant?.representative.path
       ? 'Universal'
       : representative.path === selectedVariant?.representative.path
@@ -2500,6 +2614,8 @@ function mapSkillVariant(
     })),
     updatedLabel: formatAgeLabel(representative.modifiedAt),
     definitionText: variant.definitionText,
+    ...(managedCandidate ? { evidenceLabel: formatPluginCandidateEvidence(managedCandidate) } : {}),
+    ...(dependencyWarnings.length > 0 ? { dependencyWarnings } : {}),
   };
 }
 
@@ -2508,8 +2624,11 @@ function mapMcpVariant(
   baselineVariant: McpVariantGroup | null,
   selectedVariant: McpVariantGroup | null,
   agentIndex: Map<string, AgentRecord>,
+  dependencyWarnings?: PluginDependencyWarning[],
+  managedSourceCandidates?: PluginManagedSourceCandidate[],
 ): InspectorVariantModel {
   const representative = variant.representative;
+  const managedCandidate = getManagedCandidateForPath(representative.configPath, managedSourceCandidates);
   const badge = representative.configPath === selectedVariant?.representative.configPath
     ? 'Selected Version'
     : representative.configPath === baselineVariant?.representative.configPath
@@ -2532,6 +2651,8 @@ function mapMcpVariant(
     })),
     updatedLabel: summarizeMcpCommand(representative),
     definitionText: variant.definitionText,
+    ...(managedCandidate ? { evidenceLabel: formatPluginCandidateEvidence(managedCandidate) } : {}),
+    ...(dependencyWarnings && dependencyWarnings.length > 0 ? { dependencyWarnings } : {}),
   };
 }
 
@@ -2540,8 +2661,12 @@ function mapSubagentVariant(
   baselineVariant: SubagentVariantGroup | null,
   selectedVariant: SubagentVariantGroup | null,
   agentIndex: Map<string, AgentRecord>,
+  managedSourceCandidates?: PluginManagedSourceCandidate[],
 ): InspectorVariantModel {
   const representative = variant.representative;
+  const candidatePaths = variant.locations.map((location) => location.path);
+  const managedCandidate = getManagedCandidateForPath(representative.path, managedSourceCandidates);
+  const dependencyWarnings = getManagedCandidateWarningsForPaths(candidatePaths, managedSourceCandidates);
   const badge = representative.path === baselineVariant?.representative.path
     ? 'Universal'
     : representative.path === selectedVariant?.representative.path
@@ -2561,6 +2686,8 @@ function mapSubagentVariant(
     })),
     updatedLabel: formatAgeLabel(representative.modifiedAt),
     definitionText: variant.definitionText,
+    ...(managedCandidate ? { evidenceLabel: formatPluginCandidateEvidence(managedCandidate) } : {}),
+    ...(dependencyWarnings.length > 0 ? { dependencyWarnings } : {}),
   };
 }
 
@@ -2592,7 +2719,12 @@ function groupSkillVariants(candidates: SkillDuplicateCandidate[]): SkillVariant
 
   return [...groups.entries()]
     .map(([id, locations]) => {
-      const sortedLocations = locations.slice().sort(compareNewestCandidate);
+      const sortedLocations = locations.slice().sort((left, right) => {
+        if (left.canonical !== right.canonical) {
+          return left.canonical ? -1 : 1;
+        }
+        return compareNewestCandidate(left, right);
+      });
       const representative = sortedLocations[0];
       if (!representative) {
         throw new Error(`Expected a representative location for skill variant group ${id}.`);
@@ -2623,6 +2755,21 @@ function getSkillVariantCandidates(
   problemKey: SkillIssueReason,
   sourceIndex: Map<string, SkillScanSource>,
 ): SkillDuplicateCandidate[] {
+  if (problemKey === 'diverged-copies') {
+    const candidatesByPath = new Map(
+      skill.detailDiagnostics.duplicateCandidates.map((candidate) => [candidate.path, candidate]),
+    );
+    for (const location of skill.locations.filter((candidate) => candidate.fileType === 'real-file')) {
+      if (!candidatesByPath.has(location.path)) {
+        candidatesByPath.set(location.path, {
+          ...location,
+          installSource: buildInstallSourceFromLocation(location, sourceIndex),
+        });
+      }
+    }
+    return [...candidatesByPath.values()];
+  }
+
   if (skill.detailDiagnostics.duplicateCandidates.length > 0 || problemKey !== 'missing-canonical') {
     return skill.detailDiagnostics.duplicateCandidates;
   }

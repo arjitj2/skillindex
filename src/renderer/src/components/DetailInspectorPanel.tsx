@@ -269,8 +269,8 @@ export function DetailInspectorPanel({
                     const variantPrimaryLabel = entityKind === 'mcp' ? variant.label : formatPath(variant.path, 62);
                     const variantSecondaryLabel = entityKind === 'mcp' ? variant.secondaryLabel : null;
                     const ariaLabel = entityKind === 'mcp'
-                      ? `${variant.label} ${variant.secondaryLabel} ${variant.path}`
-                      : `${variant.label} ${variant.path}`;
+                      ? `${variant.label} ${variant.secondaryLabel} ${variant.evidenceLabel ?? ''} ${variant.path}`
+                      : `${variant.label} ${variant.evidenceLabel ?? ''} ${variant.path}`;
 
                     return (
                       <div key={variant.id} role="listitem">
@@ -288,14 +288,21 @@ export function DetailInspectorPanel({
                           onClick={() => onVariantSelect?.(variant.path)}
                         >
                           <>
-                            {entityKind === 'mcp' ? (
-                              <span className="detail-inspector-panel__variant-copy">
-                                <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
-                                {variantSecondaryLabel ? <span>{variantSecondaryLabel}</span> : null}
-                              </span>
-                            ) : (
-                              <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
-                            )}
+                            <span className="detail-inspector-panel__variant-copy">
+                              {entityKind === 'mcp' ? (
+                                <span className="detail-inspector-panel__variant-copy-main">
+                                  <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
+                                  {variantSecondaryLabel ? (
+                                    <span className="detail-inspector-panel__variant-secondary">{variantSecondaryLabel}</span>
+                                  ) : null}
+                                </span>
+                              ) : (
+                                <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
+                              )}
+                              {variant.evidenceLabel ? (
+                                <em className="detail-inspector-panel__variant-evidence">{variant.evidenceLabel}</em>
+                              ) : null}
+                            </span>
                             {isCanonical ? (
                               <span className="detail-inspector-panel__variant-badges">
                                 <span
@@ -315,6 +322,29 @@ export function DetailInspectorPanel({
                   })()
                 ))}
               </div>
+
+              {(activeProblem.selectedVariant?.dependencyWarnings?.length ?? 0) > 0 ? (
+                <div
+                  aria-label="Selected plugin candidate dependency warnings"
+                  className="detail-inspector-panel__structural-list"
+                  role="list"
+                >
+                  {activeProblem.selectedVariant?.dependencyWarnings?.map((warning) => (
+                    <div
+                      className="detail-inspector-panel__structural-item"
+                      key={`${warning.kind}:${warning.detail}`}
+                      role="listitem"
+                    >
+                      <div className="detail-inspector-panel__structural-row">
+                        <span className="detail-inspector-panel__structural-copy">
+                          <strong>{formatPluginDependencyWarningKind(warning.kind)}</strong>
+                          <span>{warning.detail}</span>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
               {activeProblem.definitionBreakdown ? (
                 <McpDefinitionBreakdownView
@@ -676,6 +706,19 @@ export function DetailInspectorPanel({
   );
 }
 
+function formatPluginDependencyWarningKind(
+  kind: NonNullable<InspectorVariantModel['dependencyWarnings']>[number]['kind'],
+): string {
+  switch (kind) {
+    case 'plugin-root-variable':
+      return 'Plugin root variable';
+    case 'plugin-contained-path':
+      return 'Plugin cache path';
+    case 'provider-specific-field':
+      return 'Provider-specific field';
+  }
+}
+
 function isKeyboardEventFromEditableElement(event: KeyboardEvent): boolean {
   const target = event.target;
   if (!(target instanceof HTMLElement)) {
@@ -734,8 +777,12 @@ function InspectorVariantPicker({
               <>
                 {entityKind === 'mcp' ? (
                   <span className="detail-inspector-panel__variant-copy">
-                    <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
-                    {variantSecondaryLabel ? <span>{variantSecondaryLabel}</span> : null}
+                    <span className="detail-inspector-panel__variant-copy-main">
+                      <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
+                      {variantSecondaryLabel ? (
+                        <span className="detail-inspector-panel__variant-secondary">{variantSecondaryLabel}</span>
+                      ) : null}
+                    </span>
                   </span>
                 ) : (
                   <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
