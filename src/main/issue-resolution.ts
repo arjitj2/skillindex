@@ -352,10 +352,32 @@ async function resolveSkillIssueIfCurrent(
 
   assertSkillResolutionScopeAllowed(skill);
 
+  const selectedManagedPluginSource = request.selectedVariantPath
+    ? skill.locations.find((location) =>
+        location.path === request.selectedVariantPath
+        && location.fileType === 'real-file'
+        && location.provenance?.kind === 'plugin')
+    : undefined;
+  const hasUniversalPackage = skill.locations.some((location) =>
+    location.canonical && location.fileType === 'real-file');
+  if (selectedManagedPluginSource
+    && !hasUniversalPackage
+    && (request.issue === 'broken-symlink'
+      || request.issue === 'wrong-symlink-target'
+      || request.issue === 'missing-symlinks')) {
+    await makeSkillCanonical({
+      skillName: request.skillName,
+      selectedSourcePath: selectedManagedPluginSource.path,
+    }, options);
+    return;
+  }
+
   switch (request.issue) {
     case 'missing-canonical':
     case 'diverged-copies': {
       const selectedSourcePath = pickSkillRealFileSelectionPath(skill, request.selectedVariantPath);
+      const selectedSourceIsPluginManaged = skill.locations.some((location) =>
+        location.path === selectedSourcePath && location.provenance?.kind === 'plugin');
       await makeSkillCanonical(
         {
           skillName: request.skillName,
@@ -363,7 +385,10 @@ async function resolveSkillIssueIfCurrent(
         },
         {
           ...options,
-          linkMissingAgentInstalls: false,
+          // Non-plugin canonicalization keeps the existing two-step behavior.
+          // Promoting a managed plugin source is one explicit export operation:
+          // create Universal and distribute it to every compatible writable host.
+          linkMissingAgentInstalls: selectedSourceIsPluginManaged,
         },
       );
       return;

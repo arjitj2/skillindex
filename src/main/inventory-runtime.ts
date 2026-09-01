@@ -31,6 +31,7 @@ import type {
   RemoveInventoryItemRequest,
   ResolveIssueRequest,
   SkillInventorySnapshot,
+  SkillLocationRecord,
   SkillRecord,
   SkillScanSource,
   UndoAuditOperationResult,
@@ -1100,26 +1101,46 @@ function getSkillResolutionAffectedPaths(
   snapshot: SkillInventorySnapshot,
 ): string[] {
   const canonicalPath = resolveCanonicalSkillPathForAudit(skill, snapshot, request.selectedVariantPath);
+  const selectedLocation = request.selectedVariantPath
+    ? skill.locations.find((location) => location.path === request.selectedVariantPath)
+    : undefined;
+  const hasUniversalPackage = skill.locations.some((location) =>
+    location.canonical && location.fileType === 'real-file');
+  const pluginPromotionPaths = selectedLocation?.provenance?.kind === 'plugin' && !hasUniversalPackage
+    ? [
+        canonicalPath,
+        ...getPluginPromotionSkillLinkPaths(skill, snapshot, selectedLocation, canonicalPath),
+      ]
+    : [];
 
   switch (request.issue) {
     case 'missing-symlinks':
-      return dedupePaths(
+      return dedupePaths([
+        ...pluginPromotionPaths,
+        ...(
         (skill.detailDiagnostics.missingInstallSources ?? [])
           .map((source) => resolveMissingSkillInstallPathForAudit(skill.name, source.sourceId, snapshot))
           .filter((targetPath): targetPath is string => Boolean(targetPath))
-          .filter((targetPath) => path.normalize(targetPath) !== path.normalize(canonicalPath)),
-      );
+          .filter((targetPath) => path.normalize(targetPath) !== path.normalize(canonicalPath))
+        ),
+      ]);
     case 'broken-symlink':
-      return dedupePaths(skill.locations
+      return dedupePaths([
+        ...pluginPromotionPaths,
+        ...skill.locations
         .filter((location) => location.fileType === 'symlink' && location.resolvedPath === undefined)
-        .map((location) => location.path));
+        .map((location) => location.path),
+      ]);
     case 'wrong-symlink-target':
-      return dedupePaths(skill.locations
+      return dedupePaths([
+        ...pluginPromotionPaths,
+        ...skill.locations
         .filter((location) =>
           location.fileType === 'symlink'
           && location.resolvedPath !== undefined
           && path.normalize(location.resolvedPath) !== path.normalize(canonicalPath))
-        .map((location) => location.path));
+        .map((location) => location.path),
+      ]);
     case 'identical-copies':
       return dedupePaths(skill.locations
         .filter((location) =>
@@ -1135,9 +1156,31 @@ function getSkillResolutionAffectedPaths(
           && path.normalize(location.path) !== path.normalize(canonicalPath)
           && location.provenance?.kind !== 'plugin')
         .map((location) => location.path);
-      return dedupePaths([canonicalPath, ...duplicatePaths]);
+      return dedupePaths([canonicalPath, ...duplicatePaths, ...pluginPromotionPaths]);
     }
   }
+}
+
+function getPluginPromotionSkillLinkPaths(
+  skill: SkillRecord,
+  snapshot: SkillInventorySnapshot,
+  selectedLocation: SkillLocationRecord,
+  canonicalPath: string,
+): string[] {
+  const enabledPlugins = (skill.managedSourceCandidates ?? [])
+    .filter((candidate) => candidate.plugin.enabled === true)
+    .map((candidate) => candidate.plugin);
+  const canonicalSkillsDir = path.dirname(canonicalPath);
+  return (snapshot.agents ?? [])
+    .filter((agent) =>
+      agent.scope === selectedLocation.sourceScope
+      && agent.installState === 'installed'
+      && agent.writable
+      && agent.skillsLocation.state === 'available'
+      && Boolean(agent.skillsLocation.path)
+      && path.normalize(agent.skillsLocation.path as string) !== path.normalize(canonicalSkillsDir)
+      && !isAgentSatisfiedByNativePlugin(agent.family, enabledPlugins))
+    .map((agent) => path.join(agent.skillsLocation.path as string, skill.name));
 }
 
 function resolveCanonicalSubagentPathForAudit(
@@ -1195,13 +1238,6 @@ function resolveCanonicalSkillPathForAudit(
   snapshot: SkillInventorySnapshot,
   selectedVariantPath: string | undefined,
 ): string {
-  if (selectedVariantPath) {
-    const selectedLocation = skill.locations.find((location) => location.path === selectedVariantPath);
-    if (selectedLocation?.provenance?.kind === 'plugin') {
-      return selectedLocation.path;
-    }
-  }
-
   const selectedScope = selectedVariantPath
     ? skill.locations.find((location) => location.path === selectedVariantPath)?.sourceScope
     : undefined;

@@ -1446,11 +1446,11 @@ describe('resolveInventoryIssue', () => {
     );
 
     expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo.');
-    await expect(readlink(factoryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readlink(factoryPath)).toBe(agentsPath);
     expect(await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8')).toContain('Plugin foo.');
     expect(resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'missing-symlinks',
-      issueReasons: ['missing-symlinks'],
+      structuralState: 'healthy',
+      issueReasons: [],
     });
 
     const config = await readSkillIndexConfig(paths.configFile, { homeDir });
@@ -1465,8 +1465,8 @@ describe('resolveInventoryIssue', () => {
       includeLiveSources: true,
     });
     expect(rescanWithoutPluginSource.skills.find((skill) => skill.name === 'tools:foo')).toMatchObject({
-      structuralState: 'missing-symlinks',
-      issueReasons: ['missing-symlinks'],
+      structuralState: 'healthy',
+      issueReasons: [],
     });
   });
 
@@ -1492,17 +1492,11 @@ describe('resolveInventoryIssue', () => {
     const pluginBefore = await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8');
     await expect(realpath(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await resolveInventoryIssue({
+    const repaired = await resolveInventoryIssue({
       entity: 'skill',
       issue: 'missing-canonical',
       skillName,
       selectedVariantPath: pluginSkillPath,
-    }, scanOptions);
-    const repaired = await resolveInventoryIssue({
-      entity: 'skill',
-      issue: 'broken-symlink',
-      skillName,
-      selectedVariantPath: universalPath,
     }, scanOptions);
 
     expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(pluginBefore);
@@ -2183,9 +2177,9 @@ describe('resolveInventoryIssue', () => {
 
     expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toContain('Plugin version.');
     expect(await readlink(factoryPath)).toBe(agentsPath);
-    await expect(readlink(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readlink(claudePath)).toBe(agentsPath);
     const resolvedSkill = resolvedSnapshot.skills.find((skill) => skill.name === 'tools:foo');
-    expect(resolvedSkill?.issueReasons).not.toContain('missing-canonical');
+    expect(resolvedSkill).toMatchObject({ structuralState: 'healthy', issueReasons: [] });
     expect(resolvedSkill?.detailDiagnostics.universalDecision?.universal).toMatchObject({
       kind: 'path', sourceId: 'live-agents', path: agentsPath,
     });

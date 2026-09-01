@@ -1074,6 +1074,151 @@ describe('inventory runtime', () => {
     expect(await readFile(universalPath, 'utf8')).toBe(beforeUpdate);
   });
 
+  it('promotes a selected plugin-only skill through the public action and distributes every writable agent link atomically', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-promotion-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+
+    await seedRepresentativeFixtures({ paths });
+    const before = await runtime.scanInventory(scanOptions);
+    const skillName = 'plugin-version-choice-skill';
+    const skill = before.skills.find((entry) => entry.name === skillName);
+    const selectedCandidate = skill?.managedSourceCandidates?.find((candidate) => candidate.plugin.version === '1.1.0');
+    expect(selectedCandidate).toBeDefined();
+    expect(skill).toMatchObject({ issueReasons: ['missing-canonical'] });
+
+    const pluginCacheContents = await Promise.all(
+      (skill?.managedSourceCandidates ?? []).map(async (candidate) => ({
+        path: candidate.path,
+        contents: await readFile(path.join(candidate.path, 'SKILL.md'), 'utf8'),
+      })),
+    );
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    const expectedLinks = [
+      path.join(paths.sandboxRoot, '.claude', 'skills', skillName),
+      path.join(paths.sandboxRoot, '.factory', 'skills', skillName),
+      path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName),
+    ];
+
+    const promoted = await runtime.resolveIssue({
+      entity: 'skill',
+      issue: 'missing-canonical',
+      skillName,
+      selectedVariantPath: selectedCandidate!.path,
+    });
+
+    await expect(readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).resolves.toContain('version 1.1.0 selected content');
+    for (const linkPath of expectedLinks) {
+      expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(linkPath)).toBe(universalPath);
+    }
+    expect(promoted.skills.find((entry) => entry.name === skillName)).toMatchObject({
+      structuralState: 'healthy',
+      issueReasons: [],
+    });
+    for (const candidate of pluginCacheContents) {
+      expect(await readFile(path.join(candidate.path, 'SKILL.md'), 'utf8')).toBe(candidate.contents);
+    }
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      universalPath,
+      ...expectedLinks,
+    ]));
+    expect(operation.actions.some((action) => pluginCacheContents.some((candidate) => action.path?.startsWith(candidate.path)))).toBe(false);
+
+    await runtime.undoAuditOperation(operation.id);
+    await expect(pathExists(universalPath)).resolves.toBe(false);
+    for (const linkPath of expectedLinks) {
+      await expect(pathExists(linkPath)).resolves.toBe(false);
+    }
+    for (const candidate of pluginCacheContents) {
+      expect(await readFile(path.join(candidate.path, 'SKILL.md'), 'utf8')).toBe(candidate.contents);
+    }
+  });
+
+  it.each([
+    { skillName: 'plugin-single-source-skill', issue: 'missing-canonical' as const },
+    { skillName: 'legacy-plugin-link-skill', issue: 'broken-symlink' as const },
+  ])('uses the complete managed-source promotion route for $skillName', async ({ skillName, issue }) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-route-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    await seedRepresentativeFixtures({ paths });
+    const before = await runtime.scanInventory(scanOptions);
+    const candidate = before.skills.find((entry) => entry.name === skillName)?.managedSourceCandidates?.[0];
+    expect(candidate).toBeDefined();
+
+    const after = await runtime.resolveIssue({
+      entity: 'skill',
+      issue,
+      skillName,
+      selectedVariantPath: candidate!.path,
+    });
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    for (const linkPath of [
+      path.join(paths.sandboxRoot, '.claude', 'skills', skillName),
+      path.join(paths.sandboxRoot, '.factory', 'skills', skillName),
+      path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName),
+    ]) {
+      expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(linkPath)).toBe(universalPath);
+    }
+    expect(after.skills.find((entry) => entry.name === skillName)).toMatchObject({
+      structuralState: 'healthy',
+      issueReasons: [],
+    });
+  });
+
+  it('excludes only the exact enabled native plugin host when promoting a plugin skill', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-native-plugin-promotion-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const skillName = 'native-plugin-delivery:native-plugin-skill';
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', skillName);
+
+    await seedRepresentativeFixtures({ paths });
+    await Promise.all([
+      rm(universalPath, { recursive: true, force: true }),
+      rm(path.join(paths.sandboxRoot, '.codex', 'skills', skillName), { recursive: true, force: true }),
+      rm(path.join(paths.sandboxRoot, '.cursor', 'skills', skillName), { recursive: true, force: true }),
+      rm(path.join(paths.sandboxRoot, '.factory', 'skills', skillName), { recursive: true, force: true }),
+      rm(path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName), { recursive: true, force: true }),
+    ]);
+    const before = await runtime.scanInventory(scanOptions);
+    const skill = before.skills.find((entry) => entry.name === skillName);
+    const candidate = skill?.managedSourceCandidates?.find((entry) => entry.plugin.enabled === true);
+    expect(skill?.issueReasons).toContain('missing-canonical');
+    expect(candidate?.plugin.host).toBe('claude');
+
+    const after = await runtime.resolveIssue({
+      entity: 'skill',
+      issue: 'missing-canonical',
+      skillName,
+      selectedVariantPath: candidate!.path,
+    });
+
+    await expect(pathExists(claudePath)).resolves.toBe(false);
+    for (const linkPath of [
+      path.join(paths.sandboxRoot, '.factory', 'skills', skillName),
+      path.join(paths.sandboxRoot, '.codeium', 'windsurf', 'skills', skillName),
+    ]) {
+      expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(linkPath)).toBe(universalPath);
+    }
+    expect(after.skills.find((entry) => entry.name === skillName)).toMatchObject({
+      structuralState: 'healthy',
+      issueReasons: [],
+    });
+  });
+
   it('audits and undoes an MCP plugin update without touching either plugin cache', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-mcp-plugin-update-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
