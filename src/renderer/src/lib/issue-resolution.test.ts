@@ -62,6 +62,12 @@ describe('issue resolution request builder', () => {
       capabilityName: skill.name,
       selectedVariantPath: pluginPath,
     });
+    expect(getPluginUpdateActionRequest({
+      entity: 'mcp', capabilityName: 'tools:server', inspectorModel: inspector, selectedVariantPath: pluginPath,
+    })).toMatchObject({ entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'tools:server' });
+    expect(getPluginUpdateActionRequest({
+      entity: 'subagent', capabilityName: 'tools:reviewer', inspectorModel: inspector, selectedVariantPath: pluginPath,
+    })).toMatchObject({ entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer' });
   });
 
   it('keeps plugin-owned missing symlink repairs out of Home auto-resolve batches', () => {
