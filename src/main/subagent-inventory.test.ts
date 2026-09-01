@@ -868,6 +868,19 @@ describe('subagent inventory', () => {
     expect(await readFile(newPath, 'utf8')).toBe(newBefore);
     expect(updated.subagents?.find((subagent) => subagent.name === 'tools:reviewer')?.managedSourceCandidates
       ?.find((candidate) => candidate.path === newPath)?.relationship).toBe('matches-universal');
+
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md');
+    const universalBeforeRollback = await readFile(universalPath, 'utf8');
+    await expect(applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer', selectedVariantPath: oldPath,
+    }, { ...scanOptions, testFailSubagentStageAt: 1 } as never)).rejects.toThrow(/stage failure/i);
+    expect(await readFile(universalPath, 'utf8')).toBe(universalBeforeRollback);
+    expect(await readFile(oldPath, 'utf8')).toBe(oldBefore);
+    expect(await readFile(newPath, 'utf8')).toBe(newBefore);
+    await expect(applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer', selectedVariantPath: '/foreign/reviewer.md',
+    }, scanOptions)).rejects.toThrow(/current readable plugin update candidate/i);
+    expect(await readFile(universalPath, 'utf8')).toBe(universalBeforeRollback);
   });
 
   it('reconciles cached plugin subagent enablement and removed assets exactly like a fresh scan', async () => {

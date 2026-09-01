@@ -1925,6 +1925,11 @@ describe('resolveInventoryIssue', () => {
       });
       expect(linkLocation?.resolvedPath).toBe(await realpath(agentsPath));
     }
+    const universalAfterUpdate = await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8');
+    await expect(applyCapabilityAction({
+      entity: 'skill', action: 'update-universal-from-plugin', capabilityName: skillName, selectedVariantPath: '/foreign/SKILL',
+    }, { paths, includeSandboxSources: true, includeLiveSources: false })).rejects.toThrow(/current readable plugin update candidate/i);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toBe(universalAfterUpdate);
   });
 
   it('uses a plugin copy as Universal by linking writable static copies to it', async () => {
@@ -3487,6 +3492,12 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
     expect(updatedSnapshot.mcps?.find((mcp) => mcp.name === 'plugin-mcp:promoted')?.managedSourceCandidates
       ?.find((candidate) => candidate.path === updatedPluginConfigPath)?.relationship).toBe('matches-universal');
+    const universalAfterUpdate = await readFile(universalConfigPath, 'utf8');
+    await expect(applyCapabilityAction({
+      entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'plugin-mcp:promoted', selectedVariantPath: '/foreign/plugin.mcp.json',
+    }, { paths, includeSandboxSources: true, includeLiveSources: false } as never)).rejects.toThrow(/current readable plugin update candidate/i);
+    expect(await readFile(universalConfigPath, 'utf8')).toBe(universalAfterUpdate);
+    expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
   });
 
   it('classifies and resolves native plugin MCP delivery only for the matching enabled plugin host', async () => {
@@ -3553,32 +3564,34 @@ describe('resolveInventoryIssue', () => {
     const paths = await createPaths('skillindex-plugin-mcp-rollback-');
     const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'rollback-mcp', '1.0.0');
     const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const updateRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'rollback-mcp', '1.1.0');
+    const updateConfigPath = path.join(updateRoot, '.mcp.json');
     const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
     const pluginConfig = `${JSON.stringify({ mcpServers: { rollback: { command: 'node', args: ['plugin.js'] } } }, null, 2)}\n`;
 
     await writeSkillFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'rollback-mcp', version: '1.0.0' }));
     await writeSkillFile(pluginConfigPath, pluginConfig);
+    const updateConfig = `${JSON.stringify({ mcpServers: { rollback: { command: 'node', args: ['updated.js'] } } }, null, 2)}\n`;
+    await writeSkillFile(path.join(updateRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'rollback-mcp', version: '1.1.0' }));
+    await writeSkillFile(updateConfigPath, updateConfig);
+    await writeSkillFile(universalConfigPath, `${JSON.stringify({ servers: { rollback: { command: 'node', args: ['plugin.js'] } } }, null, 2)}\n`);
     await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
 
-    await expect(resolveInventoryIssue(
-      {
-        entity: 'mcp',
-        issue: 'missing-universal',
-        mcpName: 'rollback-mcp:rollback',
-        selectedVariantPath: pluginConfigPath,
-      },
-      {
+    const universalBefore = await readFile(universalConfigPath, 'utf8');
+    await expect(applyCapabilityAction({
+      entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'rollback-mcp:rollback', selectedVariantPath: updateConfigPath,
+    }, {
         paths,
         includeSandboxSources: true,
         includeLiveSources: false,
         env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
         testFailMcpMutationAt: 1,
-      },
-    )).rejects.toThrow('MCP mutation failed at staged target 1.');
+      } as never)).rejects.toThrow('MCP mutation failed at staged target 1.');
 
     expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
-    await expect(readFile(universalConfigPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(updateConfigPath, 'utf8')).toBe(updateConfig);
+    expect(await readFile(universalConfigPath, 'utf8')).toBe(universalBefore);
     await expect(readFile(factoryConfigPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
