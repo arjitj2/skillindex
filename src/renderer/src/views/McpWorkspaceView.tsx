@@ -1,6 +1,5 @@
 import type {
   AddMcpServerRequest,
-  CapabilityActionRequest,
   DismissDriftRequest,
   McpIssueReason,
   McpRecord,
@@ -51,7 +50,6 @@ export function McpWorkspaceView({
   mcpInspectorModel,
   sandboxRoot,
   onAutoResolve = () => undefined,
-  onApplyCapabilityAction = () => Promise.resolve(),
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -82,7 +80,6 @@ export function McpWorkspaceView({
   mcpInspectorModel: InspectorModel | null;
   sandboxRoot: string | null;
   onAutoResolve?: () => void;
-  onApplyCapabilityAction?: (request: CapabilityActionRequest) => Promise<void>;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -100,7 +97,6 @@ export function McpWorkspaceView({
   searchQuery: string;
   statusFilter: McpStatusFilter;
 }) {
-  void onApplyCapabilityAction;
   const sections = filterVisibleSections(inventorySnapshot ? getMcpSections(inventorySnapshot) : [], rows);
   const filters = inventorySnapshot?.mcpCounts
     ? [

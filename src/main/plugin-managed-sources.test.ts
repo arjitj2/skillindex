@@ -9,12 +9,12 @@ import { describe, expect, it } from 'vitest';
 import {
   assertSkillSourceAndDestinationDoNotOverlap,
   assertSkillSymlinkTargetIsUniversal,
-  annotateComparableVersionEvidence,
   buildPluginManagedSourceCandidate,
   detectPluginDependencyWarnings,
   getOperationalLocations,
   isAgentSatisfiedByNativePlugin,
   isPluginManagedTarget,
+  normalizePluginSourceEvidenceByIdentity,
 } from '@main/plugin-managed-sources';
 import { replaceSkillLinksTransaction } from '@main/skill-link-transaction';
 import { readSkillInventoryCache } from '@main/skill-inventory';
@@ -242,81 +242,28 @@ describe('plugin managed sources', () => {
       .toContain('Injected skill link restore failure at 1');
   });
 
-  it('does not infer recency from comparable cached versions when none is enabled', () => {
+  it('downgrades ambiguous enablement only within the same plugin identity', () => {
+    const plugin = {
+      host: 'codex' as const,
+      pluginId: 'tools@official',
+      pluginName: 'tools',
+      rootPath: '/cache/tools',
+      enabled: true as const,
+    };
     const candidates = [
-      { version: '1.0.0', evidence: 'cached-unknown' as const },
-      { version: '1.10.0', evidence: 'cached-unknown' as const },
-      { version: '1.2.0', evidence: 'cached-unknown' as const },
+      { plugin: { ...plugin, version: '1.0.0' }, evidence: 'enabled-installation' as const },
+      { plugin: { ...plugin, version: '2.0.0' }, evidence: 'enabled-installation' as const },
+      {
+        plugin: { ...plugin, pluginId: 'other@official', pluginName: 'other', version: '1.0.0' },
+        evidence: 'enabled-installation' as const,
+      },
     ];
 
-    expect(annotateComparableVersionEvidence(candidates)).toEqual([
-      candidates[0],
-      { version: '1.10.0', evidence: 'cached-unknown' },
+    expect(normalizePluginSourceEvidenceByIdentity(candidates)).toEqual([
+      { ...candidates[0], evidence: 'cached-unknown' },
+      { ...candidates[1], evidence: 'cached-unknown' },
       candidates[2],
     ]);
-    expect(candidates[1].evidence).toBe('cached-unknown');
-  });
-
-  it('leaves mixed version families and enabled evidence untouched', () => {
-    const mixed = [
-      { version: 'd6169bef', evidence: 'cached-unknown' as const },
-      { version: '0.21.4', evidence: 'cached-unknown' as const },
-    ];
-    const enabled = [
-      { version: '1.0.0', evidence: 'cached-unknown' as const },
-      { version: '2.0.0', evidence: 'enabled-installation' as const },
-    ];
-
-    expect(annotateComparableVersionEvidence(mixed)).toEqual(mixed);
-    expect(annotateComparableVersionEvidence(enabled)).toEqual(enabled);
-  });
-
-  it('downgrades ambiguous plugin-id enablement when multiple cached versions look enabled', () => {
-    const ambiguous = [
-      { version: '1.0.0', evidence: 'enabled-installation' as const },
-      { version: '1.1.0', evidence: 'enabled-installation' as const },
-    ];
-    const unambiguous = [
-      { version: '1.0.0', evidence: 'enabled-installation' as const },
-    ];
-
-    expect(annotateComparableVersionEvidence(ambiguous)).toEqual([
-      { version: '1.0.0', evidence: 'cached-unknown' },
-      { version: '1.1.0', evidence: 'cached-unknown' },
-    ]);
-    expect(annotateComparableVersionEvidence(unambiguous)).toEqual(unambiguous);
-  });
-
-  it('requires strict core semver, handles huge values safely, and does not label ties or singletons', () => {
-    const singleton = [{ version: '1.0.0', evidence: 'cached-unknown' as const }];
-    const leadingZero = [
-      { version: '01.0.0', evidence: 'cached-unknown' as const },
-      { version: '2.0.0', evidence: 'cached-unknown' as const },
-    ];
-    const huge = [
-      { version: '9007199254740992.0.0', evidence: 'cached-unknown' as const },
-      { version: '9007199254740991.99.99', evidence: 'cached-unknown' as const },
-    ];
-    const tied = [
-      { version: '2.0.0', evidence: 'cached-unknown' as const },
-      { version: '2.0.0', evidence: 'cached-unknown' as const },
-    ];
-    const tiedReordered = [
-      { version: '1.0.0', evidence: 'cached-unknown' as const },
-      { version: '2.0.0', evidence: 'cached-unknown' as const },
-      { version: '2.0.0', evidence: 'cached-unknown' as const },
-    ];
-
-    expect(annotateComparableVersionEvidence(singleton)).toEqual(singleton);
-    expect(annotateComparableVersionEvidence(leadingZero)).toEqual(leadingZero);
-    expect(annotateComparableVersionEvidence(huge)).toEqual([
-      huge[0],
-      huge[1],
-    ]);
-    expect(annotateComparableVersionEvidence(tied)).toEqual(tied);
-    expect(annotateComparableVersionEvidence(tiedReordered)).toEqual(tiedReordered);
-    const tiedReorderedReverse = [...tiedReordered].reverse();
-    expect(annotateComparableVersionEvidence(tiedReorderedReverse)).toEqual(tiedReorderedReverse);
   });
 
   it('requires dependency variable and path boundaries', () => {
@@ -449,6 +396,17 @@ describe('plugin managed sources', () => {
 
     await writeFile(cachePath, `${JSON.stringify(snapshot)}\n`, 'utf8');
     await expect(readSkillInventoryCache(cachePath)).resolves.toEqual(snapshot);
+
+    const legacySnapshot = structuredClone(snapshot) as unknown as Record<string, unknown>;
+    const legacySkills = legacySnapshot.skills as Array<Record<string, unknown>>;
+    legacySkills[0] = {
+      ...legacySkills[0],
+      managedSourceCandidates: [{ ...candidate, evidence: 'newer-comparable-version' }],
+    };
+    await writeFile(cachePath, `${JSON.stringify(legacySnapshot)}\n`, 'utf8');
+    await expect(readSkillInventoryCache(cachePath)).resolves.toMatchObject({
+      skills: [{ managedSourceCandidates: [{ evidence: 'cached-unknown' }] }],
+    });
 
     const malformed = structuredClone(snapshot) as unknown as Record<string, unknown>;
     const malformedSkills = malformed.skills as Array<Record<string, unknown>>;

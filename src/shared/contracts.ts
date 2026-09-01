@@ -123,7 +123,6 @@ export type CanonicalRole =
   | 'managed-source';
 export type PluginSourceEvidence =
   | 'enabled-installation'
-  | 'newer-comparable-version'
   | 'cached-unknown';
 export type PluginDependencyWarningKind =
   | 'plugin-root-variable'
@@ -264,15 +263,8 @@ export interface PluginUnsupportedAssetRef {
   sourceId: string;
 }
 
-export interface PluginRecord {
-  host: PluginHost;
+export interface PluginRecord extends PluginSourceRef {
   scope?: SkillSourceScope;
-  pluginId: string;
-  pluginName: string;
-  version?: string;
-  rootPath: string;
-  manifestPath?: string;
-  enabled: boolean | 'unknown';
   skillRoots?: string[];
   bundledSkills: PluginSkillRef[];
   bundledMcps: PluginMcpRef[];

@@ -5,13 +5,13 @@ import path from 'node:path';
 import type { SkillScanSource } from '@shared/contracts';
 import { assertSkillSourceAndDestinationDoNotOverlap, assertSkillSymlinkTargetIsUniversal } from '@main/plugin-managed-sources';
 
-export interface ReplaceSkillLinksOptions {
+interface ReplaceSkillLinksOptions {
   failAt?: number;
   failRestoreAt?: number;
   validateDestination?(locationPath: string): Promise<void>;
 }
 
-export interface SkillLinkTransaction {
+interface SkillLinkTransaction {
   commit(): Promise<void>;
   rollback(): Promise<void>;
 }

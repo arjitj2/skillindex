@@ -46,10 +46,12 @@ Skill Index gives you a local control plane for agent knowledge:
 
 Plugin-provided skills, subagents, and MCPs are shown as managed, read-only
 sources. They are candidates you can explicitly copy or translate into your
-Universal directory, never canonical locations or symlink targets. Multiple
-cached versions are alternatives rather than drift; Skill Index may show current
-usage evidence, but you choose the version. See the [inventory resolution
-model](docs/reference/inventory-resolution-model.md) for the full contract.
+Universal directory, never canonical locations or symlink targets. While
+Universal is missing, multiple cached versions are alternatives rather than
+drift. Once Universal exists, a differing plugin candidate participates in the
+ordinary divergence flow. Skill Index may show current usage evidence, but you
+choose the version. See the [inventory resolution model](docs/reference/inventory-resolution-model.md)
+for the full contract.
 
 ## Local By Default
 

@@ -21,6 +21,7 @@ import {
 import { reconcileWatchedSkillInventoryEvent } from '@main/skill-inventory';
 import {
   addMcpServer as addMcpServerToInventory,
+  resolveCanonicalSkillPath,
   resolveInventoryIssue,
   resolveSafeMcpConfigWritePath,
 } from '@main/issue-resolution';
@@ -802,7 +803,7 @@ function buildResolveIssueAuditRequest(
   const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
   const affectedPaths = skill
     ? dedupePaths([
-        ...getSkillResolutionAffectedPaths(request, skill, snapshot),
+        ...getSkillResolutionAffectedPaths(request, skill, snapshot, options),
         ...(shouldAuditSkillUniversalDecisionConfig(skill) ? [resolveAuditPathsForOptions(options).configFile] : []),
       ])
     : [];
@@ -1159,8 +1160,14 @@ function getSkillResolutionAffectedPaths(
   request: Extract<ResolveIssueRequest, { entity: 'skill' }>,
   skill: SkillRecord,
   snapshot: SkillInventorySnapshot,
+  options: ScanSkillInventoryOptions,
 ): string[] {
-  const canonicalPath = resolveCanonicalSkillPathForAudit(skill, snapshot, request.selectedVariantPath);
+  const canonicalPath = resolveCanonicalSkillPath(
+    skill,
+    snapshot,
+    request.selectedVariantPath,
+    resolveAuditPathsForOptions(options),
+  );
   const selectedLocation = request.selectedVariantPath
     ? skill.locations.find((location) => location.path === request.selectedVariantPath)
     : undefined;
@@ -1291,28 +1298,6 @@ function resolveMissingSkillInstallPathForAudit(
   }
 
   return path.join(agent.skillsLocation.path, skillName);
-}
-
-function resolveCanonicalSkillPathForAudit(
-  skill: SkillRecord,
-  snapshot: SkillInventorySnapshot,
-  selectedVariantPath: string | undefined,
-): string {
-  const selectedScope = selectedVariantPath
-    ? skill.locations.find((location) => location.path === selectedVariantPath)?.sourceScope
-    : undefined;
-  const scope = selectedScope
-    ?? skill.locations.find((location) => location.canonical)?.sourceScope
-    ?? skill.locations[0]?.sourceScope
-    ?? 'live';
-  const preferredSource = snapshot.sources.find((source) => source.preferredCanonical && source.scope === scope);
-  if (preferredSource) {
-    const preferredLocation = skill.locations.find((location) => location.sourceId === preferredSource.id);
-    return preferredLocation?.path ?? path.join(preferredSource.skillsDir, skill.name);
-  }
-
-  const canonicalSource = snapshot.sources.find((source) => source.canonical && source.scope === scope);
-  return canonicalSource ? path.join(canonicalSource.skillsDir, skill.name) : skill.locations[0]?.path ?? skill.name;
 }
 
 function formatIssueLabel(issue: ResolveIssueRequest['issue']): string {

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import type { AuditOperation, McpConnectivityRecord, SkillInventorySnapshot } from '@shared/contracts';
-import { defaultConfig, resolveSkillIndexPaths } from '@shared/skill-index-paths';
+import { defaultConfig, resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 interface FakeWatcher {
   close(): void;
@@ -37,6 +37,54 @@ describe('inventory runtime', () => {
       entity: 'unknown', action: 'update-universal-from-plugin', capabilityName: 'demo', selectedVariantPath: '/tmp/demo',
     } as never, { paths, includeSandboxSources: true, includeLiveSources: false })).rejects.toThrow('Invalid plugin update request.');
     expect(await runtime.readAuditLog({}, { paths, includeSandboxSources: true, includeLiveSources: false })).toEqual([]);
+  });
+
+  it('audits the same user-confirmed Universal path that skill resolution mutates', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-confirmed-universal-audit-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const selectedSkillsDir = paths.liveCanonicalUserSkillsDir;
+    const preferredSkillsDir = path.join(homeDir, 'preferred-skills');
+    const selectedPath = path.join(selectedSkillsDir, 'shared-skill');
+    const preferredPath = path.join(preferredSkillsDir, 'shared-skill');
+    const contents = '# Shared skill\n';
+    await Promise.all([
+      writeRuntimeFile(path.join(selectedPath, 'SKILL.md'), contents),
+      writeRuntimeFile(path.join(preferredPath, 'SKILL.md'), contents),
+    ]);
+    await writeSkillIndexConfig(paths.configFile, {
+      ...defaultConfig,
+      customScanPaths: [],
+      preferredCanonicalSourcePath: preferredSkillsDir,
+      skillUniversalDecisions: [{
+        id: 'skill:shared-skill:selected-path',
+        skillName: 'shared-skill',
+        state: 'user-confirmed',
+        universal: { kind: 'path', sourceId: 'live-agents', path: selectedPath },
+        acceptedAlternates: [],
+        updatedAt: '2026-09-01T00:00:00.000Z',
+      }],
+    });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { paths, homeDir, includeSandboxSources: false, includeLiveSources: true } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    expect(before.skills.find((skill) => skill.name === 'shared-skill')?.issueReasons)
+      .toContain('identical-copies');
+
+    await runtime.resolveIssue({
+      entity: 'skill',
+      issue: 'identical-copies',
+      skillName: 'shared-skill',
+    });
+
+    expect(await readlink(preferredPath)).toBe(selectedPath);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toContain(preferredPath);
+
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(path.join(preferredPath, 'SKILL.md'), 'utf8')).toBe(contents);
+    expect((await lstat(preferredPath)).isDirectory()).toBe(true);
   });
 
   it.each([

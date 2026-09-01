@@ -2679,7 +2679,7 @@ function assertSkillSymlinkTargetWritable(locationPath: string, snapshot: SkillI
   }
 }
 
-function resolveCanonicalSkillPath(
+export function resolveCanonicalSkillPath(
   skill: SkillRecord,
   snapshot: SkillInventorySnapshot,
   selectedVariantPath: string | undefined,

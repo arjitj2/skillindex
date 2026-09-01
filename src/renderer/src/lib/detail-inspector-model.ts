@@ -295,8 +295,6 @@ function formatPluginCandidateEvidence(candidate: PluginManagedSourceCandidate):
   switch (candidate.evidence) {
     case 'enabled-installation':
       return `Currently used in ${candidate.plugin.host === 'codex' ? 'Codex' : 'Claude'}`;
-    case 'newer-comparable-version':
-      return 'Usage unknown';
     case 'cached-unknown':
       return 'Usage unknown';
   }
@@ -880,7 +878,10 @@ function buildMcpVariantProblem(
       baselineVariant,
       selectedVariant,
       agentIndex,
-      getMcpVariantDependencyWarnings(selectedVariant, mcp.managedSourceCandidates),
+      getManagedCandidateWarningsForPaths(
+        selectedVariant.locations.map((location) => location.configPath),
+        mcp.managedSourceCandidates,
+      ),
       mcp.managedSourceCandidates,
     )
     : null;
@@ -901,7 +902,10 @@ function buildMcpVariantProblem(
       baselineVariant,
       selectedVariant,
       agentIndex,
-      getMcpVariantDependencyWarnings(variant, mcp.managedSourceCandidates),
+      getManagedCandidateWarningsForPaths(
+        variant.locations.map((location) => location.configPath),
+        mcp.managedSourceCandidates,
+      ),
       mcp.managedSourceCandidates,
     )),
     changedFiles: [],
@@ -2650,21 +2654,6 @@ function mapMcpVariant(
     ...(managedCandidate ? { evidenceLabel: formatPluginCandidateEvidence(managedCandidate) } : {}),
     ...(dependencyWarnings && dependencyWarnings.length > 0 ? { dependencyWarnings } : {}),
   };
-}
-
-function getMcpVariantDependencyWarnings(
-  variant: McpVariantGroup,
-  candidates: PluginManagedSourceCandidate[] | undefined,
-): PluginDependencyWarning[] {
-  const variantPaths = new Set(variant.locations.map((location) => location.configPath));
-  const warnings = (candidates ?? [])
-    .filter((candidate) => variantPaths.has(candidate.path))
-    .flatMap((candidate) => candidate.dependencyWarnings);
-  const warningsByIdentity = new Map(warnings.map((warning) => [
-    `${warning.kind}\u0000${warning.detail}`,
-    warning,
-  ]));
-  return [...warningsByIdentity.values()];
 }
 
 function mapSubagentVariant(

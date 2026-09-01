@@ -1,6 +1,5 @@
 import type {
   AddSubagentRequest,
-  CapabilityActionRequest,
   DismissDriftRequest,
   RemoveInventoryItemRequest,
   ResolveIssueRequest,
@@ -51,7 +50,6 @@ export function SubagentsWorkspaceView({
   isRemovingInventoryItem = false,
   isRescanning,
   onAutoResolve = () => undefined,
-  onApplyCapabilityAction = () => Promise.resolve(),
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -83,7 +81,6 @@ export function SubagentsWorkspaceView({
   isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
   onAutoResolve?: () => void;
-  onApplyCapabilityAction?: (request: CapabilityActionRequest) => Promise<void>;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -105,7 +102,6 @@ export function SubagentsWorkspaceView({
   selectedSubagentProblemKey: SubagentIssueReason | null;
   statusFilter: SubagentStatusFilter;
 }) {
-  void onApplyCapabilityAction;
   const sections = filterVisibleSections(inventorySnapshot ? getSubagentSections(inventorySnapshot) : [], rows);
   const filters = inventorySnapshot?.subagentCounts
     ? [

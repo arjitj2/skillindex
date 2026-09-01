@@ -1,6 +1,6 @@
 import type { RemoveInventoryItemRequest, SkillInventorySnapshot } from '@shared/contracts';
 
-export interface InventoryRemovalPresentation {
+interface InventoryRemovalPresentation {
   canRemove: boolean;
   preservesPluginSource: boolean;
 }

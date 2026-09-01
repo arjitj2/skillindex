@@ -64,11 +64,11 @@ import {
 import { applyDismissedSubagentState, countSubagents, reconcileCachedSubagents } from '@main/subagent-inventory';
 import { parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
 import {
-  annotateComparableVersionEvidence,
   buildPluginManagedSourceCandidate,
   detectPluginDependencyWarnings,
   getOperationalLocations,
   isAgentSatisfiedByNativePlugin,
+  normalizePluginSourceEvidenceByIdentity,
 } from '@main/plugin-managed-sources';
 
 interface IndexedSkillLocation extends SkillLocationRecord {
@@ -1294,24 +1294,7 @@ function buildManagedSourceCandidates(
     return undefined;
   }
 
-  const annotatedCandidates = [...candidates];
-  const candidateIndexesByPlugin = new Map<string, number[]>();
-  for (const [index, candidate] of candidates.entries()) {
-    const key = `${candidate.plugin.host}\u0000${candidate.plugin.pluginId}`;
-    const indexes = candidateIndexesByPlugin.get(key) ?? [];
-    indexes.push(index);
-    candidateIndexesByPlugin.set(key, indexes);
-  }
-  for (const indexes of candidateIndexesByPlugin.values()) {
-    const annotatedGroup = annotateComparableVersionEvidence(
-      indexes.map((index) => candidates[index]),
-    );
-    for (const [groupIndex, candidateIndex] of indexes.entries()) {
-      annotatedCandidates[candidateIndex] = annotatedGroup[groupIndex]!;
-    }
-  }
-
-  return annotatedCandidates;
+  return normalizePluginSourceEvidenceByIdentity(candidates);
 }
 
 function buildDuplicateCandidate(location: IndexedSkillLocation): SkillDuplicateCandidate {
@@ -2803,6 +2786,7 @@ export async function readSkillInventoryCache(cacheFile: string): Promise<SkillI
   try {
     const raw = await readFile(cacheFile, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
+    normalizeLegacyPluginSourceEvidence(parsed);
     return isSkillInventorySnapshot(parsed) ? parsed : null;
   } catch {
     return null;
@@ -2813,6 +2797,7 @@ export function readSkillInventoryCacheSync(cacheFile: string): SkillInventorySn
   try {
     const raw = readFileSync(cacheFile, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
+    normalizeLegacyPluginSourceEvidence(parsed);
     return isSkillInventorySnapshot(parsed) ? parsed : null;
   } catch {
     return null;
@@ -2951,8 +2936,23 @@ function isCanonicalRole(value: unknown): boolean {
 
 function isPluginSourceEvidence(value: unknown): boolean {
   return value === 'enabled-installation'
-    || value === 'newer-comparable-version'
     || value === 'cached-unknown';
+}
+
+function normalizeLegacyPluginSourceEvidence(value: unknown): void {
+  if (!isRecord(value)) return;
+  for (const collectionName of ['skills', 'mcps', 'subagents']) {
+    const records = value[collectionName];
+    if (!Array.isArray(records)) continue;
+    for (const record of records) {
+      if (!isRecord(record) || !Array.isArray(record.managedSourceCandidates)) continue;
+      for (const candidate of record.managedSourceCandidates) {
+        if (isRecord(candidate) && candidate.evidence === 'newer-comparable-version') {
+          candidate.evidence = 'cached-unknown';
+        }
+      }
+    }
+  }
 }
 
 function isPluginDependencyWarningKind(value: unknown): boolean {

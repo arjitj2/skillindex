@@ -19,11 +19,11 @@ import type { SkillIndexPaths } from '@shared/skill-index-paths';
 
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
 import {
-  annotateComparableVersionEvidence,
   buildPluginManagedSourceCandidate,
   detectPluginDependencyWarnings,
   getOperationalLocations,
   isAgentSatisfiedByNativePlugin,
+  normalizePluginSourceEvidenceByIdentity,
 } from '@main/plugin-managed-sources';
 import { getLeadingWhitespace, parseYamlBlockScalarHeader, readYamlBlockScalar } from '@main/yaml-scalar';
 import {
@@ -581,24 +581,7 @@ function buildManagedSourceCandidates(
     return undefined;
   }
 
-  const annotatedCandidates = [...candidates];
-  const candidateIndexesByPlugin = new Map<string, number[]>();
-  for (const [index, candidate] of candidates.entries()) {
-    const key = `${candidate.plugin.host}\u0000${candidate.plugin.pluginId}`;
-    const indexes = candidateIndexesByPlugin.get(key) ?? [];
-    indexes.push(index);
-    candidateIndexesByPlugin.set(key, indexes);
-  }
-  for (const indexes of candidateIndexesByPlugin.values()) {
-    const annotatedGroup = annotateComparableVersionEvidence(
-      indexes.map((index) => candidates[index]),
-    );
-    for (const [groupIndex, candidateIndex] of indexes.entries()) {
-      annotatedCandidates[candidateIndex] = annotatedGroup[groupIndex]!;
-    }
-  }
-
-  return annotatedCandidates;
+  return normalizePluginSourceEvidenceByIdentity(candidates);
 }
 
 function buildExpectedLocation(

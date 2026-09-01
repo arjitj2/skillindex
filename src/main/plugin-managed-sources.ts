@@ -130,7 +130,7 @@ export async function isPluginManagedTargetThroughRealpath(
     await assertPathDoesNotResolveIntoPlugin(targetPath, sources);
     return false;
   } catch (error) {
-    if ((error as Error).message.includes('plugin-managed cache path')) return true;
+    if (error instanceof Error && error.message.includes('plugin-managed cache path')) return true;
     throw error;
   }
 }
@@ -256,7 +256,7 @@ async function resolvePathThroughNearestExistingParent(targetPath: string): Prom
       const resolved = await realpath(candidate);
       return path.join(resolved, ...missingSegments.reverse());
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (!isFileNotFoundError(error)) {
         throw new Error(`Unable to verify filesystem safety for ${normalizedTarget}.`);
       }
     }
@@ -266,6 +266,10 @@ async function resolvePathThroughNearestExistingParent(targetPath: string): Prom
     missingSegments.push(path.basename(candidate));
     candidate = parent;
   }
+}
+
+function isFileNotFoundError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 function isPathContainedBy(rootPath: string, targetPath: string): boolean {
@@ -300,14 +304,36 @@ export function buildPluginManagedSourceCandidate({
   };
 }
 
-export function annotateComparableVersionEvidence<T extends { evidence: PluginSourceEvidence }>(
+export function normalizePluginSourceEvidenceByIdentity<
+  T extends {
+    evidence: PluginSourceEvidence;
+    plugin: Pick<PluginSourceRef, 'host' | 'pluginId'>;
+  },
+>(
   candidates: T[],
 ): T[] {
-  const enabledCandidateCount = candidates.filter((candidate) => candidate.evidence === 'enabled-installation').length;
-  if (enabledCandidateCount > 1) {
-    return candidates.map((candidate) => ({ ...candidate, evidence: 'cached-unknown' }));
+  const indexesByPlugin = new Map<string, number[]>();
+  for (const [index, candidate] of candidates.entries()) {
+    const key = `${candidate.plugin.host}\u0000${candidate.plugin.pluginId}`;
+    const indexes = indexesByPlugin.get(key) ?? [];
+    indexes.push(index);
+    indexesByPlugin.set(key, indexes);
   }
-  return candidates;
+
+  const normalizedCandidates = [...candidates];
+  for (const indexes of indexesByPlugin.values()) {
+    const enabledCandidateCount = indexes.filter((index) =>
+      candidates[index]?.evidence === 'enabled-installation').length;
+    if (enabledCandidateCount <= 1) continue;
+    for (const index of indexes) {
+      normalizedCandidates[index] = {
+        ...candidates[index],
+        evidence: 'cached-unknown',
+      };
+    }
+  }
+
+  return normalizedCandidates;
 }
 
 export function detectPluginDependencyWarnings({

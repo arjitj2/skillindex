@@ -36,11 +36,11 @@ import { parseTomlMcpServerArray, parseTomlMcpServers } from '@shared/toml-mcp';
 import { sanitizeJsonc, stableStringify } from '@main/json-utils';
 import { verifyMcpConnection } from '@main/mcp-connectivity';
 import {
-  annotateComparableVersionEvidence,
   buildPluginManagedSourceCandidate,
   detectPluginDependencyWarnings,
   getOperationalLocations,
   isAgentSatisfiedByNativePlugin,
+  normalizePluginSourceEvidenceByIdentity,
 } from '@main/plugin-managed-sources';
 
 export interface McpConnectivityProbeTarget {
@@ -496,23 +496,7 @@ function buildMcpManagedSourceCandidates(
   });
   if (candidates.length === 0) return undefined;
 
-  const annotatedCandidates = [...candidates];
-  const candidateIndexesByPlugin = new Map<string, number[]>();
-  for (const [index, candidate] of candidates.entries()) {
-    const key = `${candidate.plugin.host}\u0000${candidate.plugin.pluginId}`;
-    const indexes = candidateIndexesByPlugin.get(key) ?? [];
-    indexes.push(index);
-    candidateIndexesByPlugin.set(key, indexes);
-  }
-  for (const indexes of candidateIndexesByPlugin.values()) {
-    const annotated = annotateComparableVersionEvidence(
-      indexes.map((index) => candidates[index]),
-    );
-    for (const [groupIndex, candidateIndex] of indexes.entries()) {
-      annotatedCandidates[candidateIndex] = annotated[groupIndex]!;
-    }
-  }
-  return annotatedCandidates;
+  return normalizePluginSourceEvidenceByIdentity(candidates);
 }
 
 function hasMcpDefinitionMismatch(
