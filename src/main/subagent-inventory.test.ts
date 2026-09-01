@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { applyCapabilityAction } from '@main/capability-actions';
 import { resolveInventoryIssue } from '@main/issue-resolution';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import { dismissDrift, readCachedInventory, scanInventory } from '@main/scan-inventory';
@@ -850,6 +851,23 @@ describe('subagent inventory', () => {
     const cached = (await readCachedInventory(scanOptions))?.subagents?.find((subagent) => subagent.name === 'tools:reviewer');
     expect(cached?.issueReasons).toEqual(['missing-universal']);
     expect(cached?.managedSourceCandidates).toHaveLength(2);
+
+    const oldPath = path.join(roots[0], 'agents', 'reviewer.md');
+    const newPath = path.join(roots[1], 'agents', 'reviewer.md');
+    await resolveInventoryIssue({
+      entity: 'subagent', issue: 'missing-universal', selectedVariantPath: oldPath, subagentName: 'tools:reviewer',
+    }, scanOptions);
+    const oldBefore = await readFile(oldPath, 'utf8');
+    const newBefore = await readFile(newPath, 'utf8');
+    const updated = await applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'tools:reviewer', selectedVariantPath: newPath,
+    }, scanOptions);
+    expect(await readFile(path.join(homeDir, '.agents', 'agents', 'tools-reviewer.md'), 'utf8')).toContain('1.1.0');
+    expect(await readFile(path.join(homeDir, '.codex', 'agents', 'tools-reviewer.toml'), 'utf8')).toContain('1.1.0');
+    expect(await readFile(oldPath, 'utf8')).toBe(oldBefore);
+    expect(await readFile(newPath, 'utf8')).toBe(newBefore);
+    expect(updated.subagents?.find((subagent) => subagent.name === 'tools:reviewer')?.managedSourceCandidates
+      ?.find((candidate) => candidate.path === newPath)?.relationship).toBe('matches-universal');
   });
 
   it('reconciles cached plugin subagent enablement and removed assets exactly like a fresh scan', async () => {
