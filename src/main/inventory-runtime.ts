@@ -488,10 +488,16 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       // true no-op.
       assertCapabilityActionRequest(request);
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
-      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
+      // Always rescan before planning an action. currentSnapshot can be stale
+      // between a watcher event and the user action; planning against it would
+      // omit newly writable targets from both the mutation and its Undo record.
+      const beforeSnapshot = await scanInventory(lastScanOptions);
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
         buildCapabilityActionAuditRequest(request, beforeSnapshot, lastScanOptions),
-        () => applyCapabilityActionToInventory(request, lastScanOptions),
+        () => applyCapabilityActionToInventory(request, {
+          ...lastScanOptions,
+          preparedSnapshot: beforeSnapshot,
+        }),
       );
       commitSnapshot(nextSnapshot);
       await emitAudit(lastScanOptions);

@@ -39,6 +39,37 @@ describe('inventory runtime', () => {
     expect(await runtime.readAuditLog({}, { paths, includeSandboxSources: true, includeLiveSources: false })).toEqual([]);
   });
 
+  it('does not create an audit operation or mutate files when the fresh action scan fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-action-scan-failure-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'scan-failure-tools', '1.0.0');
+    const pluginSkill = path.join(pluginRoot, 'skills', 'reviewer');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'skills', 'scan-failure-tools:reviewer');
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false, env: { SKILL_INDEX_AGENT_SUBSET: 'codex' } } as const;
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'scan-failure-tools', version: '1.0.0' })),
+      writeRuntimeFile(path.join(pluginSkill, 'SKILL.md'), '# Plugin reviewer\n'),
+      writeRuntimeFile(path.join(universal, 'SKILL.md'), '# Universal reviewer\n'),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."scan-failure-tools@official"]\nenabled = true\n'),
+    ]);
+    await runtime.scanInventory(scanOptions);
+    const universalBefore = await readFile(path.join(universal, 'SKILL.md'), 'utf8');
+    const cacheBefore = await readFile(paths.cacheFile, 'utf8');
+
+    await expect(runtime.applyCapabilityAction({
+      entity: 'skill', action: 'update-universal-from-plugin', capabilityName: 'scan-failure-tools:reviewer', selectedVariantPath: pluginSkill,
+    }, {
+      ...scanOptions,
+      paths: { ...paths, configFile: paths.sandboxRoot },
+    })).rejects.toThrow(/Failed to read Skill Index config/i);
+
+    expect(await runtime.readAuditLog({}, scanOptions)).toEqual([]);
+    expect(await readFile(path.join(universal, 'SKILL.md'), 'utf8')).toBe(universalBefore);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(cacheBefore);
+  });
+
   it('discovers newly available sources on rescan, rewrites cache, and starts watcher coverage immediately', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-'));
     const paths = resolveSkillIndexPaths({
@@ -1101,6 +1132,122 @@ describe('inventory runtime', () => {
     expect((await lstat(universal)).isSymbolicLink()).toBe(false);
     expect(await pathExists(factory)).toBe(false);
     expect(await pathExists(codexDerived)).toBe(false);
+  });
+
+  it('refreshes a stale snapshot before auditing a plugin skill update', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-stale-skill-update-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-tools', '1.0.0');
+    const pluginSkill = path.join(pluginRoot, 'skills', 'reviewer');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'skills', 'runtime-tools:reviewer');
+    const factory = path.join(paths.sandboxRoot, '.factory', 'skills', 'runtime-tools:reviewer');
+    const pluginText = '# Plugin reviewer\n';
+    const universalText = '# Universal reviewer\n';
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false, env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' } } as const;
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-tools', version: '1.0.0' })),
+      writeRuntimeFile(path.join(pluginSkill, 'SKILL.md'), pluginText),
+      writeRuntimeFile(path.join(universal, 'SKILL.md'), universalText),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."runtime-tools@official"]\nenabled = true\n'),
+    ]);
+    await runtime.scanInventory(scanOptions);
+
+    // This agent is absent from currentSnapshot, but present when the action is invoked.
+    await writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+    await runtime.applyCapabilityAction({
+      entity: 'skill', action: 'update-universal-from-plugin', capabilityName: 'runtime-tools:reviewer', selectedVariantPath: pluginSkill,
+    });
+
+    expect(await readFile(path.join(universal, 'SKILL.md'), 'utf8')).toBe(pluginText);
+    expect(await readlink(factory)).toBe(universal);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universal, factory]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+    expect(await readFile(path.join(pluginSkill, 'SKILL.md'), 'utf8')).toBe(pluginText);
+
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(path.join(universal, 'SKILL.md'), 'utf8')).toBe(universalText);
+    expect(await pathExists(factory)).toBe(false);
+    expect(await readFile(path.join(pluginSkill, 'SKILL.md'), 'utf8')).toBe(pluginText);
+  });
+
+  it('refreshes a stale snapshot before auditing a plugin MCP update', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-stale-mcp-update-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-mcp-race', '1.0.0');
+    const pluginConfig = path.join(pluginRoot, '.mcp.json');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factory = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const pluginText = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['plugin.js'] } } }, null, 2)}\n`;
+    const universalText = `${JSON.stringify({ servers: { service: { command: 'node', args: ['universal.js'] } } }, null, 2)}\n`;
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false, env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' } } as const;
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-mcp-race', version: '1.0.0' })),
+      writeRuntimeFile(pluginConfig, pluginText),
+      writeRuntimeFile(universal, universalText),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."runtime-mcp-race@official"]\nenabled = true\n'),
+    ]);
+    await runtime.scanInventory(scanOptions);
+
+    await writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+    await runtime.applyCapabilityAction({
+      entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'runtime-mcp-race:service', selectedVariantPath: pluginConfig,
+    });
+
+    expect(await readFile(universal, 'utf8')).toContain('plugin.js');
+    expect(await readFile(factory, 'utf8')).toContain('plugin.js');
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universal, factory]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+    expect(await readFile(pluginConfig, 'utf8')).toBe(pluginText);
+
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(universal, 'utf8')).toBe(universalText);
+    expect(await pathExists(factory)).toBe(false);
+    expect(await readFile(pluginConfig, 'utf8')).toBe(pluginText);
+  });
+
+  it('refreshes a stale snapshot before auditing a plugin subagent update', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-stale-subagent-update-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-agents-race', '1.0.0');
+    const pluginDefinition = path.join(pluginRoot, 'agents', 'reviewer.md');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'agents', 'runtime-agents-race-reviewer.md');
+    const factory = path.join(paths.sandboxRoot, '.factory', 'droids', 'runtime-agents-race-reviewer.md');
+    const pluginText = '---\nname: reviewer\ndescription: Plugin reviewer\n---\nPlugin rules.\n';
+    const universalText = '---\nname: reviewer\ndescription: Universal reviewer\n---\nUniversal rules.\n';
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false, env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' } } as const;
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-agents-race', version: '1.0.0' })),
+      writeRuntimeFile(pluginDefinition, pluginText),
+      writeRuntimeFile(universal, universalText),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."runtime-agents-race@official"]\nenabled = true\n'),
+    ]);
+    await runtime.scanInventory(scanOptions);
+
+    await writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+    await runtime.applyCapabilityAction({
+      entity: 'subagent', action: 'update-universal-from-plugin', capabilityName: 'runtime-agents-race:reviewer', selectedVariantPath: pluginDefinition,
+    });
+
+    expect(await readFile(universal, 'utf8')).toContain('Plugin rules.');
+    expect((await lstat(factory)).isSymbolicLink()).toBe(true);
+    expect(await readlink(factory)).toBe(universal);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universal, factory]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+    expect(await readFile(pluginDefinition, 'utf8')).toBe(pluginText);
+
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(universal, 'utf8')).toBe(universalText);
+    expect(await pathExists(factory)).toBe(false);
+    expect(await readFile(pluginDefinition, 'utf8')).toBe(pluginText);
   });
 
   it('writes sandbox audit operations to the sandbox app-state log', async () => {

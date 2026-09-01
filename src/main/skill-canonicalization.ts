@@ -28,6 +28,8 @@ export interface MakeSkillCanonicalRequest {
 
 export interface MakeSkillCanonicalOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  /** Snapshot prepared by a caller that has already planned an audited action. */
+  preparedSnapshot?: SkillInventorySnapshot;
   linkMissingAgentInstalls?: boolean;
   testFailSkillLinkAt?: number;
   testFailSkillDecisionPersist?: boolean;
@@ -43,11 +45,12 @@ export async function makeSkillCanonical(
   }
   assertSafeSkillPackageName(skillName);
 
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const { preparedSnapshot, ...scanOptions } = options;
+  const paths = scanOptions.paths ?? resolveSkillIndexPaths(scanOptions);
   await ensureSkillIndexLayout(paths);
 
-  const beforeSnapshot = await scanInventory({
-    ...options,
+  const beforeSnapshot = preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
   const sourceIndex = new Map(beforeSnapshot.sources.map((source) => [source.id, source]));
@@ -181,7 +184,7 @@ export async function makeSkillCanonical(
       ),
     });
     await persistSkillUniversalDecisionForSelection(skill, persistedUniversalLocation, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   } catch (error) {
@@ -195,7 +198,7 @@ export async function makeSkillCanonical(
   await materializedPackage.commit();
 
   return scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
 }

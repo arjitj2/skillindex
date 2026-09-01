@@ -30,6 +30,11 @@ import {
 
 export interface CapabilityActionOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  /**
+   * A snapshot prepared by the runtime immediately before audit planning.
+   * Supplying it keeps validation, mutation planning, and audit paths in lockstep.
+   */
+  preparedSnapshot?: SkillInventorySnapshot;
 }
 
 const UNIVERSAL_CHOICE_AUTO_REPAIR_ISSUES: SkillResolvableIssue[] = [
@@ -45,10 +50,11 @@ export async function applyCapabilityAction(
   options: CapabilityActionOptions = {},
 ): Promise<SkillInventorySnapshot> {
   assertCapabilityActionRequest(request);
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const { preparedSnapshot, ...scanOptions } = options;
+  const paths = scanOptions.paths ?? resolveSkillIndexPaths(scanOptions);
   await ensureSkillIndexLayout(paths);
-  const snapshot = await scanInventory({
-    ...options,
+  const snapshot = preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
 
@@ -60,12 +66,13 @@ export async function applyCapabilityAction(
           skillName: request.skillName,
           selectedVariantPath: selectedLocation.path,
         }, {
-          ...options,
+          ...scanOptions,
           paths,
+          preparedSnapshot: snapshot,
         });
       }
       await persistSkillUniversalDecision(request, snapshot, {
-        ...options,
+        ...scanOptions,
         paths,
       });
       break;
@@ -79,8 +86,9 @@ export async function applyCapabilityAction(
             skillName: skill.name,
             selectedVariantPath: request.selectedVariantPath,
           }, {
-            ...options,
+            ...scanOptions,
             paths,
+            preparedSnapshot: snapshot,
           });
         }
         case 'mcp': {
@@ -88,7 +96,7 @@ export async function applyCapabilityAction(
           if (!mcp) throw new Error(`MCP "${request.capabilityName}" is no longer available.`);
           assertSelectedManagedPluginCandidate(mcp, request.selectedVariantPath);
           await updateMcpUniversalFromPluginSource(snapshot, mcp, request.selectedVariantPath, {
-            ...options,
+            ...scanOptions,
             paths,
           });
           break;
@@ -98,7 +106,7 @@ export async function applyCapabilityAction(
           if (!subagent) throw new Error(`Subagent "${request.capabilityName}" is no longer available.`);
           assertSelectedManagedPluginCandidate(subagent, request.selectedVariantPath);
           await updateSubagentUniversalFromPluginSource(snapshot, subagent, request.selectedVariantPath, {
-            ...options,
+            ...scanOptions,
             paths,
           });
           break;
@@ -113,7 +121,7 @@ export async function applyCapabilityAction(
   }
 
   const updatedSnapshot = await scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
   if (request.action === 'choose-universal-version') {
@@ -122,7 +130,7 @@ export async function applyCapabilityAction(
       request.selectedVariantPath,
       updatedSnapshot,
       {
-        ...options,
+        ...scanOptions,
         paths,
       },
     );
