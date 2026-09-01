@@ -31,7 +31,7 @@ import {
 } from '@shared/mcp-definition';
 import {
   ensureSkillIndexLayout,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 import {
@@ -152,7 +152,7 @@ export async function resolveInventoryIssue(
   options: ResolveIssueOptions = {},
 ): Promise<SkillInventorySnapshot> {
   const { preparedSnapshot, ...scanOptions } = options;
-  const paths = scanOptions.paths ?? resolveSkillIndexPaths(scanOptions);
+  const paths = scanOptions.paths ?? resolveSkillIndexPathsForScanOptions(scanOptions);
   await ensureSkillIndexLayout(paths);
 
   const snapshot = preparedSnapshot ?? await scanInventory({
@@ -191,7 +191,7 @@ export async function addMcpServer(
   request: AddMcpServerRequest,
   options: ResolveIssueOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const paths = options.paths ?? resolveSkillIndexPathsForScanOptions(options);
   await ensureSkillIndexLayout(paths);
 
   const snapshot = await scanInventory({

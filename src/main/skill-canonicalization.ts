@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { SkillInventorySnapshot, SkillLocationRecord } from '@shared/contracts';
 import {
   ensureSkillIndexLayout,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
@@ -46,7 +46,7 @@ export async function makeSkillCanonical(
   assertSafeSkillPackageName(skillName);
 
   const { preparedSnapshot, ...scanOptions } = options;
-  const paths = scanOptions.paths ?? resolveSkillIndexPaths(scanOptions);
+  const paths = scanOptions.paths ?? resolveSkillIndexPathsForScanOptions(scanOptions);
   await ensureSkillIndexLayout(paths);
 
   const beforeSnapshot = preparedSnapshot ?? await scanInventory({

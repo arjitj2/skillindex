@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import type { AuditOperation, McpConnectivityRecord, SkillInventorySnapshot } from '@shared/contracts';
-import { resolveSkillIndexPaths } from '@shared/skill-index-paths';
+import { defaultConfig, resolveSkillIndexPaths } from '@shared/skill-index-paths';
 
 interface FakeWatcher {
   close(): void;
@@ -1137,6 +1137,95 @@ describe('inventory runtime', () => {
     for (const candidate of pluginCacheContents) {
       expect(await readFile(path.join(candidate.path, 'SKILL.md'), 'utf8')).toBe(candidate.contents);
     }
+  });
+
+  it('keeps sandbox dismissals and Universal decisions in sandbox state across public plugin promotion and Undo', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-sandbox-state-'));
+    const env = { SKILL_INDEX_DATA_DIR: root };
+    const rootPaths = resolveSkillIndexPaths({ env });
+    const sandboxConfigPath = path.join(root, 'sandbox-state', 'config.json');
+    const rootConfig = `${JSON.stringify({
+      ...defaultConfig,
+      dismissedDriftSignatures: ['root-state-sentinel'],
+    }, null, 2)}\n`;
+    await writeRuntimeFile(rootPaths.configFile, rootConfig);
+    await seedRepresentativeFixtures({ env });
+    const sandboxConfigBefore = await readFile(sandboxConfigPath, 'utf8');
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { env, includeSandboxSources: true, includeLiveSources: false } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    const skillName = 'plugin-version-choice-skill';
+    const candidate = before.skills.find((entry) => entry.name === skillName)
+      ?.managedSourceCandidates?.find((entry) => entry.plugin.version === '1.1.0');
+    const dismissedCountsBefore = {
+      skills: before.counts.dismissedDriftSkills,
+      mcps: before.mcpCounts?.dismissedAttentionMcps,
+      subagents: before.subagentCounts?.dismissedAttentionSubagents,
+    };
+
+    const promoted = await runtime.resolveIssue({
+      entity: 'skill', issue: 'missing-canonical', skillName, selectedVariantPath: candidate!.path,
+    });
+    expect(promoted.skills.find((entry) => entry.name === skillName)).toMatchObject({ structuralState: 'healthy', issueReasons: [] });
+    expect({
+      skills: promoted.counts.dismissedDriftSkills,
+      mcps: promoted.mcpCounts?.dismissedAttentionMcps,
+      subagents: promoted.subagentCounts?.dismissedAttentionSubagents,
+    }).toEqual(dismissedCountsBefore);
+    expect(await readFile(rootPaths.configFile, 'utf8')).toBe(rootConfig);
+    const sandboxConfigAfter = JSON.parse(await readFile(sandboxConfigPath, 'utf8')) as {
+      skillUniversalDecisions?: Array<{ skillName: string }>;
+    };
+    expect(sandboxConfigAfter.skillUniversalDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ skillName }),
+    ]));
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toContain(sandboxConfigPath);
+    expect(operation.actions.map((action) => action.path)).not.toContain(rootPaths.configFile);
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(sandboxConfigPath, 'utf8')).toBe(sandboxConfigBefore);
+    expect(await readFile(rootPaths.configFile, 'utf8')).toBe(rootConfig);
+  });
+
+  it.each([
+    { entity: 'mcp' as const, capabilityName: 'plugin-update-mcp:plugin-update-mcp' },
+    { entity: 'subagent' as const, capabilityName: 'plugin-update-subagent:plugin-update-subagent' },
+  ])('keeps sandbox presentation state isolated during $entity plugin updates', async ({ entity, capabilityName }) => {
+    const root = await mkdtemp(path.join(tmpdir(), `skillindex-runtime-${entity}-sandbox-state-`));
+    const env = { SKILL_INDEX_DATA_DIR: root };
+    const rootPaths = resolveSkillIndexPaths({ env });
+    const rootConfig = `${JSON.stringify({ ...defaultConfig, dismissedDriftSignatures: ['root-state-sentinel'] }, null, 2)}\n`;
+    await writeRuntimeFile(rootPaths.configFile, rootConfig);
+    await seedRepresentativeFixtures({ env });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { env, includeSandboxSources: true, includeLiveSources: false } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    const record = entity === 'mcp'
+      ? before.mcps?.find((entry) => entry.name === capabilityName)
+      : before.subagents?.find((entry) => entry.name === capabilityName);
+    const candidate = record?.managedSourceCandidates?.find((entry) => entry.relationship === 'differs-from-universal');
+    const dismissedCountsBefore = [
+      before.counts.dismissedDriftSkills,
+      before.mcpCounts?.dismissedAttentionMcps,
+      before.subagentCounts?.dismissedAttentionSubagents,
+    ];
+
+    const after = await runtime.applyCapabilityAction({
+      entity, action: 'update-universal-from-plugin', capabilityName, selectedVariantPath: candidate!.path,
+    });
+    expect([
+      after.counts.dismissedDriftSkills,
+      after.mcpCounts?.dismissedAttentionMcps,
+      after.subagentCounts?.dismissedAttentionSubagents,
+    ]).toEqual(dismissedCountsBefore);
+    expect(await readFile(rootPaths.configFile, 'utf8')).toBe(rootConfig);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).not.toContain(rootPaths.configFile);
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(rootPaths.configFile, 'utf8')).toBe(rootConfig);
   });
 
   it('freshens plugin promotion planning so a newly writable agent is included in Undo', async () => {

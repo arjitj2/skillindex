@@ -15,7 +15,7 @@ import type {
 import {
   ensureSkillIndexLayout,
   readSkillIndexConfig,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   writeSkillIndexConfig,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
@@ -51,7 +51,7 @@ export async function applyCapabilityAction(
 ): Promise<SkillInventorySnapshot> {
   assertCapabilityActionRequest(request);
   const { preparedSnapshot, ...scanOptions } = options;
-  const paths = scanOptions.paths ?? resolveSkillIndexPaths(scanOptions);
+  const paths = scanOptions.paths ?? resolveSkillIndexPathsForScanOptions(scanOptions);
   await ensureSkillIndexLayout(paths);
   const snapshot = preparedSnapshot ?? await scanInventory({
     ...scanOptions,
