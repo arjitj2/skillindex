@@ -44,7 +44,12 @@ Skill Index gives you a local control plane for agent knowledge:
 | **Standardize** | Review safe auto-fixes from the dashboard, apply them in a batch, or choose explicit repair actions for individual skills, subagents, and MCPs. |
 | **Audit** | Review a local audit log of file-changing operations so every mutation is accountable. |
 
-Plugin-provided skills, subagents, and MCPs are shown as managed, read-only capabilities. They are part of the knowledge map, but Skill Index does not pretend it owns them.
+Plugin-provided skills, subagents, and MCPs are shown as managed, read-only
+sources. They are candidates you can explicitly copy or translate into your
+Universal directory, never canonical locations or symlink targets. Multiple
+cached versions are alternatives rather than drift; Skill Index may show current
+usage evidence, but you choose the version. See the [inventory resolution
+model](docs/reference/inventory-resolution-model.md) for the full contract.
 
 ## Local By Default
 

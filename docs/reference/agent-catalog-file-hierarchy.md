@@ -79,6 +79,17 @@ agent-readable skills visible to inventory and repair.
 the current skill inventory scan creates sources from global compatibility
 directories only.
 
+### Plugin-Managed Sources
+
+Plugin cache directories are separate from compatibility directories. They are
+read-only `managed-source` candidates: Skill Index can show them and let a user
+explicitly make a durable Universal copy, but it never marks a cache package as
+canonical, writes into the cache, or creates a symlink to it. An enabled native
+plugin satisfies only its own agent family; other compatible agents can still
+receive a Universal materialization. See the [inventory resolution
+model](inventory-resolution-model.md) for candidate evidence and resolution
+rules.
+
 ## MCP Metadata
 
 MCP catalog metadata has two separate concerns:
