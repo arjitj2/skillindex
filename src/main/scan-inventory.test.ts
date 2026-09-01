@@ -926,6 +926,14 @@ describe('representative-agent scan foundation', () => {
       ]),
     });
     expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'newer-comparable-version' },
+    ]);
     const legacyPluginLinkSkill = inventory.skills.find((skill) => skill.name === 'legacy-plugin-link-skill');
     expect(legacyPluginLinkSkill?.issueReasons).toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
     expect(legacyPluginLinkSkill?.issueReasons).not.toContain('diverged-copies');
@@ -1094,6 +1102,14 @@ describe('representative-agent scan foundation', () => {
       ]),
     });
     expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'newer-comparable-version' },
+    ]);
     const nativePluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp');
     expect(nativePluginMcp?.missingLocations).toEqual([]);
     expect(nativePluginMcp).toMatchObject({ status: 'healthy', issueReasons: [] });
@@ -1117,6 +1133,14 @@ describe('representative-agent scan foundation', () => {
       ]),
     });
     expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')?.managedSourceCandidates).toHaveLength(2);
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')?.managedSourceCandidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      relationship: candidate.relationship,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', relationship: 'matches-universal', evidence: 'cached-unknown' },
+      { version: '1.1.0', relationship: 'differs-from-universal', evidence: 'newer-comparable-version' },
+    ]);
     const nativePluginSubagent = inventory.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent');
     expect(nativePluginSubagent).toMatchObject({ status: 'healthy', issueReasons: [] });
     expect(nativePluginSubagent?.expectedLocations?.map((location) => location.agentId)).not.toContain('sandbox-claude');
@@ -1614,6 +1638,19 @@ describe('representative-agent scan foundation', () => {
       }),
     });
 
+    for (const snapshot of [fresh, cached as NonNullable<typeof cached>]) {
+      for (const [collection, name] of [
+        [snapshot.skills, 'plugin-update-skill'],
+        [snapshot.mcps ?? [], 'plugin-update-mcp:plugin-update-mcp'],
+        [snapshot.subagents ?? [], 'plugin-update-subagent:plugin-update-subagent'],
+      ] as const) {
+        const record = collection.find((entry) => entry.name === name);
+        expect(record?.managedSourceCandidates?.map((candidate) => `${candidate.plugin.version}:${candidate.evidence}`)).toEqual([
+          '1.0.0:cached-unknown',
+          '1.1.0:newer-comparable-version',
+        ]);
+      }
+    }
     expect(summarize(cached as NonNullable<typeof cached>)).toEqual(summarize(fresh));
   });
 

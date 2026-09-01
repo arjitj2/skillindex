@@ -1471,24 +1471,37 @@ export async function seedRepresentativeFixtures(
  * configuration tree. Both lexical paths and a realpath based on the nearest
  * existing parent are compared, so a symlinked alias cannot bypass the check.
  *
- * A sandbox is allowed to live under a user's home directory (the default
- * data directory does), but it may not be the home directory itself or an
- * ancestor of it. Every known live agent/config root rejects any overlap.
+ * The destructive target is additionally constrained to the dedicated
+ * <app-data>/sandbox container (or one of its descendants). This keeps a
+ * bad environment override from widening a reset to app state, /tmp, a home
+ * directory, or any arbitrary location outside the sandbox layout.
  */
 export async function assertSandboxRootSafeForReset(
   paths: SkillIndexPaths,
   options: ResolveSkillIndexPathOptions & { paths?: SkillIndexPaths } = {},
 ): Promise<void> {
   const env = options.env ?? process.env;
-  const homeRoot = path.resolve(options.homeDir ?? (options.paths ? path.dirname(paths.liveAgentsDir) : homedir()));
+  const appDataDir = resolveAppDataDir(paths);
+  const sandboxContainer = path.join(appDataDir, 'sandbox');
   const sandboxAliases = await resolvePathAliases(paths.sandboxRoot);
-  const homeAliases = await resolvePathAliases(homeRoot);
+  const sandboxContainerAliases = await resolvePathAliases(sandboxContainer);
+  const appDataAliases = await resolvePathAliases(appDataDir);
 
-  if (pathsOverlapAsResetRoot(sandboxAliases, homeAliases)) {
-    throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it is the user home directory or contains it.`);
+  if (!allPathsAreContainedBy(sandboxAliases, sandboxContainerAliases)
+    || !allPathsAreContainedBy(sandboxContainerAliases, appDataAliases)) {
+    throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it is outside the dedicated sandbox container ${sandboxContainer}.`);
   }
 
-  for (const protectedRoot of protectedLiveRoots(homeRoot, env)) {
+  const callerHomeRoot = path.resolve(options.homeDir ?? (options.paths ? path.dirname(paths.liveAgentsDir) : homedir()));
+  const homeRoots = [...new Set([callerHomeRoot, path.resolve(homedir())])];
+  for (const homeRoot of homeRoots) {
+    const homeAliases = await resolvePathAliases(homeRoot);
+    if (pathsOverlapAsResetRoot(sandboxAliases, homeAliases)) {
+      throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it is a home directory or contains one.`);
+    }
+  }
+
+  for (const protectedRoot of protectedLiveRoots(homeRoots, env)) {
     const protectedAliases = await resolvePathAliases(protectedRoot);
     if (pathsOverlap(sandboxAliases, protectedAliases)) {
       throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it overlaps protected live path ${protectedRoot}.`);
@@ -1496,8 +1509,12 @@ export async function assertSandboxRootSafeForReset(
   }
 }
 
-function protectedLiveRoots(homeRoot: string, env: NodeJS.ProcessEnv): string[] {
-  const roots = [
+function resolveAppDataDir(paths: SkillIndexPaths): string {
+  return path.basename(paths.dataDir) === 'sandbox-state' ? path.dirname(paths.dataDir) : paths.dataDir;
+}
+
+function protectedLiveRoots(homeRoots: string[], env: NodeJS.ProcessEnv): string[] {
+  const relativeRoots = [
     '.agents',
     '.claude',
     '.codex',
@@ -1508,7 +1525,8 @@ function protectedLiveRoots(homeRoot: string, env: NodeJS.ProcessEnv): string[] 
     path.join('Library', 'Application Support', 'Claude'),
     path.join('Library', 'Application Support', 'Cursor'),
     path.join('Library', 'Application Support', 'Code'),
-  ].map((relativePath) => path.join(homeRoot, relativePath));
+  ];
+  const roots = homeRoots.flatMap((homeRoot) => relativeRoots.map((relativePath) => path.join(homeRoot, relativePath)));
 
   for (const value of [env.CODEX_HOME, env.CLAUDE_CONFIG_DIR, env.CURSOR_HOME, env.FACTORY_HOME]) {
     if (value) {
@@ -1517,6 +1535,10 @@ function protectedLiveRoots(homeRoot: string, env: NodeJS.ProcessEnv): string[] 
   }
 
   return [...new Set(roots)];
+}
+
+function allPathsAreContainedBy(candidates: string[], containers: string[]): boolean {
+  return candidates.every((candidate) => containers.some((container) => isSameOrAncestor(container, candidate)));
 }
 
 async function resolvePathAliases(candidate: string): Promise<string[]> {

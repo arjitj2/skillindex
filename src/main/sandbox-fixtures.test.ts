@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -68,43 +68,64 @@ describe('seedRepresentativeFixtures', () => {
     await expect(lstat(staleTarget)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('refuses unsafe direct and dev-reset sandbox roots before any mutation, including realpath aliases', async () => {
-    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-reset-home-'));
-    const dataDir = await mkdtemp(path.join(tmpdir(), 'skillindex-reset-data-'));
-    const protectedRoots = [
-      path.join(homeDir, '.codex', 'plugins', 'cache'),
-      path.join(homeDir, '.claude', 'plugins', 'cache'),
-      homeDir,
-    ];
+  it('refuses unsafe direct reset roots before any mutation, including realpath aliases', async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), 'skillindex-reset-workspace-'));
+    const homeDir = path.join(workspace, 'home');
+    const dataDir = path.join(workspace, 'data');
+    const outsideRoot = path.join(workspace, 'outside');
+    await Promise.all([mkdir(homeDir, { recursive: true }), mkdir(dataDir, { recursive: true }), mkdir(outsideRoot, { recursive: true })]);
 
     try {
-      for (const protectedRoot of protectedRoots) {
-        await mkdir(protectedRoot, { recursive: true });
-        const sentinel = path.join(protectedRoot, 'sentinel.txt');
-        await writeFile(sentinel, `sentinel:${protectedRoot}\n`, 'utf8');
-        const env = {
-          SKILL_INDEX_DATA_DIR: dataDir,
-          SKILL_INDEX_SANDBOX_ROOT: protectedRoot,
-        };
-
-        await expect(seedRepresentativeFixtures({ env, homeDir })).rejects.toThrow('unsafe sandbox root');
-        await expect(readFile(sentinel, 'utf8')).resolves.toBe(`sentinel:${protectedRoot}\n`);
+      const controlledTargets = [
+        dataDir,
+        workspace,
+        path.join(outsideRoot, 'nested-sandbox'),
+        homeDir,
+      ];
+      for (const target of controlledTargets) {
+        await mkdir(target, { recursive: true });
+        const sentinel = path.join(target, 'sentinel.txt');
+        await writeFile(sentinel, `sentinel:${target}\n`, 'utf8');
+        await expect(seedRepresentativeFixtures({
+          env: { SKILL_INDEX_DATA_DIR: dataDir, SKILL_INDEX_SANDBOX_ROOT: target },
+          homeDir,
+        })).rejects.toThrow('unsafe sandbox root');
+        await expect(readFile(sentinel, 'utf8')).resolves.toBe(`sentinel:${target}\n`);
       }
 
-      const codexRoot = path.join(homeDir, '.codex');
-      const alias = path.join(dataDir, 'codex-alias');
-      await symlink(codexRoot, alias);
-      const aliasedCache = path.join(alias, 'plugins', 'cache');
-      const aliasedSentinel = path.join(homeDir, '.codex', 'plugins', 'cache', 'alias-sentinel.txt');
+      const tmpSentinel = path.join(tmpdir(), `skillindex-reset-tmp-${path.basename(workspace)}.txt`);
+      await writeFile(tmpSentinel, 'tmp sentinel\n', 'utf8');
+      for (const target of ['/', tmpdir(), homedir(), path.join(homedir(), '.codex', 'plugins', 'cache')]) {
+        await expect(seedRepresentativeFixtures({
+          env: { SKILL_INDEX_DATA_DIR: dataDir, SKILL_INDEX_SANDBOX_ROOT: target },
+          homeDir,
+        })).rejects.toThrow('unsafe sandbox root');
+      }
+      await expect(readFile(tmpSentinel, 'utf8')).resolves.toBe('tmp sentinel\n');
+
+      const codexCache = path.join(homeDir, '.codex', 'plugins', 'cache');
+      await mkdir(codexCache, { recursive: true });
+      const alias = path.join(dataDir, 'sandbox');
+      const aliasedSentinel = path.join(codexCache, 'alias-sentinel.txt');
       await writeFile(aliasedSentinel, 'alias sentinel\n', 'utf8');
+      await symlink(codexCache, alias);
 
       await expect(seedRepresentativeFixtures({
-        env: { SKILL_INDEX_DATA_DIR: dataDir, SKILL_INDEX_SANDBOX_ROOT: aliasedCache },
+        env: { SKILL_INDEX_DATA_DIR: dataDir, SKILL_INDEX_SANDBOX_ROOT: alias },
         homeDir,
       })).rejects.toThrow('unsafe sandbox root');
       await expect(readFile(aliasedSentinel, 'utf8')).resolves.toBe('alias sentinel\n');
+
+      await rm(alias, { force: true });
+      const validSandboxRoot = path.join(dataDir, 'sandbox', 'nested-fixture-root');
+      await expect(seedRepresentativeFixtures({
+        env: { SKILL_INDEX_DATA_DIR: dataDir, SKILL_INDEX_SANDBOX_ROOT: validSandboxRoot },
+        homeDir,
+      })).resolves.toMatchObject({ sandboxRoot: validSandboxRoot });
+      await expect(readFile(path.join(validSandboxRoot, '.agents', 'skills', 'healthy-skill', 'SKILL.md'), 'utf8')).resolves.toContain('Healthy skill');
     } finally {
-      await Promise.all([rm(homeDir, { recursive: true, force: true }), rm(dataDir, { recursive: true, force: true })]);
+      await rm(path.join(tmpdir(), `skillindex-reset-tmp-${path.basename(workspace)}.txt`), { force: true });
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 

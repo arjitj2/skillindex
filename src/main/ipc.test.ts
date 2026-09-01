@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -17,7 +17,7 @@ import {
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import { getInventoryMode, setInventoryMode } from '@main/inventory-mode-session';
 import { completeOnboarding, setDevSidebarInventorySourceSwitcherVisible } from '@main/settings-state';
-import { assertSandboxRootSafeForReset, seedRepresentativeFixtures } from '@main/sandbox-fixtures';
+import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import { resolveSkillIndexPaths } from '@shared/skill-index-paths';
 
 import { registerIpcHandlers } from './ipc';
@@ -98,10 +98,13 @@ vi.mock('@main/settings-state', () => ({
   setPreferredCanonicalSourcePath: vi.fn(),
 }));
 
-vi.mock('@main/sandbox-fixtures', () => ({
-  assertSandboxRootSafeForReset: vi.fn(),
-  seedRepresentativeFixtures: vi.fn(),
-}));
+vi.mock('@main/sandbox-fixtures', async () => {
+  const actual = await vi.importActual<typeof import('@main/sandbox-fixtures')>('@main/sandbox-fixtures');
+  return {
+    ...actual,
+    seedRepresentativeFixtures: vi.fn(),
+  };
+});
 
 vi.mock('@main/scan-inventory', () => ({
   readCachedInventorySync: vi.fn(),
@@ -153,7 +156,6 @@ describe('registerIpcHandlers', () => {
   it('passes the process environment to the development sandbox reset handler', async () => {
     electronMocks.ipcHandle.mockClear();
     const seedRepresentativeFixturesMock = vi.mocked(seedRepresentativeFixtures);
-    const assertSandboxRootSafeForResetMock = vi.mocked(assertSandboxRootSafeForReset);
     seedRepresentativeFixturesMock.mockResolvedValue({
       fixtureSet: 'representative-agent-scan-foundation',
       sandboxRoot: '/tmp/skillindex-sandbox',
@@ -162,8 +164,11 @@ describe('registerIpcHandlers', () => {
     });
     const originalDevTools = process.env.SKILL_INDEX_ENABLE_DEV_TOOLS;
     const originalParserMatrix = process.env.SKILL_INDEX_SANDBOX_MCP_PARSER_MATRIX;
+    const originalDataDir = process.env.SKILL_INDEX_DATA_DIR;
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'skillindex-ipc-safe-data-'));
     process.env.SKILL_INDEX_ENABLE_DEV_TOOLS = '1';
     process.env.SKILL_INDEX_SANDBOX_MCP_PARSER_MATRIX = '1';
+    process.env.SKILL_INDEX_DATA_DIR = dataDir;
 
     try {
       registerIpcHandlers();
@@ -184,10 +189,6 @@ describe('registerIpcHandlers', () => {
       expect(seedOptions?.env).toBe(process.env);
       expect(seedOptions?.env?.SKILL_INDEX_SANDBOX_MCP_PARSER_MATRIX).toBe('1');
       expect(seedOptions?.paths?.sandboxRoot).toBe(resolveSkillIndexPaths({ env: process.env }).sandboxRoot);
-      expect(assertSandboxRootSafeForResetMock).toHaveBeenCalledWith(
-        expect.objectContaining({ sandboxRoot: seedOptions?.paths?.sandboxRoot }),
-        { env: process.env },
-      );
     } finally {
       if (originalDevTools === undefined) {
         delete process.env.SKILL_INDEX_ENABLE_DEV_TOOLS;
@@ -200,6 +201,46 @@ describe('registerIpcHandlers', () => {
       } else {
         process.env.SKILL_INDEX_SANDBOX_MCP_PARSER_MATRIX = originalParserMatrix;
       }
+      if (originalDataDir === undefined) {
+        delete process.env.SKILL_INDEX_DATA_DIR;
+      } else {
+        process.env.SKILL_INDEX_DATA_DIR = originalDataDir;
+      }
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an unsafe IPC reset before auditing or invoking the fixture seed', async () => {
+    electronMocks.ipcHandle.mockClear();
+    const seedRepresentativeFixturesMock = vi.mocked(seedRepresentativeFixtures);
+    seedRepresentativeFixturesMock.mockClear();
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'skillindex-ipc-unsafe-data-'));
+    const unsafeAuditLog = path.join(dataDir, 'sandbox-state', 'audit-log.jsonl');
+    const originalDevTools = process.env.SKILL_INDEX_ENABLE_DEV_TOOLS;
+    const originalDataDir = process.env.SKILL_INDEX_DATA_DIR;
+    const originalSandboxRoot = process.env.SKILL_INDEX_SANDBOX_ROOT;
+    process.env.SKILL_INDEX_ENABLE_DEV_TOOLS = '1';
+    process.env.SKILL_INDEX_DATA_DIR = dataDir;
+    process.env.SKILL_INDEX_SANDBOX_ROOT = dataDir;
+
+    try {
+      registerIpcHandlers();
+      const seedHandler = electronMocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === IPC_CHANNELS.seedRepresentativeFixtures,
+      )?.[1] as (() => Promise<SeedRepresentativeFixturesResult>) | undefined;
+      if (!seedHandler) throw new Error('Expected the seed representative fixtures IPC handler to be registered.');
+
+      const response = await seedHandler();
+      expect(isIpcErrorResponse(response)).toBe(true);
+      if (!isIpcErrorResponse(response)) throw new Error('Expected an IPC error response.');
+      expect(response.message).toContain('unsafe sandbox root');
+      expect(seedRepresentativeFixturesMock).not.toHaveBeenCalled();
+      await expect(readFile(unsafeAuditLog, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      restoreEnvironmentValue('SKILL_INDEX_ENABLE_DEV_TOOLS', originalDevTools);
+      restoreEnvironmentValue('SKILL_INDEX_DATA_DIR', originalDataDir);
+      restoreEnvironmentValue('SKILL_INDEX_SANDBOX_ROOT', originalSandboxRoot);
+      await rm(dataDir, { recursive: true, force: true });
     }
   });
 
@@ -512,6 +553,20 @@ function isOperationStartedAuditRecord(value: unknown): value is {
   return isRecord(value)
     && value.recordKind === 'operation-started'
     && isRecord(value.operation);
+}
+
+function restoreEnvironmentValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
+
+function isIpcErrorResponse(value: unknown): value is { __skillIndexIpcError: true; message: string } {
+  return isRecord(value)
+    && value.__skillIndexIpcError === true
+    && typeof value.message === 'string';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
