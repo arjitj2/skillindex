@@ -1280,8 +1280,8 @@ const BASE_FIXTURES: FixtureDefinition[] = [
   },
   {
     // The matching 1.0.0 plugin cache package is written below. The 1.1.0
-    // package intentionally differs so this starts Healthy with an update
-    // advisory, rather than a structural drift issue.
+    // package intentionally differs so the managed source participates in the
+    // same divergence choice as the Universal version.
     name: 'plugin-update-skill',
     expectedState: 'healthy',
     operations: [
@@ -2386,7 +2386,7 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
   });
   const versionChoiceNewSkill = buildSkillMarkdown({
     skillName: 'plugin-version-choice-skill',
-    description: 'A newer comparable managed source that still needs an explicit choice.',
+    description: 'A second managed source that still needs an explicit cache-version choice.',
     title: 'Plugin version choice skill',
     bodyLines: ['Plugin version choice version 1.1.0 selected content.'],
   });

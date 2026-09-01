@@ -1,6 +1,6 @@
 # Inventory Resolution Model
 
-Source of truth for inventory item types, issue names, candidate advisories, and
+Source of truth for inventory item types, issue names, candidate comparisons, and
 repair behavior. Keep this document aligned with `src/shared/contracts.ts`, the
 inventory scanners, resolution tests, and representative Sandbox fixtures.
 
@@ -41,28 +41,26 @@ A capability that exists only in one or more plugin-managed sources has the
 structural issue **Missing Universal**. Cache versions are alternatives for the
 user to inspect and select; they are not installed copies to compare for drift.
 Therefore differences among plugin candidates never create **Diverged Copies**
-for skills or **Definition Mismatch** for subagents or MCPs.
+for skills or **Definition Mismatch** for subagents or MCPs while Universal is
+missing.
 
-Use **Make Universal** to promote a selected plugin candidate when Universal is
-missing. Use **Update Universal from this version** from the non-blocking
-**Plugin Update Available** advisory when Universal already exists and a plugin
-candidate differs. That update replaces only Universal and refreshes derived,
-writable agent materializations. The cache remains untouched in both cases.
+Use **Use as Universal** to export a selected plugin candidate into Universal.
+Once Universal exists, any plugin candidate with different content participates
+in the ordinary **Diverged Copies** or **Definition Mismatch** issue alongside
+Universal. Selecting a plugin version replaces only Universal and refreshes
+derived, writable agent materializations. The cache remains untouched.
 
 Candidate labels describe current scan evidence only:
 
-- **Currently enabled in Codex** or **Currently enabled in Claude** means the
+- **Currently used in Codex** or **Currently used in Claude** means the
   matching host has that source enabled.
-- **Newer comparable plugin version** is a cautious hint only for semantic
-  versions in the same host, marketplace, and comparable version scheme.
-- **Cached copy—usage unknown** means there is no stronger current-state
-  evidence.
+- **Usage unknown** means there is no stronger current-state evidence.
 
-Versions with hashes or incomparable schemes are not ordered. Hashes,
-timestamps, package/skill counts, and content differences do not establish that
-one candidate is newest or correct. If two hosts actively use different
-versions, each candidate is labeled separately; Skill Index does not recommend
-one. The user selects the source in every promotion or update.
+Skill Index does not order cache versions. Version syntax, hashes, timestamps,
+package or skill counts, and content differences do not establish which source
+is newest or correct. If two hosts actively use different versions, each
+candidate is labeled separately; Skill Index does not recommend one. The user
+selects the source whenever Universal is created or changed.
 
 An enabled native plugin satisfies only that exact agent family for that exact
 capability. Skill Index does not create a duplicate local materialization in
@@ -91,14 +89,14 @@ modifying Universal, agent locations, or plugin cache files.
 | `missing-symlinks` | Missing Symlinks | Universal exists, but one or more compatible writable agent installs are absent. | Create symlinks to Universal in the writable missing installs. |
 | `missing-canonical` | Missing Universal | A skill exists outside Universal, including only as one or more plugin candidates, and no Universal package is present. | Select a readable source, copy the complete package into Universal, then replace or create writable agent links to Universal. |
 | `identical-copies` | Identical Copies | Multiple writable real-file copies have the same content instead of symlinking. | Keep or create Universal, then replace duplicate writable copies with symlinks. |
-| `diverged-copies` | Diverged Copies | Writable non-plugin real-file copies differ. | Make the selected real-file version Universal and replace existing writable copies with symlinks. |
-| `broken-symlink` | Broken Symlink | A skill symlink has no target. | Retarget the writable link to a real Universal package. A legacy link into a deleted plugin cache remains broken until a user selects a source to copy into Universal. |
+| `diverged-copies` | Diverged Copies | A writable non-plugin real-file copy or plugin-managed candidate differs from Universal. | Make the selected real-file version Universal and replace existing writable copies with symlinks. Plugin-managed candidates remain untouched. |
+| `broken-symlink` | Broken Symlink | A skill symlink has no target. | Retarget the writable link to a real Universal package. Repair is disabled until Universal exists, so a legacy link into a deleted plugin cache first requires resolving **Missing Universal**. |
 | `wrong-symlink-target` | Wrong Symlink Target | A skill symlink points somewhere other than Universal. | Retarget the writable link to Universal. |
 | `invalid-definition` | Invalid Definition | Required skill metadata or files are invalid. | Diagnostic only. |
 
 All links created or repaired by Skill Index target a Universal package, never a
-plugin cache. A differing managed source after Universal is healthy is an
-advisory, not a skill issue.
+plugin cache. A differing managed source after Universal exists is ordinary
+**Diverged Copies** drift.
 
 ## Subagents
 
@@ -106,17 +104,19 @@ advisory, not a skill issue.
 | --- | --- | --- | --- |
 | `missing-universal` | Missing Universal | A subagent exists in an agent location or plugin-managed source, but not in Universal. | Select a valid definition; write or translate it into Universal Markdown frontmatter, then render compatible writable agent files. |
 | `missing-from-agents` | Missing From Agents | Universal exists, but supported installed agents not satisfied by native plugin delivery are missing it. | Write Universal to writable agent locations, using symlinks where the format supports them. |
-| `definition-mismatch` | Definition Mismatch | Valid Universal and writable agent-local definitions differ. | Apply the selected portable definition to Universal and differing writable agent files while preserving target-local extras. |
+| `definition-mismatch` | Definition Mismatch | A valid writable agent-local or plugin-managed definition differs from Universal. | Apply the selected definition to Universal and differing writable agent files while preserving target-local extras. Plugin-managed candidates remain untouched. |
 | `identical-copies` | Identical Copies | A writable Markdown copy matches Universal but is not a symlink. | Replace the duplicate copy with a symlink to Universal. |
 | `broken-symlink` | Broken Symlink | A subagent symlink has no target. | Replace the writable link with a Universal-compatible target. |
 | `wrong-symlink-target` | Wrong Symlink Target | A subagent symlink points somewhere other than Universal. | Replace the writable link with a Universal-compatible target. |
 | `invalid-definition` | Invalid Definition | Required subagent fields or syntax are invalid. | Diagnostic only. |
 
 Plugin definitions are `managed-source` candidates. Their syntax can still be
-invalid or unsupported, but two plugin candidates with different definitions do
-not create a Definition Mismatch. Detectable plugin-specific tools, paths, and
-other dependencies are shown as evidence; they warn but do not prevent an
-explicit user export that can be mechanically written.
+invalid or unsupported. Different plugin candidates do not create a Definition
+Mismatch while Universal is missing; after Universal exists, a differing plugin
+definition participates in the ordinary mismatch choice. Detectable
+plugin-specific tools, paths, and other dependencies are shown as evidence;
+they warn but do not prevent an explicit user export that can be mechanically
+written.
 
 ## MCPs
 
@@ -143,7 +143,7 @@ inside `agentLocal` cannot override the portable Universal core.
 | --- | --- | --- | --- |
 | `missing-universal` | Missing Universal | A server exists in an agent config or plugin-managed source, but not in `~/.agents/mcp.json`. | Select the definition, write its portable core to Universal, and capture that family's native fields in `agentLocal`. |
 | `missing-from-agents` | Missing From Agents | Universal exists, but supported installed agents not satisfied by native plugin delivery are missing the server. | Write the Universal core plus only each target family's `agentLocal` block to writable supported configs. |
-| `definition-mismatch` | Definition Mismatch | Portable core differs from Universal, or a writable family's native fields differ from `agentLocal.<family>`. | Apply the selected core, preserve target native fields, and capture native fields back into Universal `agentLocal`. |
+| `definition-mismatch` | Definition Mismatch | A writable or plugin-managed portable core differs from Universal, or a writable family's native fields differ from `agentLocal.<family>`. | Apply the selected core, preserve target native fields, and capture native fields back into Universal `agentLocal`. Plugin-managed candidates remain untouched. |
 | `invalid-definition` | Invalid Definition | A server entry cannot be parsed as a supported MCP definition. | Diagnostic only. |
 | `connection-failed` | Connection Failed | A valid server definition failed optional connectivity verification. | Diagnostic only. |
 
@@ -193,11 +193,12 @@ Current managed-source fixture IDs include:
 
 - Resolution is scoped to one inventory source mode at a time, such as Live or
   Sandbox.
-- Managed sources participate in inventory visibility, explicit selection, and
-  update advisories, but not in installed-copy divergence.
+- Managed sources participate in inventory visibility and explicit selection.
+  Once Universal exists, differing managed sources participate in ordinary
+  divergence or definition mismatch without becoming writable install targets.
 - Unsupported formats and transports are not written. MCP missing-agent repair
   writes any writable supported targets and leaves unwritable targets unresolved.
 - Config writers preserve unrelated file fields and unrelated MCP server entries.
-- Auto-resolve stays conservative: a plugin promotion/update requires an
-  explicit selected candidate. It does not infer a choice from a cache version
-  or candidate count.
+- Auto-resolve stays conservative: exporting a plugin candidate or using one to
+  change Universal requires an explicit selection. It does not infer a choice
+  from a cache version or candidate count.
