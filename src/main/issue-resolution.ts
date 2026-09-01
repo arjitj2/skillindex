@@ -996,10 +996,12 @@ function createMcpResolutionTransaction(
 ): McpResolutionTransaction {
   let finalized = false;
   return {
-    async commit(): Promise<void> {
-      if (finalized) return;
-      finalized = true;
-      written.length = 0;
+    commit(): Promise<void> {
+      if (!finalized) {
+        finalized = true;
+        written.length = 0;
+      }
+      return Promise.resolve();
     },
     async rollback(): Promise<void> {
       if (finalized) return;
