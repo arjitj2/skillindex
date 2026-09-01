@@ -3427,6 +3427,8 @@ describe('resolveInventoryIssue', () => {
     const paths = await createPaths('skillindex-promote-plugin-mcp-');
     const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'plugin-mcp', '1.0.0');
     const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const updatedPluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'plugin-mcp', '1.1.0');
+    const updatedPluginConfigPath = path.join(updatedPluginRoot, '.mcp.json');
     const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
     const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const pluginConfig = `${JSON.stringify({
@@ -3440,6 +3442,11 @@ describe('resolveInventoryIssue', () => {
 
     await writeSkillFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'plugin-mcp', version: '1.0.0' }));
     await writeSkillFile(pluginConfigPath, pluginConfig);
+    const updatedPluginConfig = `${JSON.stringify({
+      mcpServers: { promoted: { command: 'node', args: ['${CODEX_PLUGIN_ROOT}/servers/promoted-1.1.js'] } },
+    }, null, 2)}\n`;
+    await writeSkillFile(path.join(updatedPluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'plugin-mcp', version: '1.1.0' }));
+    await writeSkillFile(updatedPluginConfigPath, updatedPluginConfig);
     await writeSkillFile(path.join(pluginRoot, 'servers', 'promoted.js'), 'plugin executable');
     await writeSkillFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."plugin-mcp@openai-curated"]\nenabled = true\n');
     await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
@@ -3468,6 +3475,18 @@ describe('resolveInventoryIssue', () => {
       status: 'healthy',
       issueReasons: [],
     });
+
+    const updatedSnapshot = await applyCapabilityAction({
+      entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'plugin-mcp:promoted', selectedVariantPath: updatedPluginConfigPath,
+    }, {
+      paths, includeSandboxSources: true, includeLiveSources: false, env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+    });
+    expect(await readFile(universalConfigPath, 'utf8')).toContain('promoted-1.1.js');
+    expect(await readFile(factoryConfigPath, 'utf8')).toContain('promoted-1.1.js');
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+    expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
+    expect(updatedSnapshot.mcps?.find((mcp) => mcp.name === 'plugin-mcp:promoted')?.managedSourceCandidates
+      ?.find((candidate) => candidate.path === updatedPluginConfigPath)?.relationship).toBe('matches-universal');
   });
 
   it('classifies and resolves native plugin MCP delivery only for the matching enabled plugin host', async () => {

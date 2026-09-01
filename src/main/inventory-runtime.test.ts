@@ -27,6 +27,18 @@ describe('inventory runtime', () => {
     }
   });
 
+  it('rejects malformed capability actions before creating an audit operation', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-invalid-action-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+
+    await expect(runtime.applyCapabilityAction({
+      entity: 'unknown', action: 'update-universal-from-plugin', capabilityName: 'demo', selectedVariantPath: '/tmp/demo',
+    } as never, { paths, includeSandboxSources: true, includeLiveSources: false })).rejects.toThrow('Invalid plugin update request.');
+    expect(await runtime.readAuditLog({}, { paths, includeSandboxSources: true, includeLiveSources: false })).toEqual([]);
+  });
+
   it('discovers newly available sources on rescan, rewrites cache, and starts watcher coverage immediately', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-'));
     const paths = resolveSkillIndexPaths({

@@ -131,27 +131,32 @@ export async function applyCapabilityAction(
   return updatedSnapshot;
 }
 
-function assertCapabilityActionRequest(request: CapabilityActionRequest): void {
-  if (!request || typeof request !== 'object') {
+export function assertCapabilityActionRequest(request: unknown): asserts request is CapabilityActionRequest {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new Error('Invalid capability action request.');
   }
-  if (request.action === 'choose-universal-version') {
-    if (request.entity !== 'skill'
-      || typeof request.skillName !== 'string' || !request.skillName.trim()
-      || typeof request.selectedVariantPath !== 'string' || !request.selectedVariantPath.trim()) {
+  const value = request as Record<string, unknown>;
+  if (value.action === 'choose-universal-version') {
+    if (value.entity !== 'skill'
+      || !isNonBlankString(value.skillName)
+      || !isNonBlankString(value.selectedVariantPath)) {
       throw new Error('Invalid choose Universal version request.');
     }
     return;
   }
-  if (request.action === 'update-universal-from-plugin') {
-    if (!['skill', 'mcp', 'subagent'].includes(request.entity)
-      || typeof request.capabilityName !== 'string' || !request.capabilityName.trim()
-      || typeof request.selectedVariantPath !== 'string' || !request.selectedVariantPath.trim()) {
+  if (value.action === 'update-universal-from-plugin') {
+    if ((value.entity !== 'skill' && value.entity !== 'mcp' && value.entity !== 'subagent')
+      || !isNonBlankString(value.capabilityName)
+      || !isNonBlankString(value.selectedVariantPath)) {
       throw new Error('Invalid plugin update request.');
     }
     return;
   }
-  throw new Error(`Unsupported capability action: ${(request as { action?: string }).action ?? 'unknown'}`);
+  throw new Error(`Unsupported capability action: ${typeof value.action === 'string' ? value.action : 'unknown'}`);
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function assertSelectedManagedPluginCandidate(

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { addSkill as addSkillToInventory } from '@main/add-skill';
 import { addSubagent as addSubagentToInventory, resolveAddSubagentName } from '@main/add-subagent';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
-import { applyCapabilityAction as applyCapabilityActionToInventory } from '@main/capability-actions';
+import { applyCapabilityAction as applyCapabilityActionToInventory, assertCapabilityActionRequest } from '@main/capability-actions';
 import { removeInventoryItem as removeInventoryItemFromInventory, type RemoveInventoryItemOptions } from '@main/remove-inventory-item';
 import {
   dismissDrift,
@@ -483,6 +483,10 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
         await refreshInFlight;
       }
 
+      // IPC payloads are untrusted at this boundary. Validate before reading
+      // inventory or creating an audit operation so rejected payloads are a
+      // true no-op.
+      assertCapabilityActionRequest(request);
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
       const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
