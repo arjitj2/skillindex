@@ -87,10 +87,12 @@ interface ParsedMcpConfigResult {
   owner: McpOwnerRecord;
 }
 
-interface PluginMcpIndexEntry {
+interface PluginMcpIdentityGroup {
   inventoryName: string;
-  coreDefinitionComparisonKey?: string;
+  coreDefinitionComparisonKeys: Set<string>;
 }
+
+type PluginMcpIndex = Map<string, PluginMcpIdentityGroup[]>;
 
 type PluginMcpSourcesByLocation = Map<string, PluginSourceRef>;
 
@@ -266,8 +268,8 @@ export function compareMcps(left: McpRecord, right: McpRecord): number {
   return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
 }
 
-function buildPluginMcpIndex(results: ParsedMcpConfigResult[]): Map<string, PluginMcpIndexEntry[]> {
-  const pluginMcpIndex = new Map<string, PluginMcpIndexEntry[]>();
+function buildPluginMcpIndex(results: ParsedMcpConfigResult[]): PluginMcpIndex {
+  const pluginMcpIndex: PluginMcpIndex = new Map();
 
   for (const result of results) {
     if (!result.owner.plugin) {
@@ -275,12 +277,21 @@ function buildPluginMcpIndex(results: ParsedMcpConfigResult[]): Map<string, Plug
     }
 
     for (const entry of result.entries) {
-      const existing = pluginMcpIndex.get(entry.name) ?? [];
-      existing.push({
-        inventoryName: `${result.owner.plugin.pluginName}:${entry.name}`,
-        coreDefinitionComparisonKey: getMcpCoreDefinitionComparisonKey(entry.location),
-      });
-      pluginMcpIndex.set(entry.name, existing);
+      const inventoryName = `${result.owner.plugin.pluginName}:${entry.name}`;
+      const identityGroups = pluginMcpIndex.get(entry.name) ?? [];
+      const identityGroup = identityGroups.find((candidate) => candidate.inventoryName === inventoryName);
+      const coreDefinitionComparisonKey = getMcpCoreDefinitionComparisonKey(entry.location);
+
+      if (identityGroup) {
+        identityGroup.coreDefinitionComparisonKeys.add(coreDefinitionComparisonKey);
+      } else {
+        identityGroups.push({
+          inventoryName,
+          coreDefinitionComparisonKeys: new Set([coreDefinitionComparisonKey]),
+        });
+      }
+
+      pluginMcpIndex.set(entry.name, identityGroups);
     }
   }
 
@@ -290,22 +301,23 @@ function buildPluginMcpIndex(results: ParsedMcpConfigResult[]): Map<string, Plug
 function createInventoryMcpName(
   entry: ParsedMcpEntry,
   owner: McpOwnerRecord,
-  pluginMcpIndex: Map<string, PluginMcpIndexEntry[]>,
+  pluginMcpIndex: PluginMcpIndex,
 ): string {
   if (owner.plugin) {
     return `${owner.plugin.pluginName}:${entry.name}`;
   }
 
-  const pluginCandidates = pluginMcpIndex.get(entry.name) ?? [];
-  const matchingDefinitionCandidates = pluginCandidates.filter((candidate) =>
-    candidate.coreDefinitionComparisonKey === getMcpCoreDefinitionComparisonKey(entry.location));
+  const identityGroups = pluginMcpIndex.get(entry.name) ?? [];
+  const entryCoreDefinitionComparisonKey = getMcpCoreDefinitionComparisonKey(entry.location);
+  const matchingIdentityGroups = identityGroups.filter((candidate) =>
+    candidate.coreDefinitionComparisonKeys.has(entryCoreDefinitionComparisonKey));
 
-  if (matchingDefinitionCandidates.length === 1) {
-    return matchingDefinitionCandidates[0].inventoryName;
+  if (matchingIdentityGroups.length === 1) {
+    return matchingIdentityGroups[0].inventoryName;
   }
 
-  if (pluginCandidates.length === 1) {
-    return pluginCandidates[0].inventoryName;
+  if (identityGroups.length === 1) {
+    return identityGroups[0].inventoryName;
   }
 
   return entry.name;

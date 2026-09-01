@@ -3739,6 +3739,119 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
   });
 
+  it('resolves Missing Universal when duplicate physical sources share one logical MCP identity', async () => {
+    const paths = await createPaths('skillindex-promote-duplicate-plugin-mcp-');
+    const curatedRoot = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'linear',
+      '0.0.3',
+    );
+    const remoteRoot = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated-remote',
+      'linear',
+      '5.0.1',
+    );
+    const curatedConfigPath = path.join(curatedRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const linearDefinition = { type: 'http', url: 'https://mcp.linear.app/mcp' };
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+    } as const;
+
+    await writeSkillFile(
+      path.join(curatedRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'linear', version: '0.0.3' }),
+    );
+    await writeSkillFile(
+      path.join(remoteRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'linear', version: '5.0.1' }),
+    );
+    await writeSkillFile(
+      curatedConfigPath,
+      `${JSON.stringify({ mcpServers: { linear: linearDefinition } }, null, 2)}\n`,
+    );
+    await writeSkillFile(
+      path.join(remoteRoot, '.mcp.json'),
+      `${JSON.stringify({ mcpServers: { linear: linearDefinition } }, null, 2)}\n`,
+    );
+    await writeSkillFile(universalConfigPath, `${JSON.stringify({ servers: {} }, null, 2)}\n`);
+
+    const before = await scanInventory(scanOptions);
+    expect(before.mcps?.find((mcp) => mcp.name === 'linear:linear')).toMatchObject({
+      issueReasons: ['missing-universal'],
+    });
+
+    const resolved = await resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: 'linear:linear',
+      selectedVariantPath: curatedConfigPath,
+    }, scanOptions);
+    const resolvedLinear = resolved.mcps?.find((mcp) => mcp.name === 'linear:linear');
+
+    expect(resolved.mcps?.some((mcp) => mcp.name === 'linear')).toBe(false);
+    expect(resolvedLinear?.locations.filter((location) => location.canonicalRole === 'managed-source')).toHaveLength(2);
+    expect(resolvedLinear?.issueReasons).not.toContain('missing-universal');
+    expect(await readFile(universalConfigPath, 'utf8')).toContain('"linear"');
+  });
+
+  it('rejects ambiguous plugin MCP promotion before writing Universal', async () => {
+    const paths = await createPaths('skillindex-promote-ambiguous-plugin-mcp-');
+    const alphaRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'alpha-tools', '1.0.0');
+    const betaRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'beta-tools', '1.0.0');
+    const alphaConfigPath = path.join(alphaRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const sharedDefinition = { type: 'http', url: 'https://mcp.example.test/shared' };
+    const universalBefore = `${JSON.stringify({ servers: {} }, null, 2)}\n`;
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+    } as const;
+
+    await writeSkillFile(
+      path.join(alphaRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'alpha-tools', version: '1.0.0' }),
+    );
+    await writeSkillFile(
+      path.join(betaRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'beta-tools', version: '1.0.0' }),
+    );
+    await writeSkillFile(alphaConfigPath, `${JSON.stringify({ mcpServers: { shared: sharedDefinition } }, null, 2)}\n`);
+    await writeSkillFile(
+      path.join(betaRoot, '.mcp.json'),
+      `${JSON.stringify({ mcpServers: { shared: sharedDefinition } }, null, 2)}\n`,
+    );
+    await writeSkillFile(universalConfigPath, universalBefore);
+
+    const before = await scanInventory(scanOptions);
+    expect(before.mcps?.find((mcp) => mcp.name === 'alpha-tools:shared')?.issueReasons)
+      .toContain('missing-universal');
+    expect(before.mcps?.find((mcp) => mcp.name === 'beta-tools:shared')?.issueReasons)
+      .toContain('missing-universal');
+
+    await expect(resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: 'alpha-tools:shared',
+      selectedVariantPath: alphaConfigPath,
+    }, scanOptions)).rejects.toThrow(/multiple plugin MCP identities.*shared/i);
+
+    expect(await readFile(universalConfigPath, 'utf8')).toBe(universalBefore);
+  });
+
   it('classifies and resolves native plugin MCP delivery only for the matching enabled plugin host', async () => {
     const paths = await createPaths('skillindex-native-plugin-mcp-matrix-');
     const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
@@ -3832,6 +3945,58 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(updateConfigPath, 'utf8')).toBe(updateConfig);
     expect(await readFile(universalConfigPath, 'utf8')).toBe(universalBefore);
     await expect(readFile(factoryConfigPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rolls back plugin MCP promotion when postcondition verification fails', async () => {
+    const paths = await createPaths('skillindex-plugin-mcp-postcondition-rollback-');
+    const pluginRoot = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'postcondition-mcp',
+      '1.0.0',
+    );
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const pluginConfig = `${JSON.stringify({
+      mcpServers: { shared: { command: 'node', args: ['plugin.js'] } },
+    }, null, 2)}\n`;
+    const universalBefore = `${JSON.stringify({
+      servers: { keepUniversal: { command: 'node', args: ['keep-universal.js'] } },
+    }, null, 2)}\n`;
+    const factoryBefore = `${JSON.stringify({
+      mcpServers: { keepFactory: { command: 'node', args: ['keep-factory.js'] } },
+      telemetry: { enabled: false },
+    }, null, 2)}\n`;
+
+    await writeSkillFile(
+      path.join(pluginRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'postcondition-mcp', version: '1.0.0' }),
+    );
+    await writeSkillFile(pluginConfigPath, pluginConfig);
+    await writeSkillFile(universalConfigPath, universalBefore);
+    await writeSkillFile(factoryConfigPath, factoryBefore);
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    await expect(resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: 'postcondition-mcp:shared',
+      selectedVariantPath: pluginConfigPath,
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+      testFailMcpPostcondition: true,
+    })).rejects.toThrow('Forced MCP postcondition failure.');
+
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+    expect(await readFile(universalConfigPath, 'utf8')).toBe(universalBefore);
+    expect(await readFile(factoryConfigPath, 'utf8')).toBe(factoryBefore);
   });
 
   it('resolves the representative parser-shape matrix MCP across sandbox agent config formats', async () => {

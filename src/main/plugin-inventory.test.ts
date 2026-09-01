@@ -513,6 +513,108 @@ describe('plugin inventory', () => {
     ]));
   });
 
+  it('groups duplicate physical plugin sources under one logical MCP identity', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-logical-identity-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: dataDir }, homeDir });
+    const curatedRoot = path.join(
+      homeDir,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'linear',
+      '0.0.3',
+    );
+    const remoteRoot = path.join(
+      homeDir,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated-remote',
+      'linear',
+      '5.0.1',
+    );
+    const linearDefinition = { type: 'http', url: 'https://mcp.linear.app/mcp' };
+
+    await writeJson(path.join(curatedRoot, '.codex-plugin', 'plugin.json'), {
+      name: 'linear',
+      version: '0.0.3',
+    });
+    await writeJson(path.join(remoteRoot, '.codex-plugin', 'plugin.json'), {
+      name: 'linear',
+      version: '5.0.1',
+    });
+    await writeJson(path.join(curatedRoot, '.mcp.json'), {
+      mcpServers: { linear: linearDefinition },
+    });
+    await writeJson(path.join(remoteRoot, '.mcp.json'), {
+      mcpServers: { linear: linearDefinition },
+    });
+    await writeJson(path.join(homeDir, '.agents', 'mcp.json'), {
+      servers: { linear: linearDefinition },
+    });
+
+    const inventory = await scanInventory({
+      paths,
+      homeDir,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    });
+    const logicalMcp = inventory.mcps?.find((mcp) => mcp.name === 'linear:linear');
+
+    expect(inventory.mcps?.some((mcp) => mcp.name === 'linear')).toBe(false);
+    expect(logicalMcp?.locations.filter((location) => location.canonicalRole === 'managed-source')).toHaveLength(2);
+    expect(logicalMcp?.locations.some((location) => location.provenance?.kind === 'universal')).toBe(true);
+    expect(logicalMcp?.issueReasons).not.toContain('missing-universal');
+  });
+
+  it('associates a shared config name with the only logical plugin identity whose core matches', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-matching-identity-'));
+    const homeDir = path.join(root, 'home');
+    const dataDir = path.join(root, 'data');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: dataDir }, homeDir });
+    const alphaRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'alpha-tools', '1.0.0');
+    const betaRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-curated', 'beta-tools', '1.0.0');
+    const alphaDefinition = { command: 'node', args: ['alpha.js'] };
+    const betaDefinition = { command: 'node', args: ['beta.js'] };
+
+    await writeJson(path.join(alphaRoot, '.codex-plugin', 'plugin.json'), {
+      name: 'alpha-tools',
+      version: '1.0.0',
+    });
+    await writeJson(path.join(betaRoot, '.codex-plugin', 'plugin.json'), {
+      name: 'beta-tools',
+      version: '1.0.0',
+    });
+    await writeJson(path.join(alphaRoot, '.mcp.json'), {
+      mcpServers: { shared: alphaDefinition },
+    });
+    await writeJson(path.join(betaRoot, '.mcp.json'), {
+      mcpServers: { shared: betaDefinition },
+    });
+    await writeJson(path.join(homeDir, '.agents', 'mcp.json'), {
+      servers: { shared: alphaDefinition },
+    });
+
+    const inventory = await scanInventory({
+      paths,
+      homeDir,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    });
+    const alphaMcp = inventory.mcps?.find((mcp) => mcp.name === 'alpha-tools:shared');
+    const betaMcp = inventory.mcps?.find((mcp) => mcp.name === 'beta-tools:shared');
+
+    expect(inventory.mcps?.some((mcp) => mcp.name === 'shared')).toBe(false);
+    expect(alphaMcp?.locations.some((location) => location.provenance?.kind === 'universal')).toBe(true);
+    expect(alphaMcp?.issueReasons).not.toContain('missing-universal');
+    expect(betaMcp?.issueReasons).toContain('missing-universal');
+  });
+
   it('groups plugin MCPs with same-name agent config entries without requiring normal MCPs in plugin configs', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-expectations-'));
     const homeDir = path.join(root, 'home');
