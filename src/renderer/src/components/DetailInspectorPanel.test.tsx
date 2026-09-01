@@ -166,6 +166,91 @@ describe('DetailInspectorPanel', () => {
     });
   });
 
+  it('groups plugin update evidence, path, and action into cohesive candidate cards', () => {
+    const baseSkill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'healthy-skill');
+    expect(baseSkill).toBeDefined();
+    const candidatePath = '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill';
+    const skill: SkillRecord = {
+      ...baseSkill!,
+      managedSourceCandidates: [{
+        path: candidatePath,
+        plugin: {
+          host: 'codex',
+          pluginId: 'tools@official',
+          pluginName: 'tools',
+          version: '1.1.0',
+          rootPath: '/Users/tester/.codex/plugins/cache/tools/1.1.0',
+          enabled: false,
+        },
+        evidence: 'cached-unknown',
+        relationship: 'differs-from-universal',
+        dependencyWarnings: [{
+          kind: 'plugin-contained-path',
+          detail: 'References a path inside the plugin cache.',
+        }],
+      }],
+    };
+
+    render(
+      <DetailInspectorPanel
+        model={buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex)}
+        onClose={vi.fn()}
+        onLocationAction={vi.fn()}
+      />,
+    );
+
+    const card = screen.getByRole('group', { name: 'Plugin update candidate: Cached copy—usage unknown' });
+    expect(card).toHaveClass('detail-inspector-panel__plugin-update-card');
+    expect(within(card).getByText('Cached copy—usage unknown')).toHaveClass(
+      'detail-inspector-panel__badge',
+      'detail-inspector-panel__badge--neutral',
+    );
+    expect(within(card).getByText(/tools\/1\.1\.0\/skills\/healthy-skill/)).toBeVisible();
+    expect(within(card).getByText('Detected dependency: References a path inside the plugin cache.')).toBeVisible();
+    expect(within(card).getByRole('button', { name: /Update Universal from this version:/i })).toHaveTextContent(
+      /^Update Universal$/,
+    );
+  });
+
+  it('announces and styles a pending plugin update candidate action', () => {
+    const baseSkill = representativeInventorySnapshot.skills.find((entry) => entry.name === 'healthy-skill');
+    expect(baseSkill).toBeDefined();
+    const candidatePath = '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill';
+    const skill: SkillRecord = {
+      ...baseSkill!,
+      managedSourceCandidates: [{
+        path: candidatePath,
+        plugin: {
+          host: 'codex',
+          pluginId: 'tools@official',
+          pluginName: 'tools',
+          version: '1.1.0',
+          rootPath: '/Users/tester/.codex/plugins/cache/tools/1.1.0',
+          enabled: false,
+        },
+        evidence: 'cached-unknown',
+        relationship: 'differs-from-universal',
+        dependencyWarnings: [],
+      }],
+    };
+
+    render(
+      <DetailInspectorPanel
+        isLocationActionPending
+        model={buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex)}
+        onClose={vi.fn()}
+        onLocationAction={vi.fn()}
+      />,
+    );
+
+    const pendingAction = screen.getByRole('button', {
+      name: /Applying plugin update: Cached copy—usage unknown/i,
+    });
+    expect(pendingAction).toBeDisabled();
+    expect(pendingAction).toHaveTextContent(/^Applying\.\.\.$/);
+    expect(pendingAction).toHaveClass('detail-inspector-panel__plugin-update-action');
+  });
+
   beforeEach(() => {
     openPathInEditorMock.mockReset();
     openPathInEditorMock.mockResolvedValue(undefined);

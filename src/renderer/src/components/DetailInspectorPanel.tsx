@@ -184,30 +184,45 @@ export function DetailInspectorPanel({
       ) : null}
 
       {model.pluginUpdateAdvisory ? (
-        <section className="detail-inspector-panel__detail-block" aria-label={model.pluginUpdateAdvisory.title}>
+        <section
+          aria-label={model.pluginUpdateAdvisory.title}
+          className="detail-inspector-panel__detail-block detail-inspector-panel__detail-block--plugin-update"
+        >
           <div className="detail-inspector-panel__section-header">
             <span className="detail-inspector-panel__section-label">{model.pluginUpdateAdvisory.title}</span>
             <span className="detail-inspector-panel__section-rule" aria-hidden="true" />
           </div>
-          <div className="detail-inspector-panel__structural-list" role="list">
+          <div className="detail-inspector-panel__plugin-update-list" role="list">
             {model.pluginUpdateAdvisory.candidates.map((candidate) => (
-              <div className="detail-inspector-panel__structural-item" key={candidate.path} role="listitem">
-                <div className="detail-inspector-panel__structural-row">
-                  <span className="detail-inspector-panel__structural-copy">
-                    <strong>{candidate.evidenceLabel}</strong>
-                    <span>{formatPath(candidate.path, 72)}</span>
+              <div key={candidate.path} role="listitem">
+                <div
+                  aria-label={`Plugin update candidate: ${candidate.evidenceLabel}`}
+                  className="detail-inspector-panel__plugin-update-card"
+                  role="group"
+                >
+                  <span className="detail-inspector-panel__plugin-update-copy">
+                    <span className="detail-inspector-panel__badge detail-inspector-panel__badge--neutral">
+                      {candidate.evidenceLabel}
+                    </span>
+                    <span className="detail-inspector-panel__plugin-update-path" title={formatDisplayPath(candidate.path)}>
+                      {formatPath(candidate.path, 72)}
+                    </span>
                     {candidate.warnings.map((warning, index) => (
-                      <span key={`${warning.label}-${index}`}>{warning.label}: {warning.detail}</span>
+                      <span className="detail-inspector-panel__plugin-update-warning" key={`${warning.label}-${index}`}>
+                        {warning.label}: {warning.detail}
+                      </span>
                     ))}
                   </span>
                   <button
-                    aria-label={`${candidate.action.label}: ${candidate.evidenceLabel}, ${formatDisplayPath(candidate.path)}`}
-                    className="detail-inspector-panel__location-action"
+                    aria-label={isLocationActionPending
+                      ? `Applying plugin update: ${candidate.evidenceLabel}, ${formatDisplayPath(candidate.path)}`
+                      : `${candidate.action.label}: ${candidate.evidenceLabel}, ${formatDisplayPath(candidate.path)}`}
+                    className="detail-inspector-panel__footer-action detail-inspector-panel__footer-action--secondary detail-inspector-panel__plugin-update-action"
                     disabled={isLocationActionPending}
                     type="button"
                     onClick={() => onLocationAction?.(candidate.action)}
                   >
-                    {isLocationActionPending ? 'Applying...' : candidate.action.label}
+                    {isLocationActionPending ? 'Applying...' : 'Update Universal'}
                   </button>
                 </div>
               </div>
