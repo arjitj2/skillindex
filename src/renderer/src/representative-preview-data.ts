@@ -1201,6 +1201,16 @@ export const representativeSeededFixtures: SeedRepresentativeFixturesResult = {
       expectedState: 'single-source-noncanonical',
       expectedLocationCount: 1,
     },
+    {
+      name: 'plugin-update-skill',
+      expectedState: 'healthy',
+      expectedLocationCount: 4,
+    },
+    {
+      name: 'native-plugin-delivery:native-plugin-skill',
+      expectedState: 'healthy',
+      expectedLocationCount: 4,
+    },
   ],
 };
 

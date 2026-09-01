@@ -1375,6 +1375,47 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
+  it('repairs the seeded legacy plugin cache link through a new Universal package', async () => {
+    const paths = await createPaths('skillindex-resolve-legacy-plugin-fixture-');
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const skillName = 'legacy-plugin-link-skill';
+    const pluginSkillPath = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'sandbox-fixtures',
+      skillName,
+      '2.0.0',
+      'skills',
+      skillName,
+    );
+    const universalPath = path.join(paths.sandboxRoot, '.agents', 'skills', skillName);
+    const claudePath = path.join(paths.sandboxRoot, '.claude', 'skills', skillName);
+
+    await seedRepresentativeFixtures({ paths });
+    const pluginBefore = await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8');
+    await expect(realpath(claudePath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'missing-canonical',
+      skillName,
+      selectedVariantPath: pluginSkillPath,
+    }, scanOptions);
+    const repaired = await resolveInventoryIssue({
+      entity: 'skill',
+      issue: 'broken-symlink',
+      skillName,
+      selectedVariantPath: universalPath,
+    }, scanOptions);
+
+    expect(await readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).toBe(pluginBefore);
+    expect(await realpath(claudePath)).toBe(await realpath(universalPath));
+    expect(await readFile(path.join(pluginSkillPath, 'SKILL.md'), 'utf8')).toBe(pluginBefore);
+    expect(repaired.skills.find((skill) => skill.name === skillName)?.issueReasons).not.toContain('broken-symlink');
+  });
+
   it('does not repair a broken link when the Universal directory is symlinked into a plugin cache', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-target-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));

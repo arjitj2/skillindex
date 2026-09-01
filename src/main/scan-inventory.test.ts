@@ -743,7 +743,7 @@ describe('representative-agent scan foundation', () => {
 
     expect(seeded.fixtureSet).toBe('representative-agent-scan-foundation');
     expect(seeded.ignoredPaths).toHaveLength(2);
-    expect(inventory.skills).toHaveLength(89);
+    expect(inventory.skills).toHaveLength(94);
     expect(inventory.skills.map((skill) => skill.name)).toEqual(expect.arrayContaining([
       'broken-symlink-skill',
       'double-broken-symlink-skill',
@@ -777,6 +777,11 @@ describe('representative-agent scan foundation', () => {
       'plugin-manual-diverged-skill',
       'plugin-manual-identical-skill',
       'plugin-readonly-skill',
+      'plugin-single-source-skill',
+      'plugin-version-choice-skill',
+      'plugin-update-skill',
+      'legacy-plugin-link-skill',
+      'native-plugin-delivery:native-plugin-skill',
       'example-workflow-kit:idea-shaping',
       'example-workflow-kit:handoff-notes',
       'example-workflow-kit:handoff-notes-with-static',
@@ -881,6 +886,40 @@ describe('representative-agent scan foundation', () => {
       .map((location) => location.provenance?.plugin?.version)
       .sort()).toEqual(['1.0.0', '1.1.0']);
     expect(versionShadowSkill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-single-source-skill')).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+      managedSourceCandidates: [objectContaining({ relationship: 'universal-missing' })],
+    });
+    const pluginVersionChoiceSkill = inventory.skills.find((skill) => skill.name === 'plugin-version-choice-skill');
+    expect(pluginVersionChoiceSkill).toMatchObject({
+      structuralState: 'single-source-noncanonical',
+      issueReasons: ['missing-canonical'],
+    });
+    expect(pluginVersionChoiceSkill?.managedSourceCandidates).toEqual(arrayContaining([
+      objectContaining({ plugin: objectContaining({ version: '1.0.0' }), evidence: 'cached-unknown' }),
+      objectContaining({ plugin: objectContaining({ version: 'd6169bef' }), evidence: 'cached-unknown' }),
+    ]));
+    expect(pluginVersionChoiceSkill?.managedSourceCandidates).toHaveLength(2);
+    expect(pluginVersionChoiceSkill?.issueReasons).not.toContain('diverged-copies');
+    expect(pluginVersionChoiceSkill?.detailDiagnostics.duplicateCandidates).toEqual([]);
+    expect(inventory.skills.find((skill) => skill.name === 'plugin-update-skill')).toMatchObject({
+      structuralState: 'healthy',
+      issueReasons: [],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
+        objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
+      ]),
+    });
+    const legacyPluginLinkSkill = inventory.skills.find((skill) => skill.name === 'legacy-plugin-link-skill');
+    expect(legacyPluginLinkSkill?.issueReasons).toEqual(expect.arrayContaining(['missing-canonical', 'broken-symlink']));
+    expect(legacyPluginLinkSkill?.issueReasons).not.toContain('diverged-copies');
+    expect(legacyPluginLinkSkill?.managedSourceCandidates).toEqual([
+      objectContaining({ relationship: 'universal-missing', plugin: objectContaining({ version: '2.0.0' }) }),
+    ]);
+    const nativePluginSkill = inventory.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill');
+    expect(nativePluginSkill).toMatchObject({ structuralState: 'healthy', issueReasons: [] });
+    expect(nativePluginSkill?.detailDiagnostics.missingInstallSources?.map((source) => source.sourceId)).not.toContain('sandbox-claude');
     expect(inventory.skills.find((skill) => skill.name === 'mixed-plugin-skill')).toMatchObject({
       structuralState: 'single-source-noncanonical',
       issueReasons: ['missing-canonical'],
@@ -983,7 +1022,58 @@ describe('representative-agent scan foundation', () => {
       'muted-extra-mcp',
       'shared-stable-mcp-01',
       'shared-stable-mcp-02',
+      'plugin-remote-mcp:plugin-remote-mcp',
+      'plugin-bound-mcp:plugin-bound-mcp',
+      'plugin-update-mcp:plugin-update-mcp',
+      'native-plugin-delivery:native-plugin-mcp',
     ]));
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-remote-mcp:plugin-remote-mcp')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      managedSourceCandidates: [objectContaining({ dependencyWarnings: [] })],
+    });
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-bound-mcp:plugin-bound-mcp')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      managedSourceCandidates: [objectContaining({
+        dependencyWarnings: arrayContaining([
+          objectContaining({ kind: 'plugin-root-variable' }),
+          objectContaining({ kind: 'plugin-contained-path' }),
+          objectContaining({ kind: 'provider-specific-field' }),
+        ]),
+      })],
+    });
+    expect(inventory.mcps?.find((mcp) => mcp.name === 'plugin-update-mcp:plugin-update-mcp')).toMatchObject({
+      status: 'healthy',
+      issueReasons: [],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
+        objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
+      ]),
+    });
+    const nativePluginMcp = inventory.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp');
+    expect(nativePluginMcp?.missingLocations).toEqual([]);
+    expect(nativePluginMcp).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(nativePluginMcp?.expectedLocations?.map((location) => location.agentId)).not.toContain('sandbox-claude');
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-version-choice-subagent:plugin-version-choice-subagent')).toMatchObject({
+      status: 'needs-attention',
+      issueReasons: ['missing-universal'],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), evidence: 'cached-unknown' }),
+        objectContaining({ plugin: objectContaining({ version: 'd6169bef' }), evidence: 'cached-unknown' }),
+      ]),
+    });
+    expect(inventory.subagents?.find((subagent) => subagent.name === 'plugin-update-subagent:plugin-update-subagent')).toMatchObject({
+      status: 'healthy',
+      issueReasons: [],
+      managedSourceCandidates: arrayContaining([
+        objectContaining({ plugin: objectContaining({ version: '1.0.0' }), relationship: 'matches-universal' }),
+        objectContaining({ plugin: objectContaining({ version: '1.1.0' }), relationship: 'differs-from-universal' }),
+      ]),
+    });
+    const nativePluginSubagent = inventory.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent');
+    expect(nativePluginSubagent).toMatchObject({ status: 'healthy', issueReasons: [] });
+    expect(nativePluginSubagent?.expectedLocations?.map((location) => location.agentId)).not.toContain('sandbox-claude');
     expect(inventory.mcps?.find((mcp) => mcp.name === 'missing-from-agents-mcp')).toMatchObject({
       status: 'needs-attention',
       issueReasons: ['missing-from-agents'],
@@ -1348,6 +1438,42 @@ describe('representative-agent scan foundation', () => {
       'missing-from-agents',
       'invalid-definition',
     ]));
+  });
+
+  it('limits enabled native plugin delivery to its originating host and exact plugin', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-native-fixture-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const claudeSettingsPath = path.join(paths.sandboxRoot, '.claude', 'settings.json');
+
+    await seedRepresentativeFixtures({ paths });
+    const enabled = await scanInventory(scanOptions);
+    expect(enabled.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill')?.detailDiagnostics
+      .missingInstallSources?.map((source) => source.sourceId)).not.toContain('sandbox-claude');
+    expect(enabled.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent')?.expectedLocations
+      ?.map((location) => location.agentId)).not.toContain('sandbox-claude');
+    expect(enabled.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp')?.expectedLocations
+      ?.map((location) => location.agentId)).not.toContain('sandbox-claude');
+
+    await writeFile(claudeSettingsPath, `${JSON.stringify({ enabledPlugins: {} }, null, 2)}\n`, 'utf8');
+    const disabled = await scanInventory(scanOptions);
+    expect(disabled.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill')?.detailDiagnostics
+      .missingInstallSources?.map((source) => source.sourceId)).toContain('sandbox-claude');
+    expect(disabled.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+    expect(disabled.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+
+    await writeFile(claudeSettingsPath, `${JSON.stringify({
+      enabledPlugins: { 'alloy-kit@sandbox-gallery': true },
+    }, null, 2)}\n`, 'utf8');
+    const unrelated = await scanInventory(scanOptions);
+    expect(unrelated.skills.find((skill) => skill.name === 'native-plugin-delivery:native-plugin-skill')?.detailDiagnostics
+      .missingInstallSources?.map((source) => source.sourceId)).toContain('sandbox-claude');
+    expect(unrelated.subagents?.find((subagent) => subagent.name === 'native-plugin-delivery:native-plugin-subagent')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
+    expect(unrelated.mcps?.find((mcp) => mcp.name === 'native-plugin-delivery:native-plugin-mcp')?.missingLocations
+      ?.map((location) => location.agentId)).toContain('sandbox-claude');
   });
 
   it('seeds an opt-in parser-shape MCP matrix for supported sandbox agent config formats', async () => {
@@ -2031,7 +2157,7 @@ describe('representative-agent scan foundation', () => {
       rootPath: path.join(paths.sandboxRoot, '.claude', 'plugins', 'sandbox-plugin-pack'),
       manifestPath: path.join(paths.sandboxRoot, '.claude', 'plugins', 'sandbox-plugin-pack', '.claude-plugin', 'plugin.json'),
     }));
-    expect(seeded.skills).toHaveLength(78);
+    expect(seeded.skills).toHaveLength(80);
     expect(seeded.skills).toEqual(expect.arrayContaining([
       {
         name: 'healthy-skill',
@@ -2062,6 +2188,16 @@ describe('representative-agent scan foundation', () => {
         name: 'plugin-manual-diverged-skill',
         expectedState: 'diverged-drift',
         expectedLocationCount: 2,
+      },
+      {
+        name: 'plugin-update-skill',
+        expectedState: 'healthy',
+        expectedLocationCount: 4,
+      },
+      {
+        name: 'native-plugin-delivery:native-plugin-skill',
+        expectedState: 'healthy',
+        expectedLocationCount: 4,
       },
       {
         name: 'representative-diverged-drift-skill-02',
