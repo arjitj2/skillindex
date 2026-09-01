@@ -1729,6 +1729,68 @@ describe('inventory runtime', () => {
     expect((await lstat(codexConfig)).mode).toBe(codexMode);
   });
 
+  it('resolves a writable MCP definition mismatch without auditing its matching managed plugin source', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-mcp-plugin-mismatch-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-github', '1.0.0');
+    const pluginConfig = path.join(pluginRoot, '.mcp.json');
+    const universalConfig = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const opencodeConfig = path.join(paths.sandboxRoot, '.config', 'opencode', 'opencode.json');
+    const url = 'https://api.githubcopilot.com/mcp/';
+    const portableDefinition = {
+      type: 'http',
+      url,
+      bearer_token_env_var: 'GITHUB_PAT_TOKEN',
+    };
+    const pluginBefore = `${JSON.stringify({ mcpServers: { github: portableDefinition } }, null, 2)}\n`;
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-github', version: '1.0.0' })),
+      writeRuntimeFile(pluginConfig, pluginBefore),
+      writeRuntimeFile(universalConfig, `${JSON.stringify({ servers: { github: portableDefinition } }, null, 2)}\n`),
+      writeRuntimeFile(opencodeConfig, `${JSON.stringify({ mcp: { github: { type: 'remote', url } } }, null, 2)}\n`),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."runtime-github@official"]\nenabled = true\n'),
+    ]);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex,opencode' },
+    } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    const mcpName = 'runtime-github:github';
+    const github = before.mcps?.find((mcp) => mcp.name === mcpName);
+    expect(github?.issueReasons).toContain('definition-mismatch');
+    expect(github?.locations.find((location) => location.agentId.startsWith('plugin:'))?.configPath).toBe(pluginConfig);
+
+    const after = await runtime.resolveIssue({
+      entity: 'mcp',
+      issue: 'definition-mismatch',
+      mcpName,
+      selectedVariantPath: universalConfig,
+    });
+
+    expect(after.mcps?.find((mcp) => mcp.name === mcpName)?.issueReasons).not.toContain('definition-mismatch');
+    expect(await readFile(pluginConfig, 'utf8')).toBe(pluginBefore);
+    expect(JSON.parse(await readFile(opencodeConfig, 'utf8'))).toMatchObject({
+      mcp: {
+        github: {
+          type: 'remote',
+          url,
+          headers: { Authorization: 'Bearer {env:GITHUB_PAT_TOKEN}' },
+        },
+      },
+    });
+    const [operation] = await runtime.readAuditLog();
+    const physicalPluginRoot = await realpath(pluginRoot);
+    expect(operation.actions.some((action) => action.path?.startsWith(physicalPluginRoot))).toBe(false);
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      await realpath(universalConfig),
+      await realpath(opencodeConfig),
+    ]));
+  });
+
   it('audits and undoes an initial plugin MCP promotion across Universal and derived configs', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-mcp-plugin-promotion-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });

@@ -2257,7 +2257,7 @@ function buildMcpMutationTarget(
   throw new Error(`Missing writable MCP config metadata for ${agentId}.`);
 }
 
-function buildWritableMcpMutationTarget(
+export function buildWritableMcpMutationTarget(
   snapshot: SkillInventorySnapshot,
   agentId: string,
   configPath: string | undefined,
