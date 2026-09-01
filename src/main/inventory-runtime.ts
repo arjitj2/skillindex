@@ -489,7 +489,9 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
           title: buildCapabilityActionAuditTitle(request),
           summary: 'Skill Index capability metadata changed.',
           sourceMode: resolveAuditSourceMode(lastScanOptions),
-          entity: { type: 'skill', name: request.skillName },
+          entity: request.action === 'choose-universal-version'
+            ? { type: 'skill', name: request.skillName }
+            : { type: request.entity, name: request.capabilityName },
           paths: resolveAuditPaths(lastScanOptions),
           includeCache: false,
         }),
@@ -850,6 +852,8 @@ function buildCapabilityActionAuditTitle(request: CapabilityActionRequest): stri
   switch (request.action) {
     case 'choose-universal-version':
       return `Chose Universal version for ${request.skillName}`;
+    case 'update-universal-from-plugin':
+      return `Update ${request.capabilityName} Universal from plugin source`;
   }
 }
 

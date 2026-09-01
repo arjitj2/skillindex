@@ -22,7 +22,11 @@ import {
 
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
-import { resolveInventoryIssue } from '@main/issue-resolution';
+import {
+  resolveInventoryIssue,
+  updateMcpUniversalFromPluginSource,
+  updateSubagentUniversalFromPluginSource,
+} from '@main/issue-resolution';
 
 export interface CapabilityActionOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
@@ -65,6 +69,42 @@ export async function applyCapabilityAction(
       });
       break;
     }
+    case 'update-universal-from-plugin': {
+      switch (request.entity) {
+        case 'skill': {
+          const skill = findSkill(snapshot, request.capabilityName);
+          assertSelectedManagedPluginCandidate(skill, request.selectedVariantPath);
+          return makeSkillCanonical({
+            skillName: skill.name,
+            selectedVariantPath: request.selectedVariantPath,
+          }, {
+            ...options,
+            paths,
+          });
+        }
+        case 'mcp': {
+          const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.capabilityName);
+          if (!mcp) throw new Error(`MCP "${request.capabilityName}" is no longer available.`);
+          assertSelectedManagedPluginCandidate(mcp, request.selectedVariantPath);
+          await updateMcpUniversalFromPluginSource(snapshot, mcp, request.selectedVariantPath, {
+            ...options,
+            paths,
+          });
+          break;
+        }
+        case 'subagent': {
+          const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.capabilityName);
+          if (!subagent) throw new Error(`Subagent "${request.capabilityName}" is no longer available.`);
+          assertSelectedManagedPluginCandidate(subagent, request.selectedVariantPath);
+          await updateSubagentUniversalFromPluginSource(snapshot, subagent, request.selectedVariantPath, {
+            ...options,
+            paths,
+          });
+          break;
+        }
+      }
+      break;
+    }
     default: {
       const unsupported = request as { action?: string };
       throw new Error(`Unsupported capability action: ${unsupported.action ?? 'unknown'}`);
@@ -88,6 +128,17 @@ export async function applyCapabilityAction(
   }
 
   return updatedSnapshot;
+}
+
+function assertSelectedManagedPluginCandidate(
+  capability: Pick<SkillRecord, 'managedSourceCandidates'>,
+  selectedVariantPath: string,
+): void {
+  const candidate = capability.managedSourceCandidates?.find((entry) =>
+    entry.path === selectedVariantPath && entry.relationship === 'differs-from-universal');
+  if (!candidate) {
+    throw new Error('Choose a current readable plugin update candidate before updating Universal.');
+  }
 }
 
 async function persistSkillUniversalDecision(

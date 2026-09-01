@@ -54,6 +54,45 @@ function expectFirstTwoLocations(skill: SkillRecord): [SkillRecord['locations'][
 }
 
 describe('buildSkillInspectorModel', () => {
+  it('shows a non-problem plugin update advisory for a healthy skill', () => {
+    const skill: SkillRecord = {
+      ...findRepresentativeSkill('healthy-skill'),
+      managedSourceCandidates: [{
+        path: '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill',
+        plugin: {
+          host: 'codex',
+          pluginId: 'tools@official',
+          pluginName: 'tools',
+          version: '1.1.0',
+          rootPath: '/Users/tester/.codex/plugins/cache/tools/1.1.0',
+          enabled: true,
+        },
+        evidence: 'enabled-installation',
+        relationship: 'differs-from-universal',
+        dependencyWarnings: [{
+          kind: 'plugin-contained-path',
+          detail: 'References a bundled path.',
+        }],
+      }],
+    };
+
+    const model = buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex);
+
+    expect(model.problems).toEqual([]);
+    expect(model.problemCountLabel).toBe('0 problems');
+    expect(model.pluginUpdateAdvisory).toEqual({
+      title: 'Plugin Update Available',
+      candidates: [objectContaining({
+        evidenceLabel: 'Currently enabled in Codex',
+        action: objectContaining({
+          kind: 'update-universal-from-plugin',
+          label: 'Update Universal from this version',
+        }),
+        warnings: [objectContaining({ label: 'Detected dependency' })],
+      })],
+    });
+  });
+
   it('builds definition files for a healthy skill without needing an active problem', () => {
     const healthyPath = packagePath('~/.skillindex/sandbox/.agents/skills/healthy-skill.md');
     const skill = withPackageFiles(findRepresentativeSkill('healthy-skill'), {

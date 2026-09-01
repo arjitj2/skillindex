@@ -183,6 +183,38 @@ export function DetailInspectorPanel({
         </section>
       ) : null}
 
+      {model.pluginUpdateAdvisory ? (
+        <section className="detail-inspector-panel__detail-block" aria-label={model.pluginUpdateAdvisory.title}>
+          <div className="detail-inspector-panel__section-header">
+            <span className="detail-inspector-panel__section-label">{model.pluginUpdateAdvisory.title}</span>
+            <span className="detail-inspector-panel__section-rule" aria-hidden="true" />
+          </div>
+          <div className="detail-inspector-panel__structural-list" role="list">
+            {model.pluginUpdateAdvisory.candidates.map((candidate) => (
+              <div className="detail-inspector-panel__structural-item" key={candidate.path} role="listitem">
+                <div className="detail-inspector-panel__structural-row">
+                  <span className="detail-inspector-panel__structural-copy">
+                    <strong>{candidate.evidenceLabel}</strong>
+                    <span>{formatPath(candidate.path, 72)}</span>
+                    {candidate.warnings.map((warning, index) => (
+                      <span key={`${warning.label}-${index}`}>{warning.label}: {warning.detail}</span>
+                    ))}
+                  </span>
+                  <button
+                    className="detail-inspector-panel__location-action"
+                    disabled={isLocationActionPending}
+                    type="button"
+                    onClick={() => onLocationAction?.(candidate.action)}
+                  >
+                    {isLocationActionPending ? 'Applying...' : candidate.action.label}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="detail-inspector-panel__tab-block" aria-label={`${ariaLabel} views`}>
         <div className="detail-inspector-panel__tab-list" role="tablist" aria-label={`${ariaLabel} views`}>
           <button

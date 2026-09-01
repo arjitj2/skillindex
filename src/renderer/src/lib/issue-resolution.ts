@@ -1,4 +1,5 @@
 import type {
+  CapabilityActionRequest,
   McpResolvableIssue,
   McpRecord,
   ResolveIssueRequest,
@@ -23,6 +24,29 @@ import { getSkillAccessState } from '../inventory-view-model';
 export interface ResolveActionState {
   disabledReason: string | null;
   request: ResolveIssueRequest | null;
+}
+
+export function getPluginUpdateActionRequest({
+  capabilityName,
+  entity,
+  inspectorModel,
+  selectedVariantPath,
+}: {
+  capabilityName: string;
+  entity: 'skill' | 'mcp' | 'subagent';
+  inspectorModel: InspectorModel | null;
+  selectedVariantPath: string;
+}): CapabilityActionRequest | null {
+  const candidate = inspectorModel?.pluginUpdateAdvisory?.candidates.find((entry) =>
+    entry.path === selectedVariantPath);
+  return candidate
+    ? {
+        entity,
+        action: 'update-universal-from-plugin',
+        capabilityName,
+        selectedVariantPath: candidate.path,
+      }
+    : null;
 }
 
 const SKILL_RESOLVABLE_ISSUES = new Set([

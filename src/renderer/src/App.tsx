@@ -1041,7 +1041,10 @@ export default function App() {
     try {
       const nextInventorySnapshot = await desktopApi.applyCapabilityAction(request);
       applyInventorySnapshot(nextInventorySnapshot);
-      await showAppToastWithLatestUndo('Capability updated', `${request.skillName} metadata was updated.`);
+      const capabilityName = request.action === 'choose-universal-version'
+        ? request.skillName
+        : request.capabilityName;
+      await showAppToastWithLatestUndo('Capability updated', `${capabilityName} was updated.`);
     } catch (error) {
       showErrorToast('Capability update failed', error);
     } finally {
@@ -1662,15 +1665,15 @@ export default function App() {
           inventorySnapshot={inventorySnapshot}
           isAutoResolving={isAutoResolving}
           isDismissingDrift={isDismissingDrift}
+          isApplyingCapabilityAction={isApplyingCapabilityAction}
           isResolvingIssue={isResolvingIssue}
           isRemovingInventoryItem={isRemovingInventoryItem}
-          isApplyingCapabilityAction={isApplyingCapabilityAction}
           isRescanning={isRescanActionBusy}
           onAutoResolve={() => { void handleAutoResolve('skill'); }}
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onDismissDrift={handleDismissDrift}
-          onResolveIssue={handleResolveIssue}
           onApplyCapabilityAction={handleCapabilityAction}
+          onResolveIssue={handleResolveIssue}
           onOpenPluginSource={openPluginFromProvenance}
           onRequestRemove={handleRequestRemoveInventoryItem}
           onRescan={triggerManualRescan}
@@ -1701,6 +1704,7 @@ export default function App() {
           inventorySnapshot={inventorySnapshot}
           isAutoResolving={isAutoResolving}
           isDismissingDrift={isDismissingDrift}
+          isApplyingCapabilityAction={isApplyingCapabilityAction}
           isResolvingIssue={isResolvingIssue}
           isRemovingInventoryItem={isRemovingInventoryItem}
           isRescanning={isRescanActionBusy}
@@ -1711,6 +1715,7 @@ export default function App() {
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetMcpSelection}
           onDismissDrift={handleDismissDrift}
+          onApplyCapabilityAction={handleCapabilityAction}
           onOpenPluginSource={openPluginFromProvenance}
           onRequestRemove={handleRequestRemoveInventoryItem}
           onResolveIssue={handleResolveIssue}
@@ -1735,6 +1740,7 @@ export default function App() {
           inventorySnapshot={inventorySnapshot}
           isAutoResolving={isAutoResolving}
           isDismissingDrift={isDismissingDrift}
+          isApplyingCapabilityAction={isApplyingCapabilityAction}
           isResolvingIssue={isResolvingIssue}
           isRemovingInventoryItem={isRemovingInventoryItem}
           isRescanning={isRescanActionBusy}
@@ -1742,6 +1748,7 @@ export default function App() {
           onCancelMcpConnectivityTest={onCancelMcpConnectivityTest}
           onClearSelection={resetSubagentSelection}
           onDismissDrift={handleDismissDrift}
+          onApplyCapabilityAction={handleCapabilityAction}
           onOpenPluginSource={openPluginFromProvenance}
           onRequestRemove={handleRequestRemoveInventoryItem}
           onResolveIssue={handleResolveIssue}

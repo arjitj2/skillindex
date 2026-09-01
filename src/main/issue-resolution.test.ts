@@ -1841,7 +1841,7 @@ describe('resolveInventoryIssue', () => {
       ]);
   });
 
-  it('auto-repairs existing copies and symlinks when an accepted plugin alternate becomes Universal', async () => {
+  it('updates Universal from the exact selected plugin advisory candidate without changing the cache', async () => {
     const paths = await createPaths('skillindex-switch-handoff-alternate-');
     await seedRepresentativeFixtures({ paths });
     const skillName = 'example-workflow-kit:handoff-notes-with-static';
@@ -1864,12 +1864,17 @@ describe('resolveInventoryIssue', () => {
       location.provenance?.kind === 'plugin'
       && location.provenance.plugin?.host === 'claude')?.path;
     expect(claudePluginPath).toBeDefined();
+    const pluginBefore = await readFile(path.join(claudePluginPath as string, 'SKILL.md'), 'utf8');
+    expect(resolvedSkill?.managedSourceCandidates).toContainEqual(expect.objectContaining({
+      path: claudePluginPath,
+      relationship: 'differs-from-universal',
+    }));
 
     const switchedSnapshot = await applyCapabilityAction(
       {
         entity: 'skill',
-        action: 'choose-universal-version',
-        skillName,
+        action: 'update-universal-from-plugin',
+        capabilityName: skillName,
         selectedVariantPath: claudePluginPath as string,
       },
       {
@@ -1888,6 +1893,9 @@ describe('resolveInventoryIssue', () => {
     expect(switchedSkill?.issueReasons).not.toContain('wrong-symlink-target');
     expect(switchedSkill?.issueReasons).not.toContain('missing-symlinks');
     expect(switchedSkill?.issueReasons).not.toContain('broken-symlink');
+    expect(await readFile(path.join(claudePluginPath as string, 'SKILL.md'), 'utf8')).toBe(pluginBefore);
+    expect(switchedSkill?.managedSourceCandidates?.find((candidate) => candidate.path === claudePluginPath)?.relationship)
+      .toBe('matches-universal');
     expect(switchedSkill?.issueReasons).not.toContain('diverged-copies');
     expect(switchedSkill?.issueReasons).not.toContain('identical-copies');
     expect(switchedSkill?.locations.find((location) => location.path === agentsPath)).toMatchObject({

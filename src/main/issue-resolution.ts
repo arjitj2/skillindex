@@ -565,17 +565,42 @@ async function resolveMcpIssueIfCurrent(
 
   assertMcpResolutionScopeAllowed(mcp);
 
-  const selectedVariant = pickMcpSelection(mcp.locations, request.selectedVariantPath, {
-    preferUniversal: request.issue === 'missing-from-agents',
+  await applyMcpResolution(snapshot, mcp, request.issue, request.selectedVariantPath, options);
+}
+
+export async function updateMcpUniversalFromPluginSource(
+  snapshot: SkillInventorySnapshot,
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  selectedVariantPath: string,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  assertMcpResolutionScopeAllowed(mcp);
+  const selected = pickMcpSelection(mcp.locations, selectedVariantPath);
+  if (selected.canonicalRole !== 'managed-source') {
+    throw new Error('Choose a current readable managed plugin source before updating Universal.');
+  }
+  await applyMcpResolution(snapshot, mcp, 'missing-universal', selectedVariantPath, options);
+}
+
+async function applyMcpResolution(
+  snapshot: SkillInventorySnapshot,
+  mcp: NonNullable<SkillInventorySnapshot['mcps']>[number],
+  issue: Extract<ResolveIssueRequest, { entity: 'mcp' }>['issue'],
+  selectedVariantPath: string | undefined,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+
+  const selectedVariant = pickMcpSelection(mcp.locations, selectedVariantPath, {
+    preferUniversal: issue === 'missing-from-agents',
   });
   const selectedDefinition = parseSelectedMcpDefinition(selectedVariant);
   const agentLocalDefinitions = collectAgentLocalDefinitionsForMcp(mcp, selectedDefinition);
   const mutationTargets = await coalesceMcpMutationTargets(
-    collectMcpResolutionTargets(snapshot, request.issue, mcp, selectedVariant, options),
+    collectMcpResolutionTargets(snapshot, issue, mcp, selectedVariant, options),
   );
 
   if (mutationTargets.length === 0) {
-    throw new Error(`MCP "${request.mcpName}" has no writable supported targets for ${request.issue}.`);
+    throw new Error(`MCP "${mcp.name}" has no writable supported targets for ${issue}.`);
   }
 
   await assertSafeMcpMutationTargets(mutationTargets, snapshot);
@@ -584,10 +609,10 @@ async function resolveMcpIssueIfCurrent(
     definitions: await readWritableMcpDefinitions(target),
     originalContents: await readMcpConfigContents(target.configPath),
   })));
-  const definitionName = getMcpDefinitionNameForWrite(request.mcpName, selectedVariant);
+  const definitionName = getMcpDefinitionNameForWrite(mcp.name, selectedVariant);
   for (const target of updates) {
-    if (definitionName !== request.mcpName) {
-      delete target.definitions[request.mcpName];
+    if (definitionName !== mcp.name) {
+      delete target.definitions[mcp.name];
     }
     target.definitions[definitionName] = buildMcpDefinitionForTarget(
       snapshot,
@@ -920,26 +945,7 @@ async function resolveSubagentIssueIfCurrent(
         allowInvalid: true,
       });
       if (selectedLocation.canonicalRole === 'managed-source') {
-        const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
-          ? createInvalidCanonicalSubagentPackage(subagent, selectedLocation, options.paths)
-          : createCanonicalSubagentPackageForPromotion(subagent, snapshot, selectedLocation, options.paths);
-        const targets = collectWritableSubagentTargetsForNewCanonical(
-          snapshot,
-          subagent,
-          canonicalPackage,
-          selectedLocation.scope,
-        );
-        await executeSubagentPromotionTransaction({
-          canonicalPackage,
-          selectedLocation,
-          snapshot,
-          subagent,
-          targets: isInvalidSubagentLocation(selectedLocation) ? [] : dedupeSubagentTargets(targets),
-          options,
-          rawCanonicalContent: isInvalidSubagentLocation(selectedLocation)
-            ? await readFile(selectedLocation.path, 'utf8')
-            : undefined,
-        });
+        await promoteManagedSubagentToUniversal(snapshot, subagent, selectedLocation, options);
       } else {
         const canonicalPath = isInvalidSubagentLocation(selectedLocation)
           ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths)
@@ -1026,6 +1032,48 @@ async function resolveSubagentIssueIfCurrent(
       return;
     }
   }
+}
+
+export async function updateSubagentUniversalFromPluginSource(
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+  selectedVariantPath: string,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  assertSubagentResolutionScopeAllowed(subagent);
+  const selectedLocation = pickSubagentSelection(subagent, selectedVariantPath, { allowInvalid: true });
+  if (selectedLocation.canonicalRole !== 'managed-source') {
+    throw new Error('Choose a current readable managed plugin source before updating Universal.');
+  }
+  await promoteManagedSubagentToUniversal(snapshot, subagent, selectedLocation, options);
+}
+
+async function promoteManagedSubagentToUniversal(
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+  selectedLocation: SubagentLocationRecord,
+  options: ResolveIssueOptions & { paths: SkillIndexPaths },
+): Promise<void> {
+  const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
+    ? createInvalidCanonicalSubagentPackage(subagent, selectedLocation, options.paths)
+    : createCanonicalSubagentPackageForPromotion(subagent, snapshot, selectedLocation, options.paths);
+  const targets = collectWritableSubagentTargetsForNewCanonical(
+    snapshot,
+    subagent,
+    canonicalPackage,
+    selectedLocation.scope,
+  );
+  await executeSubagentPromotionTransaction({
+    canonicalPackage,
+    selectedLocation,
+    snapshot,
+    subagent,
+    targets: isInvalidSubagentLocation(selectedLocation) ? [] : dedupeSubagentTargets(targets),
+    options,
+    rawCanonicalContent: isInvalidSubagentLocation(selectedLocation)
+      ? await readFile(selectedLocation.path, 'utf8')
+      : undefined,
+  });
 }
 
 function assertSubagentResolutionScopeAllowed(subagent: SubagentRecord): void {

@@ -8,6 +8,7 @@ import {
   getAutoResolvableSkillRequests,
   getAutoResolvableSubagentRequests,
   getMcpResolveActionState,
+  getPluginUpdateActionRequest,
   getSkillResolveActionState,
   getSubagentResolveActionState,
 } from './issue-resolution';
@@ -32,6 +33,37 @@ function findRepresentativeSubagent(name: string): SubagentRecord {
 }
 
 describe('issue resolution request builder', () => {
+  it('builds an explicit plugin update request without making the advisory auto-resolvable', () => {
+    const skill: SkillRecord = {
+      ...representativeInventorySnapshot.skills.find((entry) => entry.name === 'healthy-skill')!,
+      managedSourceCandidates: [{
+        path: '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/healthy-skill',
+        plugin: {
+          host: 'codex', pluginId: 'tools@official', pluginName: 'tools', version: '1.1.0',
+          rootPath: '/Users/tester/.codex/plugins/cache/tools/1.1.0', enabled: true,
+        },
+        evidence: 'enabled-installation',
+        relationship: 'differs-from-universal',
+        dependencyWarnings: [],
+      }],
+    };
+    const inspector = buildSkillInspectorModel(skill, sourceIndex, {}, agentIndex);
+    const pluginPath = skill.managedSourceCandidates?.[0]?.path ?? '';
+
+    expect(getAutoResolvableSkillRequests({ ...representativeInventorySnapshot, skills: [skill] }, sourceIndex)).toEqual([]);
+    expect(getPluginUpdateActionRequest({
+      entity: 'skill',
+      capabilityName: skill.name,
+      inspectorModel: inspector,
+      selectedVariantPath: pluginPath,
+    })).toEqual({
+      entity: 'skill',
+      action: 'update-universal-from-plugin',
+      capabilityName: skill.name,
+      selectedVariantPath: pluginPath,
+    });
+  });
+
   it('keeps plugin-owned missing symlink repairs out of Home auto-resolve batches', () => {
     const skill: SkillRecord = {
       name: 'tools:foo',

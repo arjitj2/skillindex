@@ -772,6 +772,11 @@ export type CapabilityActionRequest = {
   action: 'choose-universal-version';
   skillName: string;
   selectedVariantPath: string;
+} | {
+  entity: 'skill' | 'subagent' | 'mcp';
+  action: 'update-universal-from-plugin';
+  capabilityName: string;
+  selectedVariantPath: string;
 };
 
 export type InventorySourceMode = 'sandbox' | 'live';

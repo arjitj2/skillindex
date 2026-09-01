@@ -20,7 +20,7 @@ import {
   type SkillStatusFilter,
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
-import { getSkillResolveActionState } from '../lib/issue-resolution';
+import { getPluginUpdateActionRequest, getSkillResolveActionState } from '../lib/issue-resolution';
 import type { InspectorLocationAction, InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
@@ -387,6 +387,14 @@ function SkillDetailPanel({
             skillName: selectedSkill.name,
             selectedVariantPath: action.path,
           });
+        } else if (action.kind === 'update-universal-from-plugin') {
+          const request = getPluginUpdateActionRequest({
+            entity: 'skill',
+            capabilityName: selectedSkill.name,
+            inspectorModel,
+            selectedVariantPath: action.path,
+          });
+          if (request) void onApplyCapabilityAction(request);
         }
       }}
       onProvenanceAction={onOpenPluginSource}

@@ -7,6 +7,7 @@ import type {
   McpRecord,
   McpServerDefinition,
   McpTransportKind,
+  PluginManagedSourceCandidate,
   PluginHost,
   SkillDefinitionIssue,
   SkillDiffFileRecord,
@@ -95,9 +96,21 @@ export interface InspectorProblemSectionModel {
 export type InspectorLocationTone = 'healthy' | 'warning' | 'danger' | 'muted';
 
 export interface InspectorLocationAction {
-  kind: 'choose-skill-universal-version';
+  kind: 'choose-skill-universal-version' | 'update-universal-from-plugin';
   label: string;
   path: string;
+}
+
+export interface InspectorPluginUpdateCandidate {
+  path: string;
+  evidenceLabel: string;
+  warnings: Array<{ label: 'Detected dependency'; detail: string }>;
+  action: InspectorLocationAction;
+}
+
+export interface InspectorPluginUpdateAdvisory {
+  title: 'Plugin Update Available';
+  candidates: InspectorPluginUpdateCandidate[];
 }
 
 export interface InspectorLocationRow {
@@ -260,6 +273,7 @@ export interface InspectorModel {
   selectedVariantPath: string | null;
   provenanceRows: InspectorProvenanceRow[];
   provenanceSummary: InspectorProvenanceSummaryRow[];
+  pluginUpdateAdvisory?: InspectorPluginUpdateAdvisory;
 }
 
 interface SkillVariantGroup {
@@ -286,6 +300,44 @@ interface SubagentVariantGroup {
 type InternalSkillDiffFileRecord = SkillDiffFileRecord & {
   __displayKind?: InspectorChangedFileModel['displayKind'];
 };
+
+function buildPluginUpdateAdvisory(
+  candidates: PluginManagedSourceCandidate[] | undefined,
+): InspectorPluginUpdateAdvisory | undefined {
+  const updateCandidates = (candidates ?? []).filter((candidate) =>
+    candidate.relationship === 'differs-from-universal');
+  if (updateCandidates.length === 0) {
+    return undefined;
+  }
+
+  return {
+    title: 'Plugin Update Available',
+    candidates: updateCandidates.map((candidate) => ({
+      path: candidate.path,
+      evidenceLabel: formatPluginCandidateEvidence(candidate),
+      warnings: candidate.dependencyWarnings.map((warning) => ({
+        label: 'Detected dependency' as const,
+        detail: warning.detail,
+      })),
+      action: {
+        kind: 'update-universal-from-plugin',
+        label: 'Update Universal from this version',
+        path: candidate.path,
+      },
+    })),
+  };
+}
+
+function formatPluginCandidateEvidence(candidate: PluginManagedSourceCandidate): string {
+  switch (candidate.evidence) {
+    case 'enabled-installation':
+      return `Currently enabled in ${candidate.plugin.host === 'codex' ? 'Codex' : 'Claude'}`;
+    case 'newer-comparable-version':
+      return 'Newer comparable plugin version';
+    case 'cached-unknown':
+      return 'Cached copy—usage unknown';
+  }
+}
 
 export function buildSkillInspectorModel(
   skill: SkillRecord,
@@ -334,6 +386,7 @@ export function buildSkillInspectorModel(
     selectedVariantPath,
     provenanceRows,
     provenanceSummary,
+    pluginUpdateAdvisory: buildPluginUpdateAdvisory(skill.managedSourceCandidates),
   };
 }
 
@@ -387,6 +440,7 @@ export function buildMcpInspectorModel(
     selectedVariantPath,
     provenanceRows,
     provenanceSummary,
+    pluginUpdateAdvisory: buildPluginUpdateAdvisory(mcp.managedSourceCandidates),
   };
 }
 
@@ -437,6 +491,7 @@ export function buildSubagentInspectorModel(
     selectedVariantPath,
     provenanceRows,
     provenanceSummary,
+    pluginUpdateAdvisory: buildPluginUpdateAdvisory(subagent.managedSourceCandidates),
   };
 }
 

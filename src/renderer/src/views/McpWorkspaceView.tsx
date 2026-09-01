@@ -1,5 +1,6 @@
 import type {
   AddMcpServerRequest,
+  CapabilityActionRequest,
   DismissDriftRequest,
   McpIssueReason,
   McpRecord,
@@ -18,7 +19,7 @@ import {
   type McpStatusFilter,
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
-import { getMcpResolveActionState } from '../lib/issue-resolution';
+import { getMcpResolveActionState, getPluginUpdateActionRequest } from '../lib/issue-resolution';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
@@ -41,6 +42,7 @@ export function McpWorkspaceView({
   inventorySnapshot,
   isAutoResolving = false,
   isDismissingDrift,
+  isApplyingCapabilityAction = false,
   isResolvingIssue,
   isRemovingInventoryItem = false,
   isRescanning,
@@ -48,6 +50,7 @@ export function McpWorkspaceView({
   mcpInspectorModel,
   sandboxRoot,
   onAutoResolve = () => undefined,
+  onApplyCapabilityAction = () => Promise.resolve(),
   onCancelMcpConnectivityTest,
   onClearSelection,
   onDismissDrift,
@@ -70,6 +73,7 @@ export function McpWorkspaceView({
   inventorySnapshot: SkillInventorySnapshot | null;
   isAutoResolving?: boolean;
   isDismissingDrift: boolean;
+  isApplyingCapabilityAction?: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem?: boolean;
   isRescanning: boolean;
@@ -77,6 +81,7 @@ export function McpWorkspaceView({
   mcpInspectorModel: InspectorModel | null;
   sandboxRoot: string | null;
   onAutoResolve?: () => void;
+  onApplyCapabilityAction?: (request: CapabilityActionRequest) => Promise<void>;
   onCancelMcpConnectivityTest?: () => void;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
@@ -195,8 +200,9 @@ export function McpWorkspaceView({
             </section>
 
             {mcp ? (
-              <McpDetailPanel
-                isDismissingDrift={isDismissingDrift}
+            <McpDetailPanel
+              isDismissingDrift={isDismissingDrift}
+              isApplyingCapabilityAction={isApplyingCapabilityAction}
                 isResolvingIssue={isResolvingIssue}
                 isRemovingInventoryItem={isRemovingInventoryItem}
                 inventorySnapshot={inventorySnapshot}
@@ -204,7 +210,8 @@ export function McpWorkspaceView({
                 mcpInspectorModel={mcpInspectorModel}
                 sandboxRoot={sandboxRoot}
                 onClearSelection={onClearSelection}
-                onDismissDrift={onDismissDrift}
+              onDismissDrift={onDismissDrift}
+              onApplyCapabilityAction={onApplyCapabilityAction}
                 onOpenPluginSource={onOpenPluginSource}
                 onRequestRemove={onRequestRemove}
                 onResolveIssue={onResolveIssue}
@@ -504,6 +511,7 @@ function parseKeyValueLines(raw: string): Record<string, string> | undefined {
 
 function McpDetailPanel({
   isDismissingDrift,
+  isApplyingCapabilityAction,
   isResolvingIssue,
   isRemovingInventoryItem,
   inventorySnapshot,
@@ -512,6 +520,7 @@ function McpDetailPanel({
   sandboxRoot,
   onClearSelection,
   onDismissDrift,
+  onApplyCapabilityAction,
   onOpenPluginSource,
   onRequestRemove,
   onResolveIssue,
@@ -519,6 +528,7 @@ function McpDetailPanel({
   onSelectVariant,
 }: {
   isDismissingDrift: boolean;
+  isApplyingCapabilityAction: boolean;
   isResolvingIssue: boolean;
   isRemovingInventoryItem: boolean;
   inventorySnapshot: SkillInventorySnapshot | null;
@@ -527,6 +537,7 @@ function McpDetailPanel({
   sandboxRoot: string | null;
   onClearSelection: () => void;
   onDismissDrift: (request: DismissDriftRequest) => Promise<void>;
+  onApplyCapabilityAction: (request: CapabilityActionRequest) => Promise<void>;
   onOpenPluginSource: (action: NonNullable<InspectorProvenanceSummaryRow['action']>) => void;
   onRequestRemove: (request: RemoveInventoryItemRequest, label: string) => void;
   onResolveIssue: (request: ResolveIssueRequest) => Promise<void>;
@@ -595,7 +606,19 @@ function McpDetailPanel({
       model={mcpInspectorModel}
       paneClassName="mcp-inspector-panel"
       sandboxRoot={sandboxRoot}
+      isLocationActionPending={isApplyingCapabilityAction}
       onClose={onClearSelection}
+      onLocationAction={(action) => {
+        if (action.kind === 'update-universal-from-plugin') {
+          const request = getPluginUpdateActionRequest({
+            entity: 'mcp',
+            capabilityName: mcp.name,
+            inspectorModel: mcpInspectorModel,
+            selectedVariantPath: action.path,
+          });
+          if (request) void onApplyCapabilityAction(request);
+        }
+      }}
       onProvenanceAction={onOpenPluginSource}
       onProblemSelect={(problemKey: InspectorModel['problems'][number]['key']) => onSelectProblem(problemKey as McpIssueReason)}
       onVariantSelect={(path: string) => onSelectVariant(path)}
