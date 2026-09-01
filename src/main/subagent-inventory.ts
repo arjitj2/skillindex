@@ -58,6 +58,8 @@ interface ParsedSubagentDefinition {
   definitionText?: string;
 }
 
+type PluginSubagentAliases = Map<string, Set<string>>;
+
 export interface PortableSubagentDefinition {
   name: string;
   description: string | null;
@@ -245,7 +247,7 @@ export function reconcileCachedSubagents(
 function getCachedGroupedSubagentName(
   location: SubagentLocationRecord,
   expectedOwners: SubagentOwnerRecord[],
-  pluginSubagentAliases: Map<string, string>,
+  pluginSubagentAliases: PluginSubagentAliases,
   plugin?: PluginSourceRef,
 ): string {
   const fallbackName = getSubagentNameFromPath(location.path);
@@ -263,7 +265,10 @@ function getCachedGroupedSubagentName(
   if (plugin) {
     return `${plugin.pluginName}:${baseName}`;
   }
-  return pluginSubagentAliases.get(getPluginSubagentAliasKey(location.scope, location.path, parsed.name))
+  return getUnambiguousPluginSubagentAlias(
+    pluginSubagentAliases,
+    getPluginSubagentAliasKey(location.scope, location.path, parsed.name),
+  )
     ?? (location.fileType === 'symlink' && isBrokenSubagentSymlink(location.path)
       ? getUnambiguousPluginSubagentAliasByFilename(location.scope, location.path, pluginSubagentAliases)
       : undefined)
@@ -1388,14 +1393,17 @@ function getGroupedSubagentName(
   filePath: string,
   parsed: ParsedSubagentDefinition,
   owner: SubagentOwnerRecord,
-  pluginSubagentAliases: Map<string, string>,
+  pluginSubagentAliases: PluginSubagentAliases,
 ): string {
   const baseName = isSymlink(filePath) ? getSubagentNameFromPath(filePath) : parsed.name;
   if (owner.plugin) {
     return `${owner.plugin.pluginName}:${baseName}`;
   }
 
-  return pluginSubagentAliases.get(getPluginSubagentAliasKey(owner.scope, filePath, parsed.name))
+  return getUnambiguousPluginSubagentAlias(
+    pluginSubagentAliases,
+    getPluginSubagentAliasKey(owner.scope, filePath, parsed.name),
+  )
     ?? (isBrokenSubagentSymlink(filePath)
       ? getUnambiguousPluginSubagentAliasByFilename(owner.scope, filePath, pluginSubagentAliases)
       : undefined)
@@ -1406,16 +1414,27 @@ function getSubagentNameFromPath(filePath: string): string {
   return path.basename(filePath).replace(/(?:\.agent)?\.(?:md|toml|jsonc?|ya?ml)$/iu, '');
 }
 
-function buildPluginSubagentAliases(plugins: PluginRecord[]): Map<string, string> {
-  const aliases = new Map<string, string>();
+function buildPluginSubagentAliases(plugins: PluginRecord[]): PluginSubagentAliases {
+  const aliases: PluginSubagentAliases = new Map();
   for (const plugin of plugins) {
     for (const subagent of plugin.bundledSubagents ?? []) {
       const scopedName = `${plugin.pluginName}:${subagent.name}`;
       const fileBaseName = getSanitizedSubagentFileBaseName(scopedName);
-      aliases.set(buildPluginSubagentAliasKey(plugin.scope ?? 'live', fileBaseName, subagent.name), scopedName);
+      const key = buildPluginSubagentAliasKey(plugin.scope ?? 'live', fileBaseName, subagent.name);
+      const scopedNames = aliases.get(key) ?? new Set<string>();
+      scopedNames.add(scopedName);
+      aliases.set(key, scopedNames);
     }
   }
   return aliases;
+}
+
+function getUnambiguousPluginSubagentAlias(
+  aliases: PluginSubagentAliases,
+  key: string,
+): string | undefined {
+  const matches = aliases.get(key);
+  return matches?.size === 1 ? [...matches][0] : undefined;
 }
 
 function getPluginSubagentAliasKey(scope: SkillSourceScope, filePath: string, definitionName: string): string {
@@ -1425,13 +1444,13 @@ function getPluginSubagentAliasKey(scope: SkillSourceScope, filePath: string, de
 function getUnambiguousPluginSubagentAliasByFilename(
   scope: SkillSourceScope,
   filePath: string,
-  aliases: Map<string, string>,
+  aliases: PluginSubagentAliases,
 ): string | undefined {
   const prefix = `${scope}:${getSubagentNameFromPath(filePath)}:`;
   const matches = [...new Set(
     [...aliases.entries()]
       .filter(([key]) => key.startsWith(prefix))
-      .map(([, scopedName]) => scopedName),
+      .flatMap(([, scopedNames]) => [...scopedNames]),
   )];
   return matches.length === 1 ? matches[0] : undefined;
 }

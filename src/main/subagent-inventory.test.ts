@@ -795,6 +795,28 @@ describe('subagent inventory', () => {
     expect(inventory.subagents?.find((subagent) => subagent.name === 'alpha-reviewer-one')?.locations.some((location) => location.path === stalePath)).toBe(true);
   });
 
+  it('does not regroup a broken link when managed identities collide on the exact sanitized alias key', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const firstRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'first', '1.0.0');
+    const secondRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'second', '1.0.0');
+    const stalePath = path.join(homeDir, '.claude', 'agents', 'alpha-beta-reviewer.md');
+
+    await writeMarkdownSubagent(path.join(firstRoot, 'agents', 'reviewer.md'), 'reviewer', 'First reviewer.', 'Use first rules.');
+    await writeMarkdownSubagent(path.join(secondRoot, 'agents', 'reviewer.md'), 'reviewer', 'Second reviewer.', 'Use second rules.');
+    await writeRawFile(path.join(firstRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha:beta","version":"1.0.0"}\n');
+    await writeRawFile(path.join(secondRoot, '.codex-plugin', 'plugin.json'), '{"name":"alpha-beta","version":"1.0.0"}\n');
+    await mkdir(path.dirname(stalePath), { recursive: true });
+    await symlink(path.join(firstRoot, 'agents', 'removed.md'), stalePath);
+
+    const fresh = await scanInventory(scanOptions);
+    const cached = await readCachedInventory(scanOptions);
+    for (const inventory of [fresh, cached]) {
+      expect(inventory?.subagents?.find((subagent) => subagent.name === 'alpha:beta:reviewer')?.locations.some((location) => location.path === stalePath)).toBe(false);
+      expect(inventory?.subagents?.find((subagent) => subagent.name === 'alpha-beta:reviewer')?.locations.some((location) => location.path === stalePath)).toBe(false);
+      expect(inventory?.subagents?.find((subagent) => subagent.name === 'alpha-beta-reviewer')?.locations.some((location) => location.path === stalePath)).toBe(true);
+    }
+  });
+
   it('treats differing plugin subagent versions as managed source candidates instead of a mismatch', async () => {
     const { homeDir, scanOptions } = await createSubagentTestPaths();
     const roots = [
