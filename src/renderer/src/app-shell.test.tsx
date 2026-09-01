@@ -7,6 +7,7 @@ import {
   type AppShellState,
   type AuditOperation,
   type AutoUpdateStatus,
+  type McpRecord,
   type SettingsState,
   type SkillInventorySnapshot,
   type SkillRecord,
@@ -1439,6 +1440,37 @@ describe('App shell inventory views', () => {
     expect(screen.getByText('Detected Definitions')).toBeInTheDocument();
     expect(screen.getByText('Definition Breakdown')).toBeInTheDocument();
     expect(screen.getByText('Compared Fields')).toBeInTheDocument();
+  });
+
+  it('shows plugin dependency warnings before allowing a missing Universal MCP promotion', async () => {
+    const snapshot = createPluginBoundMcpInventorySnapshot();
+    const selectedVariantPath = `${DEFAULT_SANDBOX_ROOT}/.codex/plugins/cache/sandbox-fixtures/plugin-bound-mcp/1.0.0/.mcp.json`;
+    readCachedInventoryMock.mockResolvedValue(structuredClone(snapshot));
+    scanInventoryMock.mockResolvedValue(structuredClone(snapshot));
+    render(<App />);
+    await openMcps();
+
+    fireEvent.click(getMcpRow('plugin-bound-mcp'));
+    expect(await screen.findByRole('heading', { name: 'plugin-bound-mcp', level: 3 })).toBeInTheDocument();
+
+    const warnings = screen.getByRole('list', { name: 'Selected plugin candidate dependency warnings' });
+    expect(within(warnings).getByText('Plugin root variable')).toBeVisible();
+    expect(within(warnings).getByText('References a plugin-root environment variable.')).toBeVisible();
+    expect(within(warnings).getByText('Plugin cache path')).toBeVisible();
+    expect(within(warnings).getByText(/References a path inside .*plugin-bound-mcp\/1\.0\.0/)).toBeVisible();
+
+    const promoteButton = screen.getByRole('button', { name: /Promote to Universal/i });
+    expect(promoteButton).toBeEnabled();
+    expect(promoteButton).toHaveAttribute('aria-keyshortcuts', 'F');
+    fireEvent.click(promoteButton);
+    await waitFor(() => {
+      expect(makeCanonicalMock).toHaveBeenCalledWith({
+        entity: 'mcp',
+        issue: 'missing-universal',
+        mcpName: 'plugin-bound-mcp',
+        selectedVariantPath,
+      });
+    });
   });
 
   it('opens the Add Server modal and submits a command server through the desktop API', async () => {
@@ -3194,6 +3226,71 @@ function createInventorySnapshot(): SkillInventorySnapshot {
       dismissedDriftSkills: 1,
     },
   });
+}
+
+function createPluginBoundMcpInventorySnapshot(): SkillInventorySnapshot {
+  const snapshot = createInventorySnapshot();
+  const pluginMcp = createPluginBoundMcpRecord();
+  const mcps = [...(snapshot.mcps ?? []), pluginMcp];
+  const nextSnapshot: SkillInventorySnapshot = {
+    ...snapshot,
+    mcps,
+    mcpCounts: {
+      totalMcps: mcps.length,
+      attentionMcps: mcps.filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'active').length,
+      healthyMcps: mcps.filter((mcp) => mcp.status === 'healthy').length,
+      dismissedAttentionMcps: mcps.filter((mcp) => mcp.status === 'needs-attention' && mcp.presentation === 'dismissed').length,
+    },
+  };
+  return {
+    ...nextSnapshot,
+    homeSummary: getHomeSummary(nextSnapshot),
+  };
+}
+
+function createPluginBoundMcpRecord(): McpRecord {
+  const pluginRoot = `${DEFAULT_SANDBOX_ROOT}/.codex/plugins/cache/sandbox-fixtures/plugin-bound-mcp/1.0.0`;
+  const configPath = `${pluginRoot}/.mcp.json`;
+  return {
+    name: 'plugin-bound-mcp',
+    status: 'needs-attention',
+    presentation: 'active',
+    issueReasons: ['missing-universal'],
+    locations: [{
+      agentId: 'plugin:codex:plugin-bound-mcp',
+      agentLabel: 'Codex Plugin plugin-bound-mcp',
+      scope: 'sandbox',
+      configPath,
+      configName: 'plugin-bound-mcp',
+      transport: 'stdio',
+      command: 'node',
+      args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+      definitionText: JSON.stringify({
+        command: 'node',
+        args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+      }),
+      definitionComparisonKey: 'plugin-bound-mcp-definition',
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+    }],
+    managedSourceCandidates: [{
+      path: configPath,
+      plugin: {
+        host: 'codex',
+        pluginId: 'plugin-bound-mcp@sandbox-fixtures',
+        pluginName: 'plugin-bound-mcp',
+        version: '1.0.0',
+        rootPath: pluginRoot,
+        enabled: true,
+      },
+      evidence: 'enabled-installation',
+      relationship: 'universal-missing',
+      dependencyWarnings: [
+        { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
+        { kind: 'plugin-contained-path', detail: `References a path inside ${pluginRoot}.` },
+      ],
+    }],
+  };
 }
 
 function createInventorySnapshotWithAddedSubagent(name: string): SkillInventorySnapshot {

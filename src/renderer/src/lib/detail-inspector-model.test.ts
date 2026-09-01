@@ -3088,6 +3088,62 @@ describe('buildMcpInspectorModel', () => {
     ]);
   });
 
+  it('keeps dependency warnings on the selected plugin MCP candidate', () => {
+    const pluginRoot = '/Users/tester/.codex/plugins/cache/openai-curated/plugin-bound-mcp/1.0.0';
+    const configPath = `${pluginRoot}/.mcp.json`;
+    const mcp: RepresentativeMcp = {
+      name: 'plugin-bound-mcp',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [{
+        agentId: 'plugin:codex:plugin-bound-mcp',
+        agentLabel: 'Codex Plugin plugin-bound-mcp',
+        scope: 'sandbox',
+        configPath,
+        configName: 'plugin-bound-mcp',
+        transport: 'stdio',
+        command: 'node',
+        args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+        definitionText: JSON.stringify({
+          command: 'node',
+          args: ['${CODEX_PLUGIN_ROOT}/server.js', `${pluginRoot}/assets/rules.json`],
+        }),
+        definitionComparisonKey: 'plugin-bound-mcp-definition',
+        canonicalRole: 'managed-source',
+        mutability: 'read-only-managed',
+      }],
+      managedSourceCandidates: [{
+        path: configPath,
+        plugin: {
+          host: 'codex',
+          pluginId: 'plugin-bound-mcp@openai-curated',
+          pluginName: 'plugin-bound-mcp',
+          version: '1.0.0',
+          rootPath: pluginRoot,
+          enabled: true,
+        },
+        evidence: 'enabled-installation',
+        relationship: 'universal-missing',
+        dependencyWarnings: [
+          { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
+          { kind: 'plugin-contained-path', detail: `References a path inside ${pluginRoot}.` },
+        ],
+      }],
+    };
+
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: configPath,
+    }, agentIndex, sourceIndex);
+
+    const activeProblem = expectVariantResolution(model.activeProblem);
+    expect(activeProblem.selectedVariant?.dependencyWarnings).toEqual([
+      { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
+      { kind: 'plugin-contained-path', detail: `References a path inside ${pluginRoot}.` },
+    ]);
+  });
+
   it('marks missing-from-agents config paths nonexistent when the agent config file is absent', () => {
     const mcp = findRepresentativeMcp('missing-from-agents-mcp');
     const unavailableAgentIndex = new Map(agentIndex);

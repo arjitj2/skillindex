@@ -7,6 +7,7 @@ import type {
   McpRecord,
   McpServerDefinition,
   McpTransportKind,
+  PluginDependencyWarning,
   PluginManagedSourceCandidate,
   PluginHost,
   SkillDefinitionIssue,
@@ -140,6 +141,7 @@ export interface InspectorVariantModel {
   locations: Array<{ label: string; path: string }>;
   updatedLabel: string;
   definitionText?: string;
+  dependencyWarnings?: PluginDependencyWarning[];
 }
 
 export interface InspectorChangedFileModel {
@@ -857,7 +859,15 @@ function buildMcpVariantProblem(
     : getMcpBaselineVariant(groupedVariants, getMcpReferencePath(mcp));
   const orderedVariants = orderMcpVariantsForInspector(groupedVariants, baselineVariant);
   const selectedVariant = selectMcpVariant(orderedVariants, selectedVariantPath, baselineVariant);
-  const selectedModel = selectedVariant ? mapMcpVariant(selectedVariant, baselineVariant, selectedVariant, agentIndex) : null;
+  const selectedModel = selectedVariant
+    ? mapMcpVariant(
+      selectedVariant,
+      baselineVariant,
+      selectedVariant,
+      agentIndex,
+      getMcpVariantDependencyWarnings(selectedVariant, mcp.managedSourceCandidates),
+    )
+    : null;
   const baselineModel = baselineVariant ? mapMcpVariant(baselineVariant, baselineVariant, selectedVariant, agentIndex) : null;
   const diffLines = selectedVariant
     ? baselineVariant
@@ -870,7 +880,13 @@ function buildMcpVariantProblem(
     key: problemKey,
     title: formatMcpIssueReason(problemKey),
     listTitle: 'Detected Definitions',
-    variants: orderedVariants.map((variant) => mapMcpVariant(variant, baselineVariant, selectedVariant, agentIndex)),
+    variants: orderedVariants.map((variant) => mapMcpVariant(
+      variant,
+      baselineVariant,
+      selectedVariant,
+      agentIndex,
+      getMcpVariantDependencyWarnings(variant, mcp.managedSourceCandidates),
+    )),
     changedFiles: [],
     selectedVariant: selectedModel,
     baselineVariant: baselineModel,
@@ -2563,6 +2579,7 @@ function mapMcpVariant(
   baselineVariant: McpVariantGroup | null,
   selectedVariant: McpVariantGroup | null,
   agentIndex: Map<string, AgentRecord>,
+  dependencyWarnings?: PluginDependencyWarning[],
 ): InspectorVariantModel {
   const representative = variant.representative;
   const badge = representative.configPath === selectedVariant?.representative.configPath
@@ -2587,7 +2604,23 @@ function mapMcpVariant(
     })),
     updatedLabel: summarizeMcpCommand(representative),
     definitionText: variant.definitionText,
+    ...(dependencyWarnings && dependencyWarnings.length > 0 ? { dependencyWarnings } : {}),
   };
+}
+
+function getMcpVariantDependencyWarnings(
+  variant: McpVariantGroup,
+  candidates: PluginManagedSourceCandidate[] | undefined,
+): PluginDependencyWarning[] {
+  const variantPaths = new Set(variant.locations.map((location) => location.configPath));
+  const warnings = (candidates ?? [])
+    .filter((candidate) => variantPaths.has(candidate.path))
+    .flatMap((candidate) => candidate.dependencyWarnings);
+  const warningsByIdentity = new Map(warnings.map((warning) => [
+    `${warning.kind}\u0000${warning.detail}`,
+    warning,
+  ]));
+  return [...warningsByIdentity.values()];
 }
 
 function mapSubagentVariant(
