@@ -21,8 +21,8 @@ import {
   formatLastScanLabel,
 } from '../lib/inventory-presentation';
 import { AutoRepairReviewPanel } from '../components/AutoRepairReview';
+import { HomeInventoryLoadingSkeleton } from '../components/InventoryLoadingSkeleton';
 import {
-  EmptyStatePanel,
   PageTopBar,
   PLUGIN_MCP_TOOLTIP,
   PLUGIN_SKILL_TOOLTIP,
@@ -496,7 +496,7 @@ export function HomeDashboard({
             <HomeNeedsAttentionCard groups={attentionGroups} lastCheckedLabel={lastCheckedLabel} />
           </>
         ) : (
-          <EmptyStatePanel message="Loading your inventory summary…" />
+          <HomeInventoryLoadingSkeleton />
         )}
       </div>
     </main>

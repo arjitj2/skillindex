@@ -26,6 +26,7 @@ import { getSubagentResolveActionState } from '../lib/issue-resolution';
 import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
+import { InventoryListLoadingSkeleton } from '../components/InventoryLoadingSkeleton';
 import {
   EmptyStatePanel,
   HeaderSearch,
@@ -199,7 +200,7 @@ export function SubagentsWorkspaceView({
                 <EmptyStatePanel message={emptyStateMessage} />
               )
             ) : (
-              <EmptyStatePanel message="Scanning your subagent inventory..." />
+              <InventoryListLoadingSkeleton />
             )}
           </section>
 

@@ -24,6 +24,7 @@ import { getSkillResolveActionState } from '../lib/issue-resolution';
 import type { InspectorLocationAction, InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
+import { InventoryListLoadingSkeleton } from '../components/InventoryLoadingSkeleton';
 import {
   EmptyStatePanel,
   HeaderSearch,
@@ -214,7 +215,7 @@ export function SkillsWorkspaceView({
                   <EmptyStatePanel message={emptyStateMessage} />
                 )
               ) : (
-                <EmptyStatePanel message="Scanning your skill inventory…" />
+                <InventoryListLoadingSkeleton />
               )}
             </section>
 

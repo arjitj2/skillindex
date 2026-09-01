@@ -15,6 +15,14 @@ const safeRepairRequest: ResolveIssueRequest = {
 };
 
 describe('HomeDashboard', () => {
+  it('shows a layout-shaped skeleton while the first inventory snapshot is loading', () => {
+    renderDashboard({ inventorySnapshot: null });
+
+    expect(screen.getByRole('status', { name: 'Scanning local inventory' })).toBeInTheDocument();
+    expect(screen.queryByText(/Loading your inventory summary/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Home inventory metrics')).not.toBeInTheDocument();
+  });
+
   it('uses rescan loading copy for the global rescan action', () => {
     renderDashboard({ isRescanning: true });
 

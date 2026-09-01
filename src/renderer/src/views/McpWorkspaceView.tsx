@@ -23,6 +23,7 @@ import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
+import { InventoryListLoadingSkeleton } from '../components/InventoryLoadingSkeleton';
 import {
   EmptyStatePanel,
   HeaderSearch,
@@ -193,7 +194,7 @@ export function McpWorkspaceView({
                   <EmptyStatePanel message={emptyStateMessage} />
                 )
               ) : (
-                <EmptyStatePanel message="Scanning your MCP inventory…" />
+                <InventoryListLoadingSkeleton />
               )}
             </section>
 
