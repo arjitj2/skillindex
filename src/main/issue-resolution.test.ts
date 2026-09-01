@@ -3495,7 +3495,7 @@ describe('resolveInventoryIssue', () => {
     const universalAfterUpdate = await readFile(universalConfigPath, 'utf8');
     await expect(applyCapabilityAction({
       entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'plugin-mcp:promoted', selectedVariantPath: '/foreign/plugin.mcp.json',
-    }, { paths, includeSandboxSources: true, includeLiveSources: false } as never)).rejects.toThrow(/current readable plugin update candidate/i);
+    }, { paths, includeSandboxSources: true, includeLiveSources: false })).rejects.toThrow(/current readable plugin update candidate/i);
     expect(await readFile(universalConfigPath, 'utf8')).toBe(universalAfterUpdate);
     expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
   });
