@@ -9,7 +9,7 @@ import type {
 } from '@shared/contracts';
 import {
   ensureSkillIndexLayout,
-  resolveSkillIndexPaths,
+  resolveSkillIndexPathsForScanOptions,
   type SkillIndexPaths,
 } from '@shared/skill-index-paths';
 
@@ -24,6 +24,7 @@ import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-invent
 
 export interface RemoveInventoryItemOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  preparedSnapshot?: SkillInventorySnapshot;
   trashItem?: TrashItem;
   /** Test-only deterministic failure point for staged MCP config mutations. */
   testFailMcpMutationAt?: number;
@@ -41,11 +42,16 @@ export async function removeInventoryItem(
   request: RemoveInventoryItemRequest,
   options: RemoveInventoryItemOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const paths = options.paths ?? resolveSkillIndexPathsForScanOptions(options);
   await ensureSkillIndexLayout(paths);
 
-  const snapshot = await scanInventory({
-    ...options,
+  const scanOptions = { ...options };
+  delete scanOptions.preparedSnapshot;
+  delete scanOptions.trashItem;
+  delete scanOptions.testFailMcpMutationAt;
+  delete scanOptions.testFailMcpCommitAt;
+  const snapshot = options.preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
 
@@ -58,7 +64,7 @@ export async function removeInventoryItem(
   }
 
   return scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
 }

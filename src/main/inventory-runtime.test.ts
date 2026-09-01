@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -1091,6 +1091,128 @@ describe('inventory runtime', () => {
     expect(operation.actions.map((action) => action.path)).toEqual([universalPath]);
   });
 
+  it('uses sandbox state and preserves root state while removing and undoing without explicit paths', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-remove-sandbox-state-'));
+    const env = { SKILL_INDEX_DATA_DIR: root };
+    const paths = resolveSkillIndexPaths({ env });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const skillName = 'sandbox-only-removal';
+    const skillPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    const rootConfigBefore = `${JSON.stringify({ ...defaultConfig, preferredCanonicalSourcePath: '/root-state-sentinel' }, null, 2)}\n`;
+    const rootCacheBefore = 'root-cache-sentinel\n';
+    await Promise.all([
+      writeSkillFile(paths.sandboxAgentsSkillsDir, skillName, '# Sandbox only\n', '2026-08-31T00:00:00.000Z'),
+      writeRuntimeFile(paths.configFile, rootConfigBefore),
+      writeRuntimeFile(paths.cacheFile, rootCacheBefore),
+    ]);
+    await runtime.scanInventory({ env, includeSandboxSources: true, includeLiveSources: false });
+
+    await runtime.removeInventoryItem({ entity: 'skill', skillName }, {
+      env,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      trashItem: async (targetPath) => rm(targetPath, { recursive: true, force: true }),
+    });
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toContain(skillPath);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(rootConfigBefore);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(rootCacheBefore);
+
+    await runtime.undoAuditOperation(operation.id);
+    await expect(pathExists(path.join(skillPath, 'SKILL.md'))).resolves.toBe(true);
+    expect(await readFile(paths.configFile, 'utf8')).toBe(rootConfigBefore);
+    expect(await readFile(paths.cacheFile, 'utf8')).toBe(rootCacheBefore);
+  });
+
+  it('freshens removal planning so a newly writable location is included in Undo', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-remove-fresh-plan-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const skillName = 'newly-writable-removal';
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+    } as const;
+    await writeSkillFile(paths.sandboxAgentsSkillsDir, skillName, '# Universal before removal\n', '2026-08-31T00:00:00.000Z');
+    await runtime.scanInventory(scanOptions);
+    await Promise.all([
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+      writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'skills'), skillName, '# Factory appeared later\n', '2026-08-31T00:01:00.000Z'),
+    ]);
+
+    await runtime.removeInventoryItem({ entity: 'skill', skillName }, {
+      ...scanOptions,
+      trashItem: async (targetPath) => rm(targetPath, { recursive: true, force: true }),
+    });
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universalPath, factoryPath]));
+    await expect(pathExists(universalPath)).resolves.toBe(false);
+    await expect(pathExists(factoryPath)).resolves.toBe(false);
+
+    await runtime.undoAuditOperation(operation.id);
+    await expect(readFile(path.join(universalPath, 'SKILL.md'), 'utf8')).resolves.toContain('Universal before removal');
+    await expect(readFile(path.join(factoryPath, 'SKILL.md'), 'utf8')).resolves.toContain('Factory appeared later');
+  });
+
+  it('audits and undoes MCP removal through physical config referents without replacing plugin or config symlinks', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-remove-mcp-symlinks-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'remove-mcp', '1.0.0');
+    const pluginConfig = path.join(pluginRoot, '.mcp.json');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factory = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const universalReferent = path.join(paths.sandboxRoot, 'config-referents', 'remove-universal.json');
+    const factoryReferent = path.join(paths.sandboxRoot, 'config-referents', 'remove-factory.json');
+    const universalBefore = `${JSON.stringify({ servers: { service: { command: 'node', args: ['service.js'] } } }, null, 2)}\n`;
+    const factoryBefore = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['service.js'] } } }, null, 2)}\n`;
+    const pluginBefore = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['service.js'] } } }, null, 2)}\n`;
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'remove-mcp', version: '1.0.0' })),
+      writeRuntimeFile(pluginConfig, pluginBefore),
+      writeRuntimeFile(universalReferent, universalBefore),
+      writeRuntimeFile(factoryReferent, factoryBefore),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), '[plugins."remove-mcp@official"]\nenabled = true\n'),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+      mkdir(path.dirname(universal), { recursive: true }),
+    ]);
+    await Promise.all([symlink(universalReferent, universal), symlink(factoryReferent, factory)]);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+    } as const;
+    await runtime.scanInventory(scanOptions);
+
+    await runtime.removeInventoryItem({ entity: 'mcp', mcpName: 'remove-mcp:service' }, scanOptions);
+    expect(await readFile(universalReferent, 'utf8')).not.toContain('service.js');
+    expect(await readFile(factoryReferent, 'utf8')).not.toContain('service.js');
+    expect(await readFile(pluginConfig, 'utf8')).toBe(pluginBefore);
+    expect((await lstat(universal)).isSymbolicLink()).toBe(true);
+    expect((await lstat(factory)).isSymbolicLink()).toBe(true);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      await realpath(universalReferent),
+      await realpath(factoryReferent),
+    ]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+
+    await runtime.undoAuditOperation(operation.id);
+    expect(await readFile(universalReferent, 'utf8')).toBe(universalBefore);
+    expect(await readFile(factoryReferent, 'utf8')).toBe(factoryBefore);
+    expect(await readFile(pluginConfig, 'utf8')).toBe(pluginBefore);
+    expect(await readlink(universal)).toBe(universalReferent);
+    expect(await readlink(factory)).toBe(factoryReferent);
+  });
+
   it('audits and undoes plugin Universal skill updates without capturing plugin caches', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-audit-'));
     const paths = resolveSkillIndexPaths({
@@ -1414,6 +1536,8 @@ describe('inventory runtime', () => {
     const newConfig = path.join(newRoot, '.mcp.json');
     const universal = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const factory = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const universalReferent = path.join(paths.sandboxRoot, 'config-referents', 'universal-mcp.json');
+    const factoryReferent = path.join(paths.sandboxRoot, 'config-referents', 'factory-mcp.json');
     const codexConfig = path.join(paths.sandboxRoot, '.codex', 'config.toml');
     const oldText = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['old.js'] } } }, null, 2)}\n`;
     const newText = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['new.js'] } } }, null, 2)}\n`;
@@ -1421,32 +1545,44 @@ describe('inventory runtime', () => {
       writeRuntimeFile(path.join(oldRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-mcp', version: '1.0.0' })),
       writeRuntimeFile(path.join(newRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-mcp', version: '1.1.0' })),
       writeRuntimeFile(oldConfig, oldText), writeRuntimeFile(newConfig, newText),
-      writeRuntimeFile(universal, `${JSON.stringify({ servers: { service: { command: 'node', args: ['old.js'] } } }, null, 2)}\n`),
+      writeRuntimeFile(universalReferent, `${JSON.stringify({ servers: { service: { command: 'node', args: ['old.js'] } } }, null, 2)}\n`),
+      writeRuntimeFile(factoryReferent, `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['old.js'] } } }, null, 2)}\n`),
       writeRuntimeFile(codexConfig, '[plugins."runtime-mcp@official"]\nenabled = true\n'),
       writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+      mkdir(path.dirname(universal), { recursive: true }),
+    ]);
+    await Promise.all([
+      symlink(universalReferent, universal),
+      symlink(factoryReferent, factory),
     ]);
     const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false, env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' } } as const;
     await runtime.scanInventory(scanOptions);
     const universalBefore = await readFile(universal, 'utf8');
-    const universalMode = (await lstat(universal)).mode;
+    const factoryBefore = await readFile(factoryReferent, 'utf8');
     const codexBefore = await readFile(codexConfig, 'utf8');
     const codexMode = (await lstat(codexConfig)).mode;
     await runtime.applyCapabilityAction({ entity: 'mcp', action: 'update-universal-from-plugin', capabilityName: 'runtime-mcp:service', selectedVariantPath: newConfig });
     expect(await readFile(universal, 'utf8')).toContain('new.js');
     expect(await readFile(factory, 'utf8')).toContain('new.js');
-    expect((await lstat(factory)).isSymbolicLink()).toBe(false);
+    expect((await lstat(factory)).isSymbolicLink()).toBe(true);
     expect(await readFile(codexConfig, 'utf8')).toBe(codexBefore);
     expect((await lstat(codexConfig)).mode).toBe(codexMode);
     const [operation] = await runtime.readAuditLog();
-    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universal, factory]));
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      await realpath(universalReferent),
+      await realpath(factoryReferent),
+    ]));
+    expect(operation.actions.map((action) => action.path)).not.toEqual(expect.arrayContaining([universal, factory]));
     expect(operation.actions.some((action) => action.path?.startsWith(oldRoot) || action.path?.startsWith(newRoot))).toBe(false);
     expect(await readFile(oldConfig, 'utf8')).toBe(oldText);
     expect(await readFile(newConfig, 'utf8')).toBe(newText);
     await runtime.undoAuditOperation(operation.id);
-    expect(await readFile(universal, 'utf8')).toBe(universalBefore);
-    expect((await lstat(universal)).mode).toBe(universalMode);
-    expect((await lstat(universal)).isSymbolicLink()).toBe(false);
-    expect(await pathExists(factory)).toBe(false);
+    expect(await readFile(universalReferent, 'utf8')).toBe(universalBefore);
+    expect(await readFile(factoryReferent, 'utf8')).toBe(factoryBefore);
+    expect((await lstat(universal)).isSymbolicLink()).toBe(true);
+    expect((await lstat(factory)).isSymbolicLink()).toBe(true);
+    expect(await readlink(universal)).toBe(universalReferent);
+    expect(await readlink(factory)).toBe(factoryReferent);
     expect(await readFile(codexConfig, 'utf8')).toBe(codexBefore);
     expect((await lstat(codexConfig)).mode).toBe(codexMode);
   });
@@ -1461,14 +1597,24 @@ describe('inventory runtime', () => {
     const universal = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
     const codexConfig = path.join(paths.sandboxRoot, '.codex', 'config.toml');
     const factoryConfig = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const universalReferent = path.join(paths.sandboxRoot, 'config-referents', 'universal-mcp.json');
+    const factoryReferent = path.join(paths.sandboxRoot, 'config-referents', 'factory-mcp.json');
+    const universalBefore = '{"servers":{}}\n';
+    const factoryBefore = '{"mcpServers":{}}\n';
     const codexBefore = 'model = "gpt-5"\n';
     const pluginBefore = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['plugin.js'] } } }, null, 2)}\n`;
     await Promise.all([
       mkdir(paths.sandboxAgentsSkillsDir, { recursive: true }),
       writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-promotion-mcp', version: '1.0.0' })),
       writeRuntimeFile(pluginConfig, pluginBefore),
+      writeRuntimeFile(universalReferent, universalBefore),
+      writeRuntimeFile(factoryReferent, factoryBefore),
       writeRuntimeFile(codexConfig, codexBefore),
       writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+    ]);
+    await Promise.all([
+      symlink(universalReferent, universal),
+      symlink(factoryReferent, factoryConfig),
     ]);
     const scanOptions = {
       paths,
@@ -1491,16 +1637,21 @@ describe('inventory runtime', () => {
 
     const [operation] = await runtime.readAuditLog();
     expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
-      universal,
-      codexConfig,
-      factoryConfig,
+      await realpath(universalReferent),
+      await realpath(codexConfig),
+      await realpath(factoryReferent),
     ]));
+    expect(operation.actions.map((action) => action.path)).not.toEqual(expect.arrayContaining([universal, factoryConfig]));
     expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
 
     await runtime.undoAuditOperation(operation.id);
-    await expect(pathExists(universal)).resolves.toBe(false);
+    await expect(readFile(universalReferent, 'utf8')).resolves.toBe(universalBefore);
+    await expect(readFile(factoryReferent, 'utf8')).resolves.toBe(factoryBefore);
+    expect((await lstat(universal)).isSymbolicLink()).toBe(true);
+    expect((await lstat(factoryConfig)).isSymbolicLink()).toBe(true);
+    expect(await readlink(universal)).toBe(universalReferent);
+    expect(await readlink(factoryConfig)).toBe(factoryReferent);
     await expect(readFile(codexConfig, 'utf8')).resolves.toBe(codexBefore);
-    await expect(pathExists(factoryConfig)).resolves.toBe(false);
     await expect(readFile(pluginConfig, 'utf8')).resolves.toBe(pluginBefore);
   });
 
@@ -1537,7 +1688,10 @@ describe('inventory runtime', () => {
     expect(await readlink(factory)).toBe(universal);
     expect(await pathExists(codexDerived)).toBe(false);
     const [operation] = await runtime.readAuditLog();
-    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universal, factory]));
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      universal,
+      factory,
+    ]));
     expect(operation.actions.some((action) => action.path?.startsWith(oldRoot) || action.path?.startsWith(newRoot))).toBe(false);
     expect(await readFile(oldDefinition, 'utf8')).toBe(oldText);
     expect(await readFile(newDefinition, 'utf8')).toBe(newText);
@@ -1670,7 +1824,10 @@ describe('inventory runtime', () => {
     expect(await readFile(universal, 'utf8')).toContain('plugin.js');
     expect(await readFile(factory, 'utf8')).toContain('plugin.js');
     const [operation] = await runtime.readAuditLog();
-    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universal, factory]));
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      await realpath(universal),
+      await realpath(factory),
+    ]));
     expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
     expect(await readFile(pluginConfig, 'utf8')).toBe(pluginText);
 

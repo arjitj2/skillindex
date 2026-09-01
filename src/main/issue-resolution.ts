@@ -2473,7 +2473,7 @@ async function chmodMcpConfig(configPath: string, mode: number): Promise<void> {
   await chmod(configPath, mode);
 }
 
-async function resolveSafeMcpConfigWritePath(configPath: string): Promise<string> {
+export async function resolveSafeMcpConfigWritePath(configPath: string): Promise<string> {
   const lexicalPath = path.normalize(configPath);
   if (isConventionalPluginCachePath(lexicalPath)) {
     throw new Error('MCP mutations cannot write into a plugin-managed cache path.');

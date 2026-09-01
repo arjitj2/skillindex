@@ -19,7 +19,11 @@ import {
   type ScanSkillInventoryOptions,
 } from '@main/scan-inventory';
 import { reconcileWatchedSkillInventoryEvent } from '@main/skill-inventory';
-import { addMcpServer as addMcpServerToInventory, resolveInventoryIssue } from '@main/issue-resolution';
+import {
+  addMcpServer as addMcpServerToInventory,
+  resolveInventoryIssue,
+  resolveSafeMcpConfigWritePath,
+} from '@main/issue-resolution';
 import { isAgentSatisfiedByNativePlugin } from '@main/plugin-managed-sources';
 import type {
   AddMcpServerRequest,
@@ -440,8 +444,11 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
 
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
       const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
-      const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
+      const auditRequest = await canonicalizeMcpAuditAffectedPaths(
         buildAddMcpServerAuditRequest(request, beforeSnapshot, lastScanOptions),
+      );
+      const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
+        auditRequest,
         () => addMcpServerToInventory(request, lastScanOptions),
       );
       commitSnapshot(nextSnapshot);
@@ -471,7 +478,10 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       // Plan audit and mutation from the same fresh inventory. A newly installed
       // writable agent must never receive a link that Undo did not snapshot.
       const beforeSnapshot = await scanInventory(lastScanOptions);
-      const auditRequest = buildResolveIssueAuditRequest(request, beforeSnapshot, lastScanOptions);
+      const plannedAuditRequest = buildResolveIssueAuditRequest(request, beforeSnapshot, lastScanOptions);
+      const auditRequest = request.entity === 'mcp'
+        ? await canonicalizeMcpAuditAffectedPaths(plannedAuditRequest)
+        : plannedAuditRequest;
       try {
         const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
           auditRequest,
@@ -502,8 +512,12 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       // between a watcher event and the user action; planning against it would
       // omit newly writable targets from both the mutation and its Undo record.
       const beforeSnapshot = await scanInventory(lastScanOptions);
+      const plannedAuditRequest = buildCapabilityActionAuditRequest(request, beforeSnapshot, lastScanOptions);
+      const auditRequest = request.entity === 'mcp'
+        ? await canonicalizeMcpAuditAffectedPaths(plannedAuditRequest)
+        : plannedAuditRequest;
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
-        buildCapabilityActionAuditRequest(request, beforeSnapshot, lastScanOptions),
+        auditRequest,
         () => applyCapabilityActionToInventory(request, {
           ...lastScanOptions,
           preparedSnapshot: beforeSnapshot,
@@ -547,10 +561,17 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       }
 
       lastScanOptions = { ...lastScanOptions, ...optionsOverride };
-      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
+      const beforeSnapshot = await scanInventory(lastScanOptions);
+      const plannedAuditRequest = buildRemoveInventoryItemAuditRequest(request, beforeSnapshot, lastScanOptions);
+      const auditRequest = request.entity === 'mcp'
+        ? await canonicalizeMcpAuditAffectedPaths(plannedAuditRequest)
+        : plannedAuditRequest;
       const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
-        buildRemoveInventoryItemAuditRequest(request, beforeSnapshot, lastScanOptions),
-        () => removeInventoryItemFromInventory(request, lastScanOptions),
+        auditRequest,
+        () => removeInventoryItemFromInventory(request, {
+          ...lastScanOptions,
+          preparedSnapshot: beforeSnapshot,
+        }),
       );
       commitSnapshot(nextSnapshot);
       await emitAudit(lastScanOptions);
@@ -602,6 +623,21 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
       subscribers.clear();
       auditSubscribers.clear();
     },
+  };
+}
+
+async function canonicalizeMcpAuditAffectedPaths(request: AuditOperationRequest): Promise<AuditOperationRequest> {
+  const affectedPaths = dedupePaths(await Promise.all(
+    request.affectedPaths.map((affectedPath) => resolveSafeMcpConfigWritePath(affectedPath)),
+  ));
+  const summary = request.kind === 'remove-inventory-item'
+    ? `${affectedPaths.length} ${affectedPaths.length === 1 ? 'location' : 'locations'} removed.`
+    : `${affectedPaths.length} ${affectedPaths.length === 1 ? 'config' : 'configs'} changed.`;
+  return {
+    ...request,
+    affectedPaths,
+    summary,
+    undoable: affectedPaths.length > 0,
   };
 }
 

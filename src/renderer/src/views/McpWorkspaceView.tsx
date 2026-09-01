@@ -20,6 +20,7 @@ import {
 } from '../lib/inventory-presentation';
 import { getActiveIssueCountForAutoRepairScope } from '../lib/auto-repair';
 import { getMcpResolveActionState, getPluginUpdateActionRequest } from '../lib/issue-resolution';
+import { getInventoryRemovalPresentation } from '../lib/removal-presentation';
 import type { InspectorModel, InspectorProvenanceSummaryRow } from '../lib/detail-inspector-model';
 import { ScopedAutoRepairControl } from '../components/AutoRepairReview';
 import { DetailInspectorPanel } from '../components/DetailInspectorPanel';
@@ -549,6 +550,9 @@ function McpDetailPanel({
   }
 
   const resolveAction = getMcpResolveActionState(mcp, mcpInspectorModel, inventorySnapshot);
+  const removalPresentation = getInventoryRemovalPresentation(inventorySnapshot, {
+    entity: 'mcp', mcpName: mcp.name,
+  });
 
   return (
     <DetailInspectorPanel
@@ -557,8 +561,8 @@ function McpDetailPanel({
       footerActions={[
         ...(mcpInspectorModel.activeProblem.primaryActionLabel
           ? [{
-            disabled: !resolveAction.request || isResolvingIssue,
-            label: isResolvingIssue ? 'Applying…' : mcpInspectorModel.activeProblem.primaryActionLabel,
+            disabled: !resolveAction.request || isResolvingIssue || isApplyingCapabilityAction,
+            label: isResolvingIssue || isApplyingCapabilityAction ? 'Applying…' : mcpInspectorModel.activeProblem.primaryActionLabel,
             onClick: () => {
               if (!resolveAction.request) {
                 return;
@@ -590,8 +594,8 @@ function McpDetailPanel({
             variant: 'subtle' as const,
           }]
           : []),
-        {
-          disabled: isRemovingInventoryItem,
+        ...(removalPresentation.canRemove ? [{
+          disabled: isRemovingInventoryItem || isResolvingIssue || isApplyingCapabilityAction,
           label: isRemovingInventoryItem ? 'Removing...' : 'Remove',
           onClick: () => {
             onRequestRemove({
@@ -601,12 +605,12 @@ function McpDetailPanel({
           },
           shortcut: 'R',
           variant: 'danger' as const,
-        },
+        }] : []),
       ]}
       model={mcpInspectorModel}
       paneClassName="mcp-inspector-panel"
       sandboxRoot={sandboxRoot}
-      isLocationActionPending={isApplyingCapabilityAction}
+      isLocationActionPending={isApplyingCapabilityAction || isResolvingIssue}
       onClose={onClearSelection}
       onLocationAction={(action) => {
         if (action.kind === 'update-universal-from-plugin') {

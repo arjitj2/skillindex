@@ -36,6 +36,7 @@ import {
 } from './app/bootstrap';
 import { getAutoResolvableMcpRequests, getAutoResolvableSkillRequests, getAutoResolvableSubagentRequests } from './lib/issue-resolution';
 import type { PendingInventoryOperation } from './lib/pending-inventory-operation';
+import { getInventoryRemovalPresentation, hasInventoryItem } from './lib/removal-presentation';
 import { AppSidebar } from './components/AppSidebar';
 import { AddActionDropdown, type AddActionDropdownItem } from './components/ui';
 import {
@@ -93,6 +94,7 @@ function getAutoResolvableRequestsForSnapshot(
 
 interface PendingRemoveItem {
   label: string;
+  preservesPluginSource: boolean;
   request: RemoveInventoryItemRequest;
 }
 
@@ -1083,8 +1085,11 @@ export default function App() {
   );
 
   const handleRequestRemoveInventoryItem = useCallback((request: RemoveInventoryItemRequest, label: string) => {
+    const removalPresentation = getInventoryRemovalPresentation(latestInventorySnapshotRef.current, request);
+    if (!removalPresentation.canRemove) return;
     setPendingRemoveItem({
       label,
+      preservesPluginSource: removalPresentation.preservesPluginSource,
       request,
     });
   }, []);
@@ -1094,30 +1099,36 @@ export default function App() {
       return;
     }
 
-    const { label, request } = pendingRemoveItem;
+    const { label, preservesPluginSource, request } = pendingRemoveItem;
     setIsRemovingInventoryItem(true);
 
     try {
       const nextInventorySnapshot = await desktopApi.removeInventoryItem(request);
-      applyInventorySnapshot(nextInventorySnapshot);
-      if (request.entity === 'skill') {
+      const keepsSelection = preservesPluginSource && hasInventoryItem(nextInventorySnapshot, request);
+      applyInventorySnapshot(
+        nextInventorySnapshot,
+        keepsSelection && request.entity === 'skill' ? request.skillName : undefined,
+      );
+      if (!keepsSelection && request.entity === 'skill') {
         setSelectedSkillName(null);
         setSelectionOverrideSkillName(null);
         setSelectedSkillProblemKey(null);
         setSelectedSkillVariantPath(null);
-      } else if (request.entity === 'mcp') {
+      } else if (!keepsSelection && request.entity === 'mcp') {
         setSelectedMcpName(null);
         setSelectedMcpProblemKey(null);
         setSelectedMcpVariantPath(null);
-      } else {
+      } else if (!keepsSelection) {
         setSelectedSubagentName(null);
         setSelectedSubagentProblemKey(null);
         setSelectedSubagentVariantPath(null);
       }
       setPendingRemoveItem(null);
       await showAppToastWithLatestUndo(
-        'Item removed',
-        `${label} was removed from all tracked locations.`,
+        preservesPluginSource ? 'Universal and agent copies removed' : 'Item removed',
+        preservesPluginSource
+          ? `${label} was removed from Universal and agent locations. The plugin source was not changed.`
+          : `${label} was removed from all tracked locations.`,
       );
     } catch (error) {
       showErrorToast('Remove failed', error);
@@ -2126,10 +2137,17 @@ function RemoveItemDialog({
           </button>
         </div>
         <div className="remove-item-dialog__body">
-          <p>
-            <strong>{item.label}</strong>
-            {' will be removed from every location Skill Index currently tracks.'}
-          </p>
+          {item.preservesPluginSource ? (
+            <p>
+              <strong>{item.label}</strong>
+              {' Universal and agent copies will be removed. The plugin source will stay unchanged.'}
+            </p>
+          ) : (
+            <p>
+              <strong>{item.label}</strong>
+              {' will be removed from every location Skill Index currently tracks.'}
+            </p>
+          )}
           <p>
             {getRemoveItemRecoveryCopy(item.request)}
           </p>

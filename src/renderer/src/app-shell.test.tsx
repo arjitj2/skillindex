@@ -1946,6 +1946,47 @@ describe('App shell inventory views', () => {
     });
   });
 
+  it('does not offer Remove for a plugin-only MCP source', async () => {
+    const snapshot = createPluginBoundMcpInventorySnapshot();
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+
+    render(<App />);
+    await openMcps();
+    fireEvent.click(getMcpRow('plugin-bound-mcp'));
+    expect(await screen.findByRole('heading', { name: 'plugin-bound-mcp', level: 3 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove$/i })).not.toBeInTheDocument();
+  });
+
+  it('describes mixed plugin removal as removing only Universal and agent copies and keeps the source selected', async () => {
+    const snapshot = createInventorySnapshotWithAcceptedPluginAlternate();
+    const afterRemoval = structuredClone(snapshot);
+    const skillName = 'example-workflow-kit:handoff-notes-with-static';
+    const remaining = afterRemoval.skills.find((skill) => skill.name === skillName)!;
+    remaining.locations = remaining.locations.filter((location) => location.provenance?.kind === 'plugin');
+    remaining.structuralState = 'single-source-noncanonical';
+    remaining.issueReasons = ['missing-canonical'];
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+    removeInventoryItemMock.mockResolvedValue(afterRemoval);
+
+    render(<App />);
+    await openSkills();
+    fireEvent.click(getSkillRow('handoff-notes-with-static'));
+    expect(await screen.findByRole('heading', { name: /handoff-notes-with-static/i, level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Remove$/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /^Remove skill$/i });
+    expect(within(dialog).getByText(/Universal and agent copies will be removed/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/plugin source will stay unchanged/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/removed from every location/i)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Yes, remove$/i }));
+
+    expect(await screen.findByText(/was removed from Universal and agent locations/i)).toBeInTheDocument();
+    expect(screen.getByText(/plugin source was not changed/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /handoff-notes-with-static/i, level: 3 })).toBeInTheDocument();
+  });
+
   it('shows subagent dismissal failures as toasts instead of inline banners', async () => {
     const snapshot = structuredClone(representativeInventorySnapshot);
     readCachedInventoryMock.mockResolvedValue(snapshot);
@@ -2461,6 +2502,26 @@ describe('App shell inventory views', () => {
         selectedVariantPath: '/Users/arjitjaiswal/.skillindex/sandbox/.claude/plugins/cache/sandbox-gallery/example-workflow-kit/5.1.0/skills/handoff-notes-with-static',
       });
     });
+  });
+
+  it('disables issue resolution while a capability action is applying', async () => {
+    const snapshot = createInventorySnapshotWithAcceptedPluginAlternate();
+    const deferred = createDeferred<SkillInventorySnapshot>();
+    readCachedInventoryMock.mockResolvedValue(snapshot);
+    scanInventoryMock.mockResolvedValue(snapshot);
+    applyCapabilityActionMock.mockReturnValue(deferred.promise);
+
+    render(<App />);
+    await openSkills();
+    fireEvent.click(getSkillRow('handoff-notes-with-static'));
+    expect(await screen.findByRole('heading', { name: /handoff-notes-with-static/i, level: 3 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Locations/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Make Universal$/i }));
+
+    fireEvent.click(screen.getByRole('tab', { name: /Problems/i }));
+    expect(screen.getByRole('button', { name: /Applying/i })).toBeDisabled();
+    deferred.resolve(snapshot);
+    await waitFor(() => expect(applyCapabilityActionMock).toHaveBeenCalledTimes(1));
   });
 
   it('renders the redesigned MCP inspector with problem rows and one focused diff surface', async () => {
