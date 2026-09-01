@@ -31,7 +31,7 @@ symlink targets, including through filesystem aliases.
 
 | Item type | Universal source | Agent-local representation |
 | --- | --- | --- |
-| Skills | Preferred canonical skills directory, default `~/.agents/skills` | Skill package in each agent skills directory, normally a symlink to Universal |
+| Skills | The preferred canonical directory only when that skill already exists there; otherwise `~/.agents/skills` | Skill package in each agent skills directory, normally a symlink to Universal |
 | Subagents | `~/.agents/agents` | One rendered subagent file per agent, in that agent's supported format |
 | MCPs | `~/.agents/mcp.json` | One server entry inside each agent's MCP config |
 
@@ -45,6 +45,11 @@ for skills or **Definition Mismatch** for subagents or MCPs while Universal is
 missing.
 
 Use **Use as Universal** to export a selected plugin candidate into Universal.
+Configuring a preferred canonical directory does not make it the global
+Universal destination. A skill uses that directory only when it already has its
+opted-in canonical package there; all other skills materialize in
+`~/.agents/skills`, regardless of whether their selected source is a plugin or
+an agent-local copy.
 Once Universal exists, any plugin candidate with different content participates
 in the ordinary **Diverged Copies** or **Definition Mismatch** issue alongside
 Universal. Selecting a plugin version replaces only Universal and refreshes

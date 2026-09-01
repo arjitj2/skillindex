@@ -2215,7 +2215,7 @@ describe('resolveInventoryIssue', () => {
     expect(resolvedSkill?.detailDiagnostics.universalDecision?.acceptedAlternates).toEqual([]);
   });
 
-  it('materializes an .agents symlink as Universal when it points at the preferred canonical source', async () => {
+  it('preserves preferred ownership when the skill already exists in the preferred canonical source', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-preferred-agents-choice-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -2275,10 +2275,11 @@ describe('resolveInventoryIssue', () => {
       includeLiveSources: true,
     });
 
-    await expect(lstat(agentsPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
+    await expect(lstat(agentsPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(true);
     await expect(readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).resolves.toContain('Preferred canonical repo skill.');
-    expect(await readlink(preferredPath)).toBe(agentsPath);
-    expect(await readlink(factoryPath)).toBe(agentsPath);
+    await expect(lstat(preferredPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
+    expect(await readlink(agentsPath)).toBe(preferredPath);
+    expect(await readlink(factoryPath)).toBe(preferredPath);
     expect(resolvedSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
       structuralState: 'healthy',
       isDrifted: false,
@@ -2288,12 +2289,71 @@ describe('resolveInventoryIssue', () => {
           state: 'user-confirmed',
           universal: {
             kind: 'path',
-            sourceId: 'live-agents',
-            path: agentsPath,
+            sourceId: `preferred-canonical:${preferredSkillsDir}`,
+            path: preferredPath,
           },
         },
       },
     });
+  });
+
+  it('uses .agents for an unowned skill when an unrelated preferred canonical skill exists', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-unrelated-preferred-choice-'));
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
+    const paths = resolveSkillIndexPaths({
+      env: { SKILL_INDEX_DATA_DIR: root },
+      homeDir,
+    });
+    const skillName = 'standard-selected-skill';
+    const preferredSkillsDir = path.join(homeDir, 'repos', 'arjit-skills', 'skills');
+    const unexpectedPreferredPath = path.join(preferredSkillsDir, skillName);
+    const agentsPath = path.join(homeDir, '.agents', 'skills', skillName);
+    const factoryPath = path.join(homeDir, '.factory', 'skills', skillName);
+    const selectedContent = [
+      '---',
+      `name: ${skillName}`,
+      'description: Selected agent-local version.',
+      '---',
+      '',
+      '# Selected version',
+      '',
+    ].join('\n');
+    await writeSkillFile(path.join(preferredSkillsDir, 'repo-owned-skill', 'SKILL.md'), [
+      '---',
+      'name: repo-owned-skill',
+      'description: This unrelated skill opts into the preferred repository.',
+      '---',
+      '',
+      '# Repo-owned skill',
+      '',
+    ].join('\n'));
+    await writeSkillFile(path.join(factoryPath, 'SKILL.md'), selectedContent);
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [],
+      preferredCanonicalSourcePath: preferredSkillsDir,
+      dismissedDriftSignatures: [],
+      dismissedMcpSignatures: [],
+    });
+
+    const resolvedSnapshot = await applyCapabilityAction({
+      entity: 'skill',
+      action: 'choose-universal-version',
+      skillName,
+      selectedVariantPath: factoryPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    await expect(lstat(agentsPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
+    await expect(readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).resolves.toBe(selectedContent);
+    expect(await readlink(factoryPath)).toBe(agentsPath);
+    await expect(lstat(unexpectedPreferredPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(resolvedSnapshot.skills.find((skill) => skill.name === skillName)?.detailDiagnostics.universalDecision?.universal)
+      .toMatchObject({ kind: 'path', sourceId: 'live-agents', path: agentsPath });
   });
 
   it('rejects stale skill issue resolution requests after the issue is already resolved', async () => {
@@ -2706,7 +2766,7 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(paths.cacheFile, 'utf8')).toBe(beforeCache);
   });
 
-  it('creates missing live canonical packages in the preferred source when configured', async () => {
+  it('creates missing live canonical packages in .agents when the skill has not opted into the preferred source', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-live-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -2718,6 +2778,7 @@ describe('resolveInventoryIssue', () => {
     const skillName = 'preferred-missing-canonical-skill';
     const preferredSkillsDir = path.join(homeDir, 'repos', 'arjit-skills', 'skills');
     const preferredPath = path.join(preferredSkillsDir, skillName);
+    const agentsPath = path.join(homeDir, '.agents', 'skills', skillName);
     const claudePath = path.join(homeDir, '.claude', 'skills', skillName);
     const skillContent = [
       '---',
@@ -2753,8 +2814,9 @@ describe('resolveInventoryIssue', () => {
       },
     );
 
-    expect(await readFile(path.join(preferredPath, 'SKILL.md'), 'utf8')).toBe(skillContent);
-    expect(await readlink(claudePath)).toBe(preferredPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toBe(skillContent);
+    expect(await readlink(claudePath)).toBe(agentsPath);
+    await expect(lstat(preferredPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(resolvedSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
       structuralState: 'healthy',
       isDrifted: false,
@@ -2762,7 +2824,7 @@ describe('resolveInventoryIssue', () => {
     });
   });
 
-  it('repairs diverged live copies to the selected version in the preferred canonical source when configured', async () => {
+  it('repairs an unowned diverged skill in .agents instead of the configured preferred source', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-live-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));
     const paths = resolveSkillIndexPaths({
@@ -2822,9 +2884,10 @@ describe('resolveInventoryIssue', () => {
       },
     );
 
-    expect(await readFile(path.join(preferredPath, 'SKILL.md'), 'utf8')).toBe(selectedContent);
-    expect(await readlink(agentsPath)).toBe(preferredPath);
-    expect(await readlink(claudePath)).toBe(preferredPath);
+    expect(await readFile(path.join(agentsPath, 'SKILL.md'), 'utf8')).toBe(selectedContent);
+    await expect(lstat(agentsPath).then((stats) => stats.isSymbolicLink())).resolves.toBe(false);
+    expect(await readlink(claudePath)).toBe(agentsPath);
+    await expect(lstat(preferredPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(resolvedSnapshot.skills.find((skill) => skill.name === skillName)).toMatchObject({
       structuralState: 'healthy',
       isDrifted: false,

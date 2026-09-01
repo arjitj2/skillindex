@@ -511,6 +511,7 @@ async function resolveSkillIssueIfCurrent(
         {
           ...options,
           preparedSnapshot: snapshot,
+          allowDefaultUniversalRoot: true,
           // Non-plugin canonicalization keeps the existing two-step behavior.
           // Promoting a managed plugin source is one explicit export operation:
           // create Universal and distribute it to every compatible writable host.

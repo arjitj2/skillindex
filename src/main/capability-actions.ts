@@ -21,7 +21,7 @@ import {
 } from '@shared/skill-index-paths';
 
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
-import { makeSkillCanonical } from '@main/skill-canonicalization';
+import { makeSkillCanonical, resolveCanonicalSkillSource } from '@main/skill-canonicalization';
 import {
   resolveInventoryIssue,
   updateMcpUniversalFromPluginSource,
@@ -38,6 +38,7 @@ export interface CapabilityActionOptions extends ScanSkillInventoryOptions {
 }
 
 const UNIVERSAL_CHOICE_AUTO_REPAIR_ISSUES: SkillResolvableIssue[] = [
+  'missing-canonical',
   'broken-symlink',
   'wrong-symlink-target',
   'missing-symlinks',
@@ -192,11 +193,17 @@ async function persistSkillUniversalDecision(
   const capabilityName = getCapabilityName(skill, selectedLocation);
   const acceptedAlternates = findUniversalDecisionAlternates(snapshot, skill, selectedLocation, capabilityName);
   await materializeSelectedSymlinkUniversal(selectedLocation, snapshot);
+  const universalLocation = resolveSkillUniversalDecisionLocation(
+    skill,
+    selectedLocation,
+    snapshot,
+    options.paths,
+  );
   const decision: SkillUniversalDecision = {
-    id: createSkillUniversalDecisionId(skill.name, selectedLocation),
+    id: createSkillUniversalDecisionId(skill.name, universalLocation),
     skillName: skill.name,
     state: 'user-confirmed',
-    universal: buildSkillUniversalOrigin(selectedLocation),
+    universal: buildSkillUniversalOrigin(universalLocation),
     acceptedAlternates,
     updatedAt: new Date().toISOString(),
   };
@@ -216,6 +223,39 @@ async function persistSkillUniversalDecision(
       decision,
     ],
   });
+}
+
+function resolveSkillUniversalDecisionLocation(
+  skill: SkillRecord,
+  selectedLocation: SkillLocationRecord,
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+): SkillLocationRecord {
+  const canonicalSource = resolveCanonicalSkillSource(
+    snapshot,
+    selectedLocation.sourceScope,
+    skill.name,
+    paths,
+  );
+  const universalPath = path.join(canonicalSource.skillsDir, skill.name);
+
+  return {
+    ...selectedLocation,
+    path: universalPath,
+    entrypointPath: selectedLocation.installKind === 'directory'
+      ? path.join(universalPath, 'SKILL.md')
+      : universalPath,
+    sourceId: canonicalSource.id,
+    sourceLabel: canonicalSource.label,
+    sourceScope: canonicalSource.scope,
+    fileType: 'real-file',
+    canonical: true,
+    resolvedPath: universalPath,
+    symlinkTarget: undefined,
+    provenance: undefined,
+    canonicalRole: 'canonical',
+    mutability: canonicalSource.writable ? 'writable' : selectedLocation.mutability,
+  };
 }
 
 function isSelectableUniversalVersion(location: SkillLocationRecord): boolean {
