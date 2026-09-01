@@ -612,7 +612,7 @@ describe('inventory view chrome', () => {
     });
   });
 
-  it('renders one status pill per issue and orders active rows by issue count', () => {
+  it('renders one status pill per issue while preserving alphabetical row order', () => {
     render(
       <McpWorkspaceView
         inventorySnapshot={representativeInventorySnapshot}
@@ -645,6 +645,8 @@ describe('inventory view chrome', () => {
     expect(rows.item(0)).toHaveTextContent('broken-mcp');
     expect(rows.item(0)).toHaveTextContent('Definition Mismatch');
     expect(rows.item(0)).toHaveTextContent('Invalid Definition');
+    expect(rows.item(1)).toHaveTextContent('diagnostic-rich-mcp');
+    expect(rows.item(2)).toHaveTextContent('missing-from-agents-mcp');
   });
 
   it('shows filter-specific empty states for Skills when a non-empty inventory has no matches for the active filter', () => {
