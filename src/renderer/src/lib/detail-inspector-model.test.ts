@@ -154,7 +154,7 @@ describe('buildSkillInspectorModel', () => {
     expect(unselectedProblem.selectedVariant).toBeNull();
     expect(unselectedProblem.primaryActionLabel).toBe('Use as Universal');
     expect(unselectedProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
-      'Cached copy—usage unknown',
+      'Usage unknown',
       'Newer comparable plugin version',
     ]);
 
@@ -168,6 +168,59 @@ describe('buildSkillInspectorModel', () => {
     expect(selectedProblem.selectedVariant?.dependencyWarnings).toEqual([
       { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
     ]);
+  });
+
+  it('selects the only distinct plugin skill version when identical cached copies share it', () => {
+    const firstPath = '/Users/tester/.codex/plugins/cache/tools/1.0.0/skills/plugin-copy';
+    const secondPath = '/Users/tester/.codex/plugins/cache/tools/d6169bef/skills/plugin-copy';
+    const locations: SkillLocationRecord[] = [firstPath, secondPath].map((path, index) => ({
+      path,
+      entrypointPath: `${path}/SKILL.md`,
+      sourceId: `plugin-tools-${index}`,
+      sourceLabel: `Codex Plugin tools ${index + 1}`,
+      sourceScope: 'live',
+      fileType: 'real-file',
+      installKind: 'directory',
+      modifiedAt: index === 0 ? '2026-08-31T23:59:00.000Z' : '2026-01-01T00:00:00.000Z',
+      canonical: false,
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+      contentHash: 'identical-content',
+      definitionText: '# Same plugin version',
+    }));
+    const skill: SkillRecord = {
+      name: 'plugin-copy',
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['missing-canonical'],
+      locations,
+      detailDiagnostics: { duplicateCandidates: [], installSources: [] },
+      managedSourceCandidates: [
+        buildManagedCandidate({ path: secondPath, version: '1.0.0', evidence: 'cached-unknown' }),
+        buildManagedCandidate({ path: firstPath, version: 'd6169bef', evidence: 'enabled-installation' }),
+      ],
+    };
+
+    const model = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: 'missing-canonical',
+      selectedVariantPath: null,
+    }, agentIndex);
+    const problem = expectVariantResolution(model.activeProblem);
+
+    expect(problem.variants).toHaveLength(1);
+    expect(model.selectedVariantPath).toBe(firstPath);
+    expect(problem.selectedVariant?.path).toBe(firstPath);
+    expect(problem.selectedVariant?.evidenceLabel).toBe('Currently used in Codex');
+    expect(problem.changedFiles.length).toBeGreaterThan(0);
+
+    const explicitlySelected = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: 'missing-canonical',
+      selectedVariantPath: secondPath,
+    }, agentIndex);
+    const explicitlySelectedProblem = expectVariantResolution(explicitlySelected.activeProblem);
+    expect(explicitlySelectedProblem.selectedVariant?.path).toBe(secondPath);
+    expect(explicitlySelectedProblem.selectedVariant?.evidenceLabel).toBe('Usage unknown');
   });
 
   it('shows a non-problem plugin update advisory for a healthy skill', () => {
@@ -199,7 +252,7 @@ describe('buildSkillInspectorModel', () => {
     expect(model.pluginUpdateAdvisory).toEqual({
       title: 'Plugin Update Available',
       candidates: [objectContaining({
-        evidenceLabel: 'Currently enabled in Codex',
+        evidenceLabel: 'Currently used in Codex',
         action: objectContaining({
           kind: 'update-universal-from-plugin',
           label: 'Update Universal from this version',
@@ -2021,8 +2074,8 @@ describe('buildSkillInspectorModel', () => {
     expect(unselectedProblem.selectedVariant).toBeNull();
     expect(unselectedProblem.primaryActionLabel).toBe('Add to Universal');
     expect(unselectedProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
-      'Cached copy—usage unknown',
-      'Currently enabled in Codex',
+      'Usage unknown',
+      'Currently used in Codex',
     ]);
 
     const selected = buildSubagentInspectorModel(subagent, {
@@ -3305,7 +3358,7 @@ describe('buildMcpInspectorModel', () => {
     expect(activeProblem.selectedVariant).toBeNull();
     expect(activeProblem.primaryActionLabel).toBe('Promote to Universal');
     expect(activeProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
-      'Cached copy—usage unknown',
+      'Usage unknown',
       'Newer comparable plugin version',
     ]);
   });

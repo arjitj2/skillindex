@@ -86,7 +86,7 @@ describe('DetailInspectorPanel', () => {
           isBaseline: false,
           locations: [],
           updatedLabel: 'Updated now',
-          evidenceLabel: 'Currently enabled in Codex',
+          evidenceLabel: 'Currently used in Codex',
         }],
         changedFiles: [],
         selectedVariant: null,
@@ -103,7 +103,10 @@ describe('DetailInspectorPanel', () => {
 
     render(<DetailInspectorPanel model={model} onClose={vi.fn()} />);
 
-    expect(screen.getByText('Currently enabled in Codex')).toBeVisible();
+    const evidence = screen.getByText('Currently used in Codex');
+    expect(evidence).toBeVisible();
+    expect(evidence).toHaveClass('detail-inspector-panel__variant-evidence');
+    expect(evidence).not.toHaveClass('detail-inspector-panel__badge');
   });
 
   it('shows selected plugin MCP dependency warnings without disabling promotion', () => {
@@ -199,12 +202,11 @@ describe('DetailInspectorPanel', () => {
       />,
     );
 
-    const card = screen.getByRole('group', { name: 'Plugin update candidate: Cached copy—usage unknown' });
+    const card = screen.getByRole('group', { name: 'Plugin update candidate: Usage unknown' });
     expect(card).toHaveClass('detail-inspector-panel__plugin-update-card');
-    expect(within(card).getByText('Cached copy—usage unknown')).toHaveClass(
-      'detail-inspector-panel__badge',
-      'detail-inspector-panel__badge--neutral',
-    );
+    const evidence = within(card).getByText('Usage unknown');
+    expect(evidence).toHaveClass('detail-inspector-panel__plugin-update-evidence');
+    expect(evidence).not.toHaveClass('detail-inspector-panel__badge');
     expect(within(card).getByText(/tools\/1\.1\.0\/skills\/healthy-skill/)).toBeVisible();
     expect(within(card).getByText('Detected dependency: References a path inside the plugin cache.')).toBeVisible();
     expect(within(card).getByRole('button', { name: /Update Universal from this version:/i })).toHaveTextContent(
@@ -244,7 +246,7 @@ describe('DetailInspectorPanel', () => {
     );
 
     const pendingAction = screen.getByRole('button', {
-      name: /Applying plugin update: Cached copy—usage unknown/i,
+      name: /Applying plugin update: Usage unknown/i,
     });
     expect(pendingAction).toBeDisabled();
     expect(pendingAction).toHaveTextContent(/^Applying\.\.\.$/);

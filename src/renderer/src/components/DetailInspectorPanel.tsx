@@ -201,12 +201,12 @@ export function DetailInspectorPanel({
                   role="group"
                 >
                   <span className="detail-inspector-panel__plugin-update-copy">
-                    <span className="detail-inspector-panel__badge detail-inspector-panel__badge--neutral">
-                      {candidate.evidenceLabel}
-                    </span>
                     <span className="detail-inspector-panel__plugin-update-path" title={formatDisplayPath(candidate.path)}>
                       {formatPath(candidate.path, 72)}
                     </span>
+                    <em className="detail-inspector-panel__plugin-update-evidence">
+                      {candidate.evidenceLabel}
+                    </em>
                     {candidate.warnings.map((warning, index) => (
                       <span className="detail-inspector-panel__plugin-update-warning" key={`${warning.label}-${index}`}>
                         {warning.label}: {warning.detail}
@@ -336,29 +336,31 @@ export function DetailInspectorPanel({
                           onClick={() => onVariantSelect?.(variant.path)}
                         >
                           <>
-                            {entityKind === 'mcp' ? (
-                              <span className="detail-inspector-panel__variant-copy">
-                                <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
-                                {variantSecondaryLabel ? <span>{variantSecondaryLabel}</span> : null}
-                              </span>
-                            ) : (
-                              <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
-                            )}
-                            {isCanonical || variant.evidenceLabel ? (
+                            <span className="detail-inspector-panel__variant-copy">
+                              {entityKind === 'mcp' ? (
+                                <span className="detail-inspector-panel__variant-copy-main">
+                                  <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
+                                  {variantSecondaryLabel ? (
+                                    <span className="detail-inspector-panel__variant-secondary">{variantSecondaryLabel}</span>
+                                  ) : null}
+                                </span>
+                              ) : (
+                                <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
+                              )}
+                              {variant.evidenceLabel ? (
+                                <em className="detail-inspector-panel__variant-evidence">{variant.evidenceLabel}</em>
+                              ) : null}
+                            </span>
+                            {isCanonical ? (
                               <span className="detail-inspector-panel__variant-badges">
-                                {variant.evidenceLabel ? (
-                                  <span className="detail-inspector-panel__badge">{variant.evidenceLabel}</span>
-                                ) : null}
-                                {isCanonical ? (
-                                  <span
-                                    className={[
-                                      'detail-inspector-panel__badge',
-                                      isCanonicalComparison ? 'detail-inspector-panel__badge--canonical-compare' : 'detail-inspector-panel__badge--canonical',
-                                    ].filter(Boolean).join(' ')}
-                                  >
-                                    Universal
-                                  </span>
-                                ) : null}
+                                <span
+                                  className={[
+                                    'detail-inspector-panel__badge',
+                                    isCanonicalComparison ? 'detail-inspector-panel__badge--canonical-compare' : 'detail-inspector-panel__badge--canonical',
+                                  ].filter(Boolean).join(' ')}
+                                >
+                                  Universal
+                                </span>
                               </span>
                             ) : null}
                           </>
@@ -823,8 +825,12 @@ function InspectorVariantPicker({
               <>
                 {entityKind === 'mcp' ? (
                   <span className="detail-inspector-panel__variant-copy">
-                    <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
-                    {variantSecondaryLabel ? <span>{variantSecondaryLabel}</span> : null}
+                    <span className="detail-inspector-panel__variant-copy-main">
+                      <strong className="detail-inspector-panel__variant-primary">{variantPrimaryLabel}</strong>
+                      {variantSecondaryLabel ? (
+                        <span className="detail-inspector-panel__variant-secondary">{variantSecondaryLabel}</span>
+                      ) : null}
+                    </span>
                   </span>
                 ) : (
                   <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>

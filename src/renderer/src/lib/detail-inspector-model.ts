@@ -334,31 +334,33 @@ function buildPluginUpdateAdvisory(
 function formatPluginCandidateEvidence(candidate: PluginManagedSourceCandidate): string {
   switch (candidate.evidence) {
     case 'enabled-installation':
-      return `Currently enabled in ${candidate.plugin.host === 'codex' ? 'Codex' : 'Claude'}`;
+      return `Currently used in ${candidate.plugin.host === 'codex' ? 'Codex' : 'Claude'}`;
     case 'newer-comparable-version':
       return 'Newer comparable plugin version';
     case 'cached-unknown':
-      return 'Cached copy—usage unknown';
+      return 'Usage unknown';
   }
 }
 
 function requiresExplicitManagedSourceSelection(
   candidates: PluginManagedSourceCandidate[] | undefined,
   selectedVariantPath: string | null | undefined,
+  variantPathGroups: string[][],
 ): boolean {
   if (selectedVariantPath) return false;
   const missingUniversalPaths = new Set((candidates ?? [])
     .filter((candidate) => candidate.relationship === 'universal-missing')
     .map((candidate) => candidate.path));
-  return missingUniversalPaths.size > 1;
+  const selectableManagedVersions = variantPathGroups.filter((paths) =>
+    paths.some((path) => missingUniversalPaths.has(path)));
+  return selectableManagedVersions.length > 1;
 }
 
-function getManagedCandidateForPaths(
-  paths: string[],
+function getManagedCandidateForPath(
+  path: string,
   candidates: PluginManagedSourceCandidate[] | undefined,
 ): PluginManagedSourceCandidate | undefined {
-  const pathSet = new Set(paths);
-  return (candidates ?? []).find((candidate) => pathSet.has(candidate.path));
+  return (candidates ?? []).find((candidate) => candidate.path === path);
 }
 
 function getManagedCandidateWarningsForPaths(
@@ -776,7 +778,11 @@ function buildSkillVariantProblem(
   const baselineVariant = getSkillBaselineVariant(problemKey, groupedVariants);
   const orderedVariants = orderSkillVariantsForInspector(groupedVariants, baselineVariant);
   const requiresExplicitSelection = problemKey === 'missing-canonical'
-    && requiresExplicitManagedSourceSelection(skill.managedSourceCandidates, selectedVariantPath);
+    && requiresExplicitManagedSourceSelection(
+      skill.managedSourceCandidates,
+      selectedVariantPath,
+      orderedVariants.map((variant) => variant.locations.map((location) => location.path)),
+    );
   const selectedVariant = requiresExplicitSelection
     ? null
     : selectSkillVariant(orderedVariants, selectedVariantPath);
@@ -903,7 +909,11 @@ function buildMcpVariantProblem(
     : getMcpBaselineVariant(groupedVariants, getMcpReferencePath(mcp));
   const orderedVariants = orderMcpVariantsForInspector(groupedVariants, baselineVariant);
   const requiresExplicitSelection = problemKey === 'missing-universal'
-    && requiresExplicitManagedSourceSelection(mcp.managedSourceCandidates, selectedVariantPath);
+    && requiresExplicitManagedSourceSelection(
+      mcp.managedSourceCandidates,
+      selectedVariantPath,
+      orderedVariants.map((variant) => variant.locations.map((location) => location.configPath)),
+    );
   const selectedVariant = requiresExplicitSelection
     ? null
     : selectMcpVariant(orderedVariants, selectedVariantPath, baselineVariant);
@@ -1031,7 +1041,11 @@ function buildSubagentVariantProblem(
     : getSubagentBaselineVariant(groupedVariants, getCanonicalSubagentPath(subagent));
   const orderedVariants = orderSubagentVariantsForInspector(groupedVariants, baselineVariant);
   const requiresExplicitSelection = problemKey === 'missing-universal'
-    && requiresExplicitManagedSourceSelection(subagent.managedSourceCandidates, selectedVariantPath);
+    && requiresExplicitManagedSourceSelection(
+      subagent.managedSourceCandidates,
+      selectedVariantPath,
+      orderedVariants.map((variant) => variant.locations.map((location) => location.path)),
+    );
   const selectedVariant = requiresExplicitSelection
     ? null
     : selectSubagentVariant(orderedVariants, selectedVariantPath, baselineVariant);
@@ -2618,7 +2632,7 @@ function mapSkillVariant(
 ): InspectorVariantModel {
   const representative = variant.representative;
   const candidatePaths = variant.locations.map((location) => location.path);
-  const managedCandidate = getManagedCandidateForPaths(candidatePaths, managedSourceCandidates);
+  const managedCandidate = getManagedCandidateForPath(representative.path, managedSourceCandidates);
   const dependencyWarnings = getManagedCandidateWarningsForPaths(candidatePaths, managedSourceCandidates);
   const badge = representative.path === baselineVariant?.representative.path
       ? 'Universal'
@@ -2653,8 +2667,7 @@ function mapMcpVariant(
   managedSourceCandidates?: PluginManagedSourceCandidate[],
 ): InspectorVariantModel {
   const representative = variant.representative;
-  const candidatePaths = variant.locations.map((location) => location.configPath);
-  const managedCandidate = getManagedCandidateForPaths(candidatePaths, managedSourceCandidates);
+  const managedCandidate = getManagedCandidateForPath(representative.configPath, managedSourceCandidates);
   const badge = representative.configPath === selectedVariant?.representative.configPath
     ? 'Selected Version'
     : representative.configPath === baselineVariant?.representative.configPath
@@ -2706,7 +2719,7 @@ function mapSubagentVariant(
 ): InspectorVariantModel {
   const representative = variant.representative;
   const candidatePaths = variant.locations.map((location) => location.path);
-  const managedCandidate = getManagedCandidateForPaths(candidatePaths, managedSourceCandidates);
+  const managedCandidate = getManagedCandidateForPath(representative.path, managedSourceCandidates);
   const dependencyWarnings = getManagedCandidateWarningsForPaths(candidatePaths, managedSourceCandidates);
   const badge = representative.path === baselineVariant?.representative.path
     ? 'Universal'

@@ -8697,7 +8697,7 @@ body {
 .detail-inspector-panel__plugin-update-copy {
   display: grid;
   justify-items: start;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -8709,6 +8709,16 @@ body {
   color: var(--detail-inspector-text-secondary);
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.detail-inspector-panel__plugin-update-evidence,
+.detail-inspector-panel__variant-evidence {
+  font-family: "Inter", "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 10.5px;
+  line-height: 14px;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--detail-inspector-text-muted);
 }
 
 .detail-inspector-panel__plugin-update-warning {
@@ -8821,7 +8831,7 @@ body {
 }
 
 .detail-inspector-panel__variant-path,
-.detail-inspector-panel__variant-copy span {
+.detail-inspector-panel__variant-secondary {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 14px;
@@ -8838,6 +8848,11 @@ body {
 }
 
 .detail-inspector-panel__variant-card--mcp .detail-inspector-panel__variant-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.detail-inspector-panel__variant-copy-main {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -8857,25 +8872,25 @@ body {
   overflow-wrap: anywhere;
 }
 
-.detail-inspector-panel__variant-card--mcp .detail-inspector-panel__variant-copy span {
+.detail-inspector-panel__variant-card--mcp .detail-inspector-panel__variant-secondary {
   flex: 0 0 auto;
   color: var(--detail-inspector-text-muted);
 }
 
 .detail-inspector-panel__variant-card--selected .detail-inspector-panel__variant-path,
-.detail-inspector-panel__variant-card--selected .detail-inspector-panel__variant-copy span,
+.detail-inspector-panel__variant-card--selected .detail-inspector-panel__variant-secondary,
 .detail-inspector-panel__variant-card--selected .detail-inspector-panel__variant-copy strong {
   color: var(--detail-inspector-green);
 }
 
 .detail-inspector-panel__variant-card--canonical .detail-inspector-panel__variant-path,
-.detail-inspector-panel__variant-card--canonical .detail-inspector-panel__variant-copy span,
+.detail-inspector-panel__variant-card--canonical .detail-inspector-panel__variant-secondary,
 .detail-inspector-panel__variant-card--canonical .detail-inspector-panel__variant-copy strong {
   color: var(--detail-inspector-green);
 }
 
 .detail-inspector-panel__variant-card--canonical-compare .detail-inspector-panel__variant-path,
-.detail-inspector-panel__variant-card--canonical-compare .detail-inspector-panel__variant-copy span,
+.detail-inspector-panel__variant-card--canonical-compare .detail-inspector-panel__variant-secondary,
 .detail-inspector-panel__variant-card--canonical-compare .detail-inspector-panel__variant-copy strong {
   color: var(--detail-inspector-red);
 }
@@ -8899,13 +8914,6 @@ body {
   font-size: 10px;
   line-height: 12px;
   color: var(--detail-inspector-accent);
-}
-
-.detail-inspector-panel__badge--neutral {
-  border-color: var(--detail-inspector-border);
-  background: #ededea;
-  color: var(--detail-inspector-text-secondary);
-  font-family: var(--font-mono);
 }
 
 .detail-inspector-panel__badge--canonical {
