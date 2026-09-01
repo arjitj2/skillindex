@@ -1237,6 +1237,77 @@ describe('subagent inventory', () => {
     expect(resolvedSubagent?.missingLocations ?? []).not.toHaveLength(0);
   });
 
+  it('promotes each seeded plugin-version-choice subagent candidate explicitly without mutating either cache version', async () => {
+    const candidateVersions = ['1.0.0', 'd6169bef'] as const;
+
+    for (const version of candidateVersions) {
+      const root = await mkdtemp(path.join(tmpdir(), `skillindex-subagent-version-choice-${version}-`));
+      const homeDir = path.join(root, 'home');
+      const rootPaths = resolveSkillIndexPaths({
+        env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') },
+        homeDir,
+      });
+      const sandboxPaths = resolveSandboxSkillIndexPaths({ paths: rootPaths });
+      const scanOptions = {
+        paths: sandboxPaths,
+        homeDir,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+      } as const;
+      const subagentName = 'plugin-version-choice-subagent:plugin-version-choice-subagent';
+      const candidatePath = path.join(
+        rootPaths.sandboxRoot,
+        '.codex',
+        'plugins',
+        'cache',
+        'sandbox-fixtures',
+        'plugin-version-choice-subagent',
+        version,
+        'agents',
+        'plugin-version-choice-subagent.md',
+      );
+      const otherVersion = version === '1.0.0' ? 'd6169bef' : '1.0.0';
+      const otherCandidatePath = path.join(
+        rootPaths.sandboxRoot,
+        '.codex',
+        'plugins',
+        'cache',
+        'sandbox-fixtures',
+        'plugin-version-choice-subagent',
+        otherVersion,
+        'agents',
+        'plugin-version-choice-subagent.md',
+      );
+      const universalPath = path.join(rootPaths.sandboxRoot, '.agents', 'agents', 'plugin-version-choice-subagent-plugin-version-choice-subagent.md');
+      const claudePath = path.join(rootPaths.sandboxRoot, '.claude', 'agents', 'plugin-version-choice-subagent-plugin-version-choice-subagent.md');
+      const codexPath = path.join(rootPaths.sandboxRoot, '.codex', 'agents', 'plugin-version-choice-subagent-plugin-version-choice-subagent.toml');
+      const factoryPath = path.join(rootPaths.sandboxRoot, '.factory', 'droids', 'plugin-version-choice-subagent-plugin-version-choice-subagent.md');
+
+      await seedRepresentativeFixtures({ paths: rootPaths, homeDir });
+      const selectedBefore = await readFile(candidatePath, 'utf8');
+      const otherBefore = await readFile(otherCandidatePath, 'utf8');
+      const resolved = await resolveInventoryIssue({
+        entity: 'subagent',
+        issue: 'missing-universal',
+        subagentName,
+        selectedVariantPath: candidatePath,
+      }, scanOptions);
+
+      expect(await readFile(universalPath, 'utf8')).toBe(selectedBefore);
+      expect(await realpath(claudePath)).toBe(await realpath(universalPath));
+      expect(await realpath(factoryPath)).toBe(await realpath(universalPath));
+      await expect(readFile(codexPath, 'utf8')).resolves.toContain(
+        version === '1.0.0' ? 'Plugin subagent version 1.0.0 selected content.' : 'Plugin subagent revision d6169bef selected content.',
+      );
+      expect(await readFile(candidatePath, 'utf8')).toBe(selectedBefore);
+      expect(await readFile(otherCandidatePath, 'utf8')).toBe(otherBefore);
+      expect(resolved.subagents?.find((subagent) => subagent.name === subagentName)).toMatchObject({
+        status: 'healthy',
+        issueReasons: [],
+      });
+    }
+  });
+
   it('promotes an invalid but readable subagent definition into Universal', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-invalid-subagent-resolution-'));
     const homeDir = path.join(root, 'home');

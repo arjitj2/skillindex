@@ -17,7 +17,7 @@ import {
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import { getInventoryMode, setInventoryMode } from '@main/inventory-mode-session';
 import { completeOnboarding, setDevSidebarInventorySourceSwitcherVisible } from '@main/settings-state';
-import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
+import { assertSandboxRootSafeForReset, seedRepresentativeFixtures } from '@main/sandbox-fixtures';
 import { resolveSkillIndexPaths } from '@shared/skill-index-paths';
 
 import { registerIpcHandlers } from './ipc';
@@ -99,6 +99,7 @@ vi.mock('@main/settings-state', () => ({
 }));
 
 vi.mock('@main/sandbox-fixtures', () => ({
+  assertSandboxRootSafeForReset: vi.fn(),
   seedRepresentativeFixtures: vi.fn(),
 }));
 
@@ -152,6 +153,7 @@ describe('registerIpcHandlers', () => {
   it('passes the process environment to the development sandbox reset handler', async () => {
     electronMocks.ipcHandle.mockClear();
     const seedRepresentativeFixturesMock = vi.mocked(seedRepresentativeFixtures);
+    const assertSandboxRootSafeForResetMock = vi.mocked(assertSandboxRootSafeForReset);
     seedRepresentativeFixturesMock.mockResolvedValue({
       fixtureSet: 'representative-agent-scan-foundation',
       sandboxRoot: '/tmp/skillindex-sandbox',
@@ -181,6 +183,11 @@ describe('registerIpcHandlers', () => {
       const [seedOptions] = seedRepresentativeFixturesMock.mock.calls.at(-1) ?? [];
       expect(seedOptions?.env).toBe(process.env);
       expect(seedOptions?.env?.SKILL_INDEX_SANDBOX_MCP_PARSER_MATRIX).toBe('1');
+      expect(seedOptions?.paths?.sandboxRoot).toBe(resolveSkillIndexPaths({ env: process.env }).sandboxRoot);
+      expect(assertSandboxRootSafeForResetMock).toHaveBeenCalledWith(
+        expect.objectContaining({ sandboxRoot: seedOptions?.paths?.sandboxRoot }),
+        { env: process.env },
+      );
     } finally {
       if (originalDevTools === undefined) {
         delete process.env.SKILL_INDEX_ENABLE_DEV_TOOLS;

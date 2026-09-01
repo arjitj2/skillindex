@@ -1,4 +1,5 @@
-import { chmod, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import type { AgentRecord, McpServerDefinition, SeedRepresentativeFixturesResult, SkillStructuralState } from '@shared/contracts';
@@ -1331,6 +1332,7 @@ export async function seedRepresentativeFixtures(
   options: SeedRepresentativeFixturesOptions = {},
 ): Promise<SeedRepresentativeFixturesResult> {
   const paths = resolveSandboxSkillIndexPaths(options);
+  await assertSandboxRootSafeForReset(paths, options);
   await ensureSkillIndexLayout(paths);
   await rm(paths.sandboxRoot, { recursive: true, force: true });
   await ensureSkillIndexSandboxLayout(paths);
@@ -1462,6 +1464,92 @@ export async function seedRepresentativeFixtures(
       expectedLocationCount: new Set(fixture.operations.map((operation) => operation.sourceId)).size,
     })),
   };
+}
+
+/**
+ * Prevent the development reset from ever recursively deleting a real agent
+ * configuration tree. Both lexical paths and a realpath based on the nearest
+ * existing parent are compared, so a symlinked alias cannot bypass the check.
+ *
+ * A sandbox is allowed to live under a user's home directory (the default
+ * data directory does), but it may not be the home directory itself or an
+ * ancestor of it. Every known live agent/config root rejects any overlap.
+ */
+export async function assertSandboxRootSafeForReset(
+  paths: SkillIndexPaths,
+  options: ResolveSkillIndexPathOptions & { paths?: SkillIndexPaths } = {},
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const homeRoot = path.resolve(options.homeDir ?? (options.paths ? path.dirname(paths.liveAgentsDir) : homedir()));
+  const sandboxAliases = await resolvePathAliases(paths.sandboxRoot);
+  const homeAliases = await resolvePathAliases(homeRoot);
+
+  if (pathsOverlapAsResetRoot(sandboxAliases, homeAliases)) {
+    throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it is the user home directory or contains it.`);
+  }
+
+  for (const protectedRoot of protectedLiveRoots(homeRoot, env)) {
+    const protectedAliases = await resolvePathAliases(protectedRoot);
+    if (pathsOverlap(sandboxAliases, protectedAliases)) {
+      throw new Error(`Refusing to reset representative fixtures in unsafe sandbox root ${paths.sandboxRoot}: it overlaps protected live path ${protectedRoot}.`);
+    }
+  }
+}
+
+function protectedLiveRoots(homeRoot: string, env: NodeJS.ProcessEnv): string[] {
+  const roots = [
+    '.agents',
+    '.claude',
+    '.codex',
+    '.cursor',
+    '.factory',
+    '.codeium',
+    '.config',
+    path.join('Library', 'Application Support', 'Claude'),
+    path.join('Library', 'Application Support', 'Cursor'),
+    path.join('Library', 'Application Support', 'Code'),
+  ].map((relativePath) => path.join(homeRoot, relativePath));
+
+  for (const value of [env.CODEX_HOME, env.CLAUDE_CONFIG_DIR, env.CURSOR_HOME, env.FACTORY_HOME]) {
+    if (value) {
+      roots.push(path.resolve(value));
+    }
+  }
+
+  return [...new Set(roots)];
+}
+
+async function resolvePathAliases(candidate: string): Promise<string[]> {
+  const lexical = path.resolve(candidate);
+  const suffix: string[] = [];
+  let existingParent = lexical;
+
+  while (true) {
+    try {
+      const resolvedParent = await realpath(existingParent);
+      return [...new Set([lexical, path.join(resolvedParent, ...suffix)])];
+    } catch {
+      const parent = path.dirname(existingParent);
+      if (parent === existingParent) {
+        return [lexical];
+      }
+      suffix.unshift(path.basename(existingParent));
+      existingParent = parent;
+    }
+  }
+}
+
+function pathsOverlapAsResetRoot(sandboxAliases: string[], homeAliases: string[]): boolean {
+  return sandboxAliases.some((sandboxPath) => homeAliases.some((homePath) => isSameOrAncestor(sandboxPath, homePath)));
+}
+
+function pathsOverlap(leftAliases: string[], rightAliases: string[]): boolean {
+  return leftAliases.some((leftPath) => rightAliases.some((rightPath) =>
+    isSameOrAncestor(leftPath, rightPath) || isSameOrAncestor(rightPath, leftPath)));
+}
+
+function isSameOrAncestor(parent: string, child: string): boolean {
+  return parent === child || child.startsWith(`${parent}${path.sep}`);
 }
 
 function getCanonicalMirrorSourceIds(
@@ -2123,7 +2211,9 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
   // plugin installation directories.
   const singleSourceRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-single-source-skill', '1.0.0');
   const versionChoiceSemverRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-skill', '1.0.0');
-  const versionChoiceHashRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-skill', 'd6169bef');
+  const versionChoiceNewRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-skill', '1.1.0');
+  const incomparableVersionSemverRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-incomparable-version-skill', '1.0.0');
+  const incomparableVersionHashRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-incomparable-version-skill', 'd6169bef');
   const updateOldRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-skill', '1.0.0');
   const updateNewRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-update-skill', '1.1.0');
   const legacyLiveRoot = path.join(sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'legacy-plugin-link-skill', '2.0.0');
@@ -2272,11 +2362,23 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
     title: 'Plugin version choice skill',
     bodyLines: ['Plugin version choice version 1.0.0 selected content.'],
   });
-  const versionChoiceHashSkill = buildSkillMarkdown({
+  const versionChoiceNewSkill = buildSkillMarkdown({
     skillName: 'plugin-version-choice-skill',
-    description: 'A managed source from a hash-like cache version.',
+    description: 'A newer comparable managed source that still needs an explicit choice.',
     title: 'Plugin version choice skill',
-    bodyLines: ['Plugin version choice revision d6169bef selected content.'],
+    bodyLines: ['Plugin version choice version 1.1.0 selected content.'],
+  });
+  const incomparableVersionSemverSkill = buildSkillMarkdown({
+    skillName: 'plugin-incomparable-version-skill',
+    description: 'A managed source from a semver cache version.',
+    title: 'Plugin incomparable version skill',
+    bodyLines: ['Plugin incomparable version 1.0.0 selected content.'],
+  });
+  const incomparableVersionHashSkill = buildSkillMarkdown({
+    skillName: 'plugin-incomparable-version-skill',
+    description: 'A managed source from a hash-like cache version.',
+    title: 'Plugin incomparable version skill',
+    bodyLines: ['Plugin incomparable revision d6169bef selected content.'],
   });
   const updateOldSkill = buildSkillMarkdown({
     skillName: 'plugin-update-skill',
@@ -2378,9 +2480,13 @@ async function writeSandboxExamplePluginBundles(sandboxRoot: string): Promise<vo
     writePluginManifest(path.join(singleSourceRoot, '.codex-plugin', 'plugin.json'), 'plugin-single-source-skill', '1.0.0'),
     writeFileWithParents(path.join(singleSourceRoot, 'skills', 'plugin-single-source-skill', 'SKILL.md'), singleSourceSkill),
     writePluginManifest(path.join(versionChoiceSemverRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-skill', '1.0.0'),
-    writePluginManifest(path.join(versionChoiceHashRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-skill', 'd6169bef'),
+    writePluginManifest(path.join(versionChoiceNewRoot, '.codex-plugin', 'plugin.json'), 'plugin-version-choice-skill', '1.1.0'),
     writeFileWithParents(path.join(versionChoiceSemverRoot, 'skills', 'plugin-version-choice-skill', 'SKILL.md'), versionChoiceSemverSkill),
-    writeFileWithParents(path.join(versionChoiceHashRoot, 'skills', 'plugin-version-choice-skill', 'SKILL.md'), versionChoiceHashSkill),
+    writeFileWithParents(path.join(versionChoiceNewRoot, 'skills', 'plugin-version-choice-skill', 'SKILL.md'), versionChoiceNewSkill),
+    writePluginManifest(path.join(incomparableVersionSemverRoot, '.codex-plugin', 'plugin.json'), 'plugin-incomparable-version-skill', '1.0.0'),
+    writePluginManifest(path.join(incomparableVersionHashRoot, '.codex-plugin', 'plugin.json'), 'plugin-incomparable-version-skill', 'd6169bef'),
+    writeFileWithParents(path.join(incomparableVersionSemverRoot, 'skills', 'plugin-incomparable-version-skill', 'SKILL.md'), incomparableVersionSemverSkill),
+    writeFileWithParents(path.join(incomparableVersionHashRoot, 'skills', 'plugin-incomparable-version-skill', 'SKILL.md'), incomparableVersionHashSkill),
     writePluginManifest(path.join(updateOldRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-skill', '1.0.0'),
     writePluginManifest(path.join(updateNewRoot, '.codex-plugin', 'plugin.json'), 'plugin-update-skill', '1.1.0'),
     writeFileWithParents(path.join(updateOldRoot, 'skills', 'plugin-update-skill', 'SKILL.md'), updateOldSkill),

@@ -1416,6 +1416,51 @@ describe('resolveInventoryIssue', () => {
     expect(repaired.skills.find((skill) => skill.name === skillName)?.issueReasons).not.toContain('broken-symlink');
   });
 
+  it('exports the seeded plugin-bound MCP despite dependency warnings without changing the plugin cache', async () => {
+    const paths = await createPaths('skillindex-resolve-bound-plugin-mcp-');
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const mcpName = 'plugin-bound-mcp:plugin-bound-mcp';
+    const pluginConfigPath = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'sandbox-fixtures',
+      'plugin-bound-mcp',
+      '1.0.0',
+      '.mcp.json',
+    );
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+
+    await seedRepresentativeFixtures({ paths });
+    const cacheBefore = await readFile(pluginConfigPath, 'utf8');
+    const before = await scanInventory(scanOptions);
+    const candidate = before.mcps?.find((mcp) => mcp.name === mcpName)?.managedSourceCandidates?.[0];
+    expect(candidate?.dependencyWarnings.map((warning) => warning.kind).sort()).toEqual([
+      'plugin-contained-path',
+      'plugin-root-variable',
+      'provider-specific-field',
+    ]);
+
+    const resolved = await resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName,
+      selectedVariantPath: pluginConfigPath,
+    }, scanOptions);
+
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(cacheBefore);
+    await expect(readFile(universalConfigPath, 'utf8')).resolves.toContain('${CODEX_PLUGIN_ROOT}/servers/plugin-bound-mcp.js');
+    await expect(readFile(codexConfigPath, 'utf8')).resolves.toContain('plugin-bound-mcp');
+    await expect(readFile(factoryConfigPath, 'utf8')).resolves.toContain('plugin-bound-mcp');
+    expect(resolved.mcps?.find((mcp) => mcp.name === mcpName)).toMatchObject({
+      status: 'healthy',
+      issueReasons: [],
+    });
+  });
+
   it('does not repair a broken link when the Universal directory is symlinked into a plugin cache', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-resolve-plugin-target-'));
     const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-live-home-'));

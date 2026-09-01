@@ -1,12 +1,13 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
+import { resolveInventoryIssue } from '@main/issue-resolution';
 import { defaultConfig, ensureSkillIndexLayout, resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 describe('seedRepresentativeFixtures', () => {
@@ -45,12 +46,12 @@ describe('seedRepresentativeFixtures', () => {
     const baseline = await treeFingerprint(paths.sandboxRoot);
     const cacheRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures');
     const semverSkill = path.join(cacheRoot, 'plugin-version-choice-skill', '1.0.0', 'skills', 'plugin-version-choice-skill', 'SKILL.md');
-    const hashSkill = path.join(cacheRoot, 'plugin-version-choice-skill', 'd6169bef', 'skills', 'plugin-version-choice-skill', 'SKILL.md');
+    const newerSkill = path.join(cacheRoot, 'plugin-version-choice-skill', '1.1.0', 'skills', 'plugin-version-choice-skill', 'SKILL.md');
     const staleTarget = path.join(cacheRoot, 'legacy-plugin-link-skill', '1.0.0', 'skills', 'legacy-plugin-link-skill');
     const legacyLink = path.join(paths.sandboxRoot, '.claude', 'skills', 'legacy-plugin-link-skill');
 
     await expect(readFile(semverSkill, 'utf8')).resolves.toContain('version 1.0.0 selected content');
-    await expect(readFile(hashSkill, 'utf8')).resolves.toContain('revision d6169bef selected content');
+    await expect(readFile(newerSkill, 'utf8')).resolves.toContain('version 1.1.0 selected content');
     expect((await lstat(legacyLink)).isSymbolicLink()).toBe(true);
     expect(await readlink(legacyLink)).toBe(staleTarget);
     await expect(lstat(staleTarget)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -66,25 +67,99 @@ describe('seedRepresentativeFixtures', () => {
     await expect(readFile(semverSkill, 'utf8')).resolves.toContain('version 1.0.0 selected content');
     await expect(lstat(staleTarget)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('refuses unsafe direct and dev-reset sandbox roots before any mutation, including realpath aliases', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-reset-home-'));
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'skillindex-reset-data-'));
+    const protectedRoots = [
+      path.join(homeDir, '.codex', 'plugins', 'cache'),
+      path.join(homeDir, '.claude', 'plugins', 'cache'),
+      homeDir,
+    ];
+
+    try {
+      for (const protectedRoot of protectedRoots) {
+        await mkdir(protectedRoot, { recursive: true });
+        const sentinel = path.join(protectedRoot, 'sentinel.txt');
+        await writeFile(sentinel, `sentinel:${protectedRoot}\n`, 'utf8');
+        const env = {
+          SKILL_INDEX_DATA_DIR: dataDir,
+          SKILL_INDEX_SANDBOX_ROOT: protectedRoot,
+        };
+
+        await expect(seedRepresentativeFixtures({ env, homeDir })).rejects.toThrow('unsafe sandbox root');
+        await expect(readFile(sentinel, 'utf8')).resolves.toBe(`sentinel:${protectedRoot}\n`);
+      }
+
+      const codexRoot = path.join(homeDir, '.codex');
+      const alias = path.join(dataDir, 'codex-alias');
+      await symlink(codexRoot, alias);
+      const aliasedCache = path.join(alias, 'plugins', 'cache');
+      const aliasedSentinel = path.join(homeDir, '.codex', 'plugins', 'cache', 'alias-sentinel.txt');
+      await writeFile(aliasedSentinel, 'alias sentinel\n', 'utf8');
+
+      await expect(seedRepresentativeFixtures({
+        env: { SKILL_INDEX_DATA_DIR: dataDir, SKILL_INDEX_SANDBOX_ROOT: aliasedCache },
+        homeDir,
+      })).rejects.toThrow('unsafe sandbox root');
+      await expect(readFile(aliasedSentinel, 'utf8')).resolves.toBe('alias sentinel\n');
+    } finally {
+      await Promise.all([rm(homeDir, { recursive: true, force: true }), rm(dataDir, { recursive: true, force: true })]);
+    }
+  });
+
+  it('returns to the same complete sandbox tree after real managed-source resolutions and repeated resets', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-reset-after-actions-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const skillName = 'plugin-single-source-skill';
+    const subagentName = 'plugin-version-choice-subagent:plugin-version-choice-subagent';
+    const skillCandidate = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', skillName, '1.0.0', 'skills', skillName);
+    const subagentCandidate = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-version-choice-subagent', '1.0.0', 'agents', 'plugin-version-choice-subagent.md');
+    const boundConfig = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'sandbox-fixtures', 'plugin-bound-mcp', '1.0.0', '.mcp.json');
+
+    await seedRepresentativeFixtures({ paths });
+    const skillCacheBefore = await readFile(path.join(skillCandidate, 'SKILL.md'), 'utf8');
+    const subagentCacheBefore = await readFile(subagentCandidate, 'utf8');
+    const mcpCacheBefore = await readFile(boundConfig, 'utf8');
+
+    await resolveInventoryIssue({ entity: 'skill', issue: 'missing-canonical', skillName, selectedVariantPath: skillCandidate }, scanOptions);
+    await resolveInventoryIssue({ entity: 'subagent', issue: 'missing-universal', subagentName, selectedVariantPath: subagentCandidate }, scanOptions);
+    await resolveInventoryIssue({ entity: 'mcp', issue: 'missing-universal', mcpName: 'plugin-bound-mcp:plugin-bound-mcp', selectedVariantPath: boundConfig }, scanOptions);
+    await writeFile(path.join(paths.sandboxRoot, 'stale-generated-after-action'), 'remove me\n', 'utf8');
+
+    expect(await readFile(path.join(skillCandidate, 'SKILL.md'), 'utf8')).toBe(skillCacheBefore);
+    expect(await readFile(subagentCandidate, 'utf8')).toBe(subagentCacheBefore);
+    expect(await readFile(boundConfig, 'utf8')).toBe(mcpCacheBefore);
+
+    await seedRepresentativeFixtures({ paths });
+    const firstReset = await treeFingerprint(paths.sandboxRoot);
+    await expect(lstat(path.join(paths.sandboxRoot, 'stale-generated-after-action'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await seedRepresentativeFixtures({ paths });
+    expect(await treeFingerprint(paths.sandboxRoot)).toEqual(firstReset);
+  }, 20_000);
 });
 
-async function treeFingerprint(root: string): Promise<Array<{ path: string; type: string; value?: string }>> {
-  const entries: Array<{ path: string; type: string; value?: string }> = [];
+// Intentionally excludes mtimes: fixture writes get fresh timestamps, while
+// bytes, file modes, directory shape, and symlink targets must be identical.
+async function treeFingerprint(root: string): Promise<Array<{ path: string; type: string; mode: number; value?: string }>> {
+  const entries: Array<{ path: string; type: string; mode: number; value?: string }> = [];
 
   async function visit(currentPath: string): Promise<void> {
     const stats = await lstat(currentPath);
     const relativePath = path.relative(root, currentPath) || '.';
+    const mode = stats.mode & 0o777;
     if (stats.isSymbolicLink()) {
-      entries.push({ path: relativePath, type: 'symlink', value: await readlink(currentPath) });
+      entries.push({ path: relativePath, type: 'symlink', mode, value: await readlink(currentPath) });
       return;
     }
     if (stats.isDirectory()) {
-      entries.push({ path: relativePath, type: 'directory' });
+      entries.push({ path: relativePath, type: 'directory', mode });
       const children = await readdir(currentPath);
       await Promise.all(children.sort((left, right) => left.localeCompare(right)).map((child) => visit(path.join(currentPath, child))));
       return;
     }
-    entries.push({ path: relativePath, type: 'file', value: await readFile(currentPath, 'utf8') });
+    entries.push({ path: relativePath, type: 'file', mode, value: await readFile(currentPath, 'utf8') });
   }
 
   await visit(root);

@@ -107,6 +107,27 @@ describe('ensureRepresentativeSandboxFixturesForDev', () => {
 
     await expect(readFile(paths.cacheFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('passes unsafe environment-derived reset roots through to the pre-mutation safety guard', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'skillindex-dev-home-'));
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'skillindex-dev-data-'));
+    createdRoots.push(homeDir, dataDir);
+    const protectedCache = path.join(homeDir, '.claude', 'plugins', 'cache');
+    const sentinel = path.join(protectedCache, 'sentinel.txt');
+    await mkdir(protectedCache, { recursive: true });
+    await writeFile(sentinel, 'do not reset\n', 'utf8');
+
+    await expect(ensureRepresentativeSandboxFixturesForDev({
+      enabled: true,
+      inventoryMode: 'sandbox',
+      homeDir,
+      env: {
+        SKILL_INDEX_DATA_DIR: dataDir,
+        SKILL_INDEX_SANDBOX_ROOT: protectedCache,
+      },
+    })).rejects.toThrow('unsafe sandbox root');
+    await expect(readFile(sentinel, 'utf8')).resolves.toBe('do not reset\n');
+  });
 });
 
 async function createSandboxPaths() {
