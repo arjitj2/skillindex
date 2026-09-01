@@ -55,6 +55,17 @@ const { electronMocks } = vi.hoisted(() => ({
   },
 }));
 
+const { autoUpdateMocks } = vi.hoisted(() => ({
+  autoUpdateMocks: {
+    dismissAutoUpdateRecovery: vi.fn(() => ({ phase: 'ready' })),
+    getAutoUpdateStatus: vi.fn(() => ({ phase: 'disabled' })),
+    installReadyAutoUpdate: vi.fn(() => ({ phase: 'disabled' })),
+    openManualUpdateDownload: vi.fn(() => Promise.resolve()),
+    requestAutoUpdateCheck: vi.fn(() => Promise.resolve({ phase: 'disabled' })),
+    retryReadyAutoUpdate: vi.fn(() => Promise.resolve({ phase: 'installing' })),
+  },
+}));
+
 vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
@@ -79,9 +90,7 @@ vi.mock('@main/app-shell', () => ({
 }));
 
 vi.mock('@main/auto-update', () => ({
-  getAutoUpdateStatus: vi.fn(() => ({ phase: 'disabled' })),
-  installReadyAutoUpdate: vi.fn(() => ({ phase: 'disabled' })),
-  requestAutoUpdateCheck: vi.fn(() => Promise.resolve({ phase: 'disabled' })),
+  ...autoUpdateMocks,
 }));
 
 vi.mock('@main/inventory-runtime', () => ({
@@ -115,6 +124,22 @@ describe('registerIpcHandlers', () => {
     expect(createInventoryRuntime).toHaveBeenCalledWith({
       verifyMcpConnectivityOnFullScan: true,
     });
+  });
+
+  it('registers and delegates update recovery handlers', async () => {
+    electronMocks.ipcHandle.mockClear();
+    registerIpcHandlers();
+
+    const retryHandler = findIpcHandler(IPC_CHANNELS.retryUpdateInstall);
+    const manualDownloadHandler = findIpcHandler(IPC_CHANNELS.openManualUpdateDownload);
+    const dismissHandler = findIpcHandler(IPC_CHANNELS.dismissUpdateRecovery);
+
+    await expect(retryHandler({} as never)).resolves.toEqual({ phase: 'installing' });
+    await expect(manualDownloadHandler({} as never)).resolves.toBeUndefined();
+    await expect(dismissHandler({} as never)).resolves.toEqual({ phase: 'ready' });
+    expect(autoUpdateMocks.retryReadyAutoUpdate).toHaveBeenCalledOnce();
+    expect(autoUpdateMocks.openManualUpdateDownload).toHaveBeenCalledOnce();
+    expect(autoUpdateMocks.dismissAutoUpdateRecovery).toHaveBeenCalledOnce();
   });
 
   it('expands home-relative paths before passing them to Electron', async () => {
@@ -543,6 +568,16 @@ describe('registerIpcHandlers', () => {
     expect(inventoryRuntime.cancelMcpConnectivityTest).toHaveBeenCalledTimes(1);
   });
 });
+
+function findIpcHandler(channel: string): (event: never, ...args: unknown[]) => Promise<unknown> {
+  const handler = electronMocks.ipcHandle.mock.calls.find(
+    ([registeredChannel]) => registeredChannel === channel,
+  )?.[1] as ((event: never, ...args: unknown[]) => Promise<unknown>) | undefined;
+  if (!handler) {
+    throw new Error(`Expected IPC handler ${channel} to be registered.`);
+  }
+  return handler;
+}
 
 function isOperationStartedAuditRecord(value: unknown): value is {
   operation: {

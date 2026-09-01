@@ -225,6 +225,7 @@ export default function App() {
   const [selectedSubagentVariantPath, setSelectedSubagentVariantPath] = useState<string | null>(null);
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus>({ phase: 'disabled' });
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [dismissedReadyUpdateVersion, setDismissedReadyUpdateVersion] = useState<string | null>(null);
   const didRequestUpdateInstallRef = useRef(false);
   const [isPreviewingOnboarding, setIsPreviewingOnboarding] = useState(false);
   const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false);
@@ -1531,6 +1532,43 @@ export default function App() {
     }
   }, [desktopApi, showErrorToast]);
 
+  const handleRetryUpdateInstall = useCallback(async () => {
+    setIsInstallingUpdate(true);
+    try {
+      setAutoUpdateStatus(await desktopApi.retryUpdateInstall());
+    } catch (error) {
+      setIsInstallingUpdate(false);
+      showErrorToast('Update retry failed', error, 'Failed to retry the update.');
+    }
+  }, [desktopApi, showErrorToast]);
+
+  const handleOpenManualUpdateDownload = useCallback(async () => {
+    try {
+      await desktopApi.openManualUpdateDownload();
+    } catch (error) {
+      showErrorToast('Could not open download', error, 'Failed to open the manual installer download.');
+    }
+  }, [desktopApi, showErrorToast]);
+
+  const handleDismissUpdateDialog = useCallback(async () => {
+    const dismissedVersion = autoUpdateStatus.version ?? null;
+    if (autoUpdateStatus.phase === 'recovery') {
+      try {
+        setAutoUpdateStatus(await desktopApi.dismissUpdateRecovery());
+      } catch (error) {
+        showErrorToast('Could not dismiss update', error, 'Failed to dismiss the update recovery prompt.');
+        return;
+      }
+    }
+    setDismissedReadyUpdateVersion(dismissedVersion);
+  }, [autoUpdateStatus.phase, autoUpdateStatus.version, desktopApi, showErrorToast]);
+
+  useEffect(() => {
+    setDismissedReadyUpdateVersion((dismissedVersion) => (
+      dismissedVersion && dismissedVersion !== autoUpdateStatus.version ? null : dismissedVersion
+    ));
+  }, [autoUpdateStatus.version]);
+
   useEffect(() => {
     if (
       !hasLoadedStartupState
@@ -2026,7 +2064,12 @@ export default function App() {
         />
         <AutoUpdateDialog
           appName={shellState?.appName ?? APP_NAME}
+          isReadyPromptDismissed={dismissedReadyUpdateVersion === autoUpdateStatus.version}
           isInstallingUpdate={isInstallingUpdate}
+          onDismiss={handleDismissUpdateDialog}
+          onInstall={handleInstallUpdate}
+          onManualDownload={handleOpenManualUpdateDownload}
+          onRetry={handleRetryUpdateInstall}
           status={autoUpdateStatus}
         />
         {appToastRegion}
@@ -2079,7 +2122,12 @@ export default function App() {
 
       <AutoUpdateDialog
         appName={shellState?.appName ?? APP_NAME}
+        isReadyPromptDismissed={dismissedReadyUpdateVersion === autoUpdateStatus.version}
         isInstallingUpdate={isInstallingUpdate}
+        onDismiss={handleDismissUpdateDialog}
+        onInstall={handleInstallUpdate}
+        onManualDownload={handleOpenManualUpdateDownload}
+        onRetry={handleRetryUpdateInstall}
         status={autoUpdateStatus}
       />
     </div>
@@ -2194,22 +2242,46 @@ function getRemoveItemRecoveryCopy(request: RemoveInventoryItemRequest): string 
 
 function AutoUpdateDialog({
   appName,
+  isReadyPromptDismissed,
   isInstallingUpdate,
+  onDismiss,
+  onInstall,
+  onManualDownload,
+  onRetry,
   status,
 }: {
   appName: string;
+  isReadyPromptDismissed: boolean;
   isInstallingUpdate: boolean;
+  onDismiss: () => void | Promise<void>;
+  onInstall: () => void | Promise<void>;
+  onManualDownload: () => void | Promise<void>;
+  onRetry: () => void | Promise<void>;
   status: AutoUpdateStatus;
 }) {
-  if (status.phase !== 'downloading' && status.phase !== 'ready' && !isInstallingUpdate) {
+  const isInstalling = isInstallingUpdate || status.phase === 'installing';
+  const isReady = status.phase === 'ready' && !isInstalling;
+  const isRecovery = status.phase === 'recovery' && !isInstalling;
+  if (
+    status.phase !== 'downloading'
+    && !isInstalling
+    && !isRecovery
+    && (!isReady || isReadyPromptDismissed)
+  ) {
     return null;
   }
 
-  const isRelaunching = status.phase === 'ready' || isInstallingUpdate;
   const progressPercent = getUpdateDownloadPercent(status);
-  const visualProgressPercent = isRelaunching ? 100 : progressPercent ?? 22;
+  const visualProgressPercent = isReady || isInstalling ? 100 : progressPercent ?? 22;
   const sizeLabel = getUpdateDownloadSizeLabel(status);
   const progressValue = progressPercent === null ? undefined : Math.round(progressPercent);
+  const heading = isRecovery
+    ? `Couldn't restart ${appName} automatically`
+    : isInstalling
+      ? `Preparing to restart ${appName}...`
+      : isReady
+        ? 'Download complete'
+        : 'Downloading update...';
 
   return (
     <div className="auto-update-dialog-root">
@@ -2227,21 +2299,56 @@ function AutoUpdateDialog({
             <img src={skillIndexMark} alt="" />
           </div>
           <div className="auto-update-dialog__content">
-            <h3>{isRelaunching ? `Relaunching ${appName}...` : 'Downloading update...'}</h3>
-            <div
-              aria-label="Update download progress"
-              aria-valuemax={100}
-              aria-valuemin={0}
-              aria-valuenow={progressValue}
-              aria-valuetext={sizeLabel ?? (progressValue === undefined ? 'Preparing download' : `${progressValue}% downloaded`)}
-              className={`auto-update-dialog__progress${progressPercent === null && !isRelaunching ? ' auto-update-dialog__progress--indeterminate' : ''}`}
-              role="progressbar"
-            >
-              <div style={{ width: `${visualProgressPercent}%` }} />
-            </div>
-            <strong className="auto-update-dialog__bytes">
-              {isRelaunching ? 'Download complete' : sizeLabel ?? 'Preparing download...'}
-            </strong>
+            <h3>{heading}</h3>
+            {isRecovery ? (
+              <p className="auto-update-dialog__message">
+                The update is downloaded, but the automatic restart timed out. You can try once more or install it manually.
+              </p>
+            ) : (
+              <>
+                <div
+                  aria-label="Update download progress"
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={isReady || isInstalling ? 100 : progressValue}
+                  aria-valuetext={sizeLabel ?? (progressValue === undefined ? 'Preparing download' : `${progressValue}% downloaded`)}
+                  className={`auto-update-dialog__progress${progressPercent === null && !isReady && !isInstalling ? ' auto-update-dialog__progress--indeterminate' : ''}`}
+                  role="progressbar"
+                >
+                  <div style={{ width: `${visualProgressPercent}%` }} />
+                </div>
+                <strong className="auto-update-dialog__bytes">
+                  {isInstalling
+                    ? 'This should only take a few seconds.'
+                    : isReady
+                      ? `${status.version ? `Version ${status.version} is` : 'The update is'} ready to install.`
+                      : sizeLabel ?? 'Preparing download...'}
+                </strong>
+              </>
+            )}
+            {isReady ? (
+              <div className="auto-update-dialog__actions">
+                <button className="auto-update-dialog__button auto-update-dialog__button--primary" type="button" onClick={() => { void onInstall(); }}>
+                  Restart and apply update
+                </button>
+                <button className="auto-update-dialog__button" type="button" onClick={() => { void onDismiss(); }}>Not now</button>
+              </div>
+            ) : null}
+            {isRecovery ? (
+              <div className="auto-update-dialog__actions auto-update-dialog__actions--recovery">
+                {status.retryAvailable ? (
+                  <button className="auto-update-dialog__button auto-update-dialog__button--primary" type="button" onClick={() => { void onRetry(); }}>
+                    Quit and try again
+                  </button>
+                ) : null}
+                <button className="auto-update-dialog__button" type="button" onClick={() => { void onManualDownload(); }}>
+                  Download installer manually
+                </button>
+                <button className="auto-update-dialog__button auto-update-dialog__button--quiet" type="button" onClick={() => { void onDismiss(); }}>
+                  Not now
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       </section>

@@ -1,15 +1,32 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const autoUpdaterMock = vi.hoisted(() => ({
+  quitAndInstall: vi.fn(),
+}));
+
+vi.mock('electron-updater', () => ({
+  autoUpdater: autoUpdaterMock,
+}));
 
 import {
+  AUTO_UPDATE_INSTALL_WATCHDOG_MS,
   STARTUP_UPDATE_CHECK_DELAY_MS,
   UPDATE_CHECK_INTERVAL_MS,
   configureAutoUpdates,
+  consumePendingAutoUpdateRetry,
+  dismissAutoUpdateRecovery,
   getAutoUpdateStatus,
+  installReadyAutoUpdate,
   requestAutoUpdateCheck,
+  retryReadyAutoUpdate,
   shouldEnableAutoUpdates,
   type AutoUpdaterEvent,
   type AutoUpdaterEventMap,
 } from './auto-update';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('auto-update lifecycle', () => {
   it('enables updates only for packaged standard builds', () => {
@@ -89,6 +106,166 @@ describe('auto-update lifecycle', () => {
     expect(readyStatus.lastCheckedAt).toEqual(expect.any(String));
   });
 
+  it('lets the macOS updater settle before installing a newly ready update', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T22:00:00.000Z'));
+    const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
+
+    configureAutoUpdates(runtime);
+    runtime.listeners.get('update-downloaded')?.({
+      ...createUpdateInfo('0.2.0'),
+      downloadedFile: '/tmp/Skill Index-0.2.0.zip',
+    });
+
+    const installPromise = installReadyAutoUpdate({
+      clearTimeout,
+      now: () => Date.now(),
+      setTimeout,
+      updater: runtime.updater,
+    });
+
+    expect(runtime.updater.quitAndInstall).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(runtime.updater.quitAndInstall).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await installPromise;
+    expect(runtime.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    const installingStatus = getAutoUpdateStatus();
+    expect(installingStatus).toMatchObject({
+      phase: 'installing',
+      version: '0.2.0',
+    });
+    expect(typeof installingStatus.installStartedAt).toBe('string');
+
+    await vi.advanceTimersByTimeAsync(AUTO_UPDATE_INSTALL_WATCHDOG_MS - 1);
+    expect(getAutoUpdateStatus().phase).toBe('installing');
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getAutoUpdateStatus()).toEqual(expect.objectContaining({
+      phase: 'recovery',
+      version: '0.2.0',
+      retryAvailable: true,
+    }));
+  });
+
+  it('coalesces install requests while the updater is settling', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T22:00:00.000Z'));
+    const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
+
+    configureAutoUpdates(runtime);
+    runtime.listeners.get('update-downloaded')?.({
+      ...createUpdateInfo('0.2.0'),
+      downloadedFile: '/tmp/Skill Index-0.2.0.zip',
+    });
+    const installRuntime = {
+      clearTimeout,
+      now: () => Date.now(),
+      setTimeout,
+      updater: runtime.updater,
+    };
+
+    const firstInstall = installReadyAutoUpdate(installRuntime);
+    const secondInstall = installReadyAutoUpdate(installRuntime);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await Promise.all([firstInstall, secondInstall]);
+
+    expect(runtime.updater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismisses recovery back to an actionable ready state', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T22:00:00.000Z'));
+    const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
+
+    configureAutoUpdates(runtime);
+    runtime.listeners.get('update-downloaded')?.({
+      ...createUpdateInfo('0.2.0'),
+      downloadedFile: '/tmp/Skill Index-0.2.0.zip',
+    });
+    const installPromise = installReadyAutoUpdate({
+      clearTimeout,
+      now: () => Date.now(),
+      setTimeout,
+      updater: runtime.updater,
+    });
+    await vi.advanceTimersByTimeAsync(6_000 + AUTO_UPDATE_INSTALL_WATCHDOG_MS);
+    await installPromise;
+
+    expect(dismissAutoUpdateRecovery()).toEqual({
+      phase: 'ready',
+      version: '0.2.0',
+    });
+  });
+
+  it('writes a one-shot retry marker before relaunching', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T22:00:00.000Z'));
+    const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
+    configureAutoUpdates(runtime);
+    runtime.listeners.get('update-downloaded')?.({
+      ...createUpdateInfo('0.2.0'),
+      downloadedFile: '/tmp/Skill Index-0.2.0.zip',
+    });
+    const installPromise = installReadyAutoUpdate({
+      clearTimeout,
+      now: () => Date.now(),
+      setTimeout,
+      updater: runtime.updater,
+    });
+    await vi.advanceTimersByTimeAsync(6_000 + AUTO_UPDATE_INSTALL_WATCHDOG_MS);
+    await installPromise;
+    const retryRuntime = createRetryRuntime();
+
+    await retryReadyAutoUpdate(retryRuntime);
+
+    expect(retryRuntime.writeMarker).toHaveBeenCalledWith({
+      version: '0.2.0',
+      createdAt: '2026-09-01T22:00:21.000Z',
+      attemptCount: 1,
+    });
+    expect(retryRuntime.relaunch).toHaveBeenCalledOnce();
+    expect(retryRuntime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('consumes a matching retry marker once before installing', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T22:00:00.000Z'));
+    const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
+    configureAutoUpdates(runtime);
+    runtime.listeners.get('update-downloaded')?.({
+      ...createUpdateInfo('0.2.0'),
+      downloadedFile: '/tmp/Skill Index-0.2.0.zip',
+    });
+    const retryRuntime = createRetryRuntime({
+      marker: {
+        version: '0.2.0',
+        createdAt: '2026-09-01T21:59:30.000Z',
+        attemptCount: 1,
+      },
+    });
+    const installRuntime = {
+      clearTimeout,
+      now: () => Date.now(),
+      setTimeout,
+      updater: runtime.updater,
+    };
+
+    const consumePromise = consumePendingAutoUpdateRetry('0.2.0', retryRuntime, installRuntime);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await expect(consumePromise).resolves.toBe(true);
+    await expect(consumePendingAutoUpdateRetry('0.2.0', retryRuntime, installRuntime)).resolves.toBe(false);
+
+    expect(retryRuntime.removeMarker).toHaveBeenCalledOnce();
+    expect(retryRuntime.readMarker).toHaveBeenCalledOnce();
+    expect(runtime.updater.quitAndInstall).toHaveBeenCalledOnce();
+    expect(getAutoUpdateStatus()).toEqual(expect.objectContaining({
+      phase: 'installing',
+      retryAvailable: false,
+    }));
+  });
+
   it('keeps manual checks disabled until the production updater lifecycle is registered', async () => {
     const runtime = createRuntime({ buildFlavor: 'standard', isPackaged: true });
 
@@ -128,6 +305,7 @@ function createRuntime(options: RuntimeOptions) {
       error: vi.fn(),
       info: vi.fn(),
     },
+    consumePendingRetry: vi.fn().mockResolvedValue(false),
     scheduledIntervals,
     scheduledTimeouts,
     setInterval: vi.fn((callback: () => void) => {
@@ -139,6 +317,19 @@ function createRuntime(options: RuntimeOptions) {
       return 1;
     }),
     updater,
+  };
+}
+
+function createRetryRuntime(options: {
+  marker?: { version: string; createdAt: string; attemptCount: 1 };
+} = {}) {
+  return {
+    exit: vi.fn(),
+    now: () => Date.now(),
+    readMarker: vi.fn().mockResolvedValue(options.marker ?? null),
+    relaunch: vi.fn(),
+    removeMarker: vi.fn().mockResolvedValue(undefined),
+    writeMarker: vi.fn().mockResolvedValue(undefined),
   };
 }
 

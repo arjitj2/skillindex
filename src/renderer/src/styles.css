@@ -5934,6 +5934,63 @@ body {
   color: #e5eaec;
 }
 
+.auto-update-dialog__message {
+  margin: 0;
+  color: #d3dcdf;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.auto-update-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.auto-update-dialog__actions--recovery {
+  align-items: center;
+}
+
+.auto-update-dialog__button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid rgba(220, 231, 235, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #edf2f3;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.auto-update-dialog__button:hover,
+.auto-update-dialog__button:focus-visible {
+  border-color: rgba(220, 231, 235, 0.5);
+  background: rgba(255, 255, 255, 0.12);
+  outline: none;
+}
+
+.auto-update-dialog__button--primary {
+  border-color: #1188f4;
+  background: #1188f4;
+  color: #fff;
+}
+
+.auto-update-dialog__button--primary:hover,
+.auto-update-dialog__button--primary:focus-visible {
+  border-color: #3ca0fa;
+  background: #2698fa;
+}
+
+.auto-update-dialog__button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: #b9c5c9;
+}
+
 @keyframes auto-update-progress-pulse {
   0% {
     transform: translateX(-40%);
@@ -5951,6 +6008,16 @@ body {
 @media (max-width: 560px) {
   .auto-update-dialog__body {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-update-dialog__progress > div {
+    transition: none;
+  }
+
+  .auto-update-dialog__progress--indeterminate > div {
+    animation: none;
   }
 }
 

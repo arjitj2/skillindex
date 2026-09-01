@@ -70,6 +70,9 @@ describe('App shell inventory views', () => {
   let completeOnboardingMock: Mock<SkillIndexDesktopApi['completeOnboarding']>;
   let readUpdateStatusMock: Mock<SkillIndexDesktopApi['readUpdateStatus']>;
   let installUpdateMock: Mock<SkillIndexDesktopApi['installUpdate']>;
+  let retryUpdateInstallMock: Mock<SkillIndexDesktopApi['retryUpdateInstall']>;
+  let openManualUpdateDownloadMock: Mock<SkillIndexDesktopApi['openManualUpdateDownload']>;
+  let dismissUpdateRecoveryMock: Mock<SkillIndexDesktopApi['dismissUpdateRecovery']>;
   let onInventoryUpdatedMock: Mock<SkillIndexDesktopApi['onInventoryUpdated']>;
   let onUpdateStatusUpdatedMock: Mock<SkillIndexDesktopApi['onUpdateStatusUpdated']>;
   let onAuditUpdatedMock: Mock<SkillIndexDesktopApi['onAuditUpdated']>;
@@ -113,6 +116,9 @@ describe('App shell inventory views', () => {
     completeOnboardingMock = vi.fn().mockResolvedValue(createSettingsState());
     readUpdateStatusMock = vi.fn().mockResolvedValue({ phase: 'disabled' });
     installUpdateMock = vi.fn().mockResolvedValue({ phase: 'ready', version: '0.2.0' });
+    retryUpdateInstallMock = vi.fn().mockResolvedValue({ phase: 'installing', version: '0.2.0' });
+    openManualUpdateDownloadMock = vi.fn().mockResolvedValue(undefined);
+    dismissUpdateRecoveryMock = vi.fn().mockResolvedValue({ phase: 'ready', version: '0.2.0' });
     inventoryUpdatedListener = null;
     updateStatusUpdatedListener = null;
     onInventoryUpdatedMock = vi.fn((listener: (snapshot: SkillInventorySnapshot) => void) => {
@@ -131,6 +137,9 @@ describe('App shell inventory views', () => {
       readUpdateStatus: readUpdateStatusMock,
       checkForUpdates: vi.fn().mockResolvedValue({ phase: 'disabled' }),
       installUpdate: installUpdateMock,
+      retryUpdateInstall: retryUpdateInstallMock,
+      openManualUpdateDownload: openManualUpdateDownloadMock,
+      dismissUpdateRecovery: dismissUpdateRecoveryMock,
       openPathInEditor: vi.fn().mockResolvedValue(undefined),
       revealPathInFinder: vi.fn().mockResolvedValue(undefined),
       chooseDirectory: chooseDirectoryMock,
@@ -619,8 +628,63 @@ describe('App shell inventory views', () => {
     });
     render(<App />);
 
-    await screen.findByRole('button', { name: /Restart to install Skill Index 0\.2\.0/i });
+    const updateDialog = await screen.findByRole('dialog', { name: /Updating Skill Index/i });
+    expect(within(updateDialog).getByRole('heading', { name: /^Download complete$/i })).toBeInTheDocument();
+    expect(within(updateDialog).queryByText(/Relaunching/i)).not.toBeInTheDocument();
+    expect(within(updateDialog).getByRole('button', { name: /^Restart and apply update$/i })).toBeInTheDocument();
+    expect(within(updateDialog).getByRole('button', { name: /^Not now$/i })).toBeInTheDocument();
     expect(installUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('shows an installing state only after applying a downloaded update', async () => {
+    readUpdateStatusMock.mockResolvedValue({
+      phase: 'installing',
+      version: '0.2.0',
+      installStartedAt: '2026-05-17T00:00:00.000Z',
+    });
+    render(<App />);
+
+    const updateDialog = await screen.findByRole('dialog', { name: /Updating Skill Index/i });
+    expect(within(updateDialog).getByRole('heading', { name: /Preparing to restart Skill Index/i })).toBeInTheDocument();
+    expect(within(updateDialog).getByText(/This should only take a few seconds/i)).toBeInTheDocument();
+    expect(within(updateDialog).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('offers recovery actions when automatic restart times out', async () => {
+    readUpdateStatusMock.mockResolvedValue({
+      phase: 'recovery',
+      version: '0.2.0',
+      errorMessage: 'Skill Index did not restart automatically.',
+      retryAvailable: true,
+    });
+    render(<App />);
+
+    const updateDialog = await screen.findByRole('dialog', { name: /Updating Skill Index/i });
+    const retryButton = within(updateDialog).getByRole('button', { name: /^Quit and try again$/i });
+    const manualButton = within(updateDialog).getByRole('button', { name: /^Download installer manually$/i });
+    expect(within(updateDialog).getByRole('button', { name: /^Not now$/i })).toBeInTheDocument();
+
+    fireEvent.click(manualButton);
+    await waitFor(() => expect(openManualUpdateDownloadMock).toHaveBeenCalledOnce());
+    fireEvent.click(retryButton);
+    await waitFor(() => expect(retryUpdateInstallMock).toHaveBeenCalledOnce());
+  });
+
+  it('lets users dismiss update recovery without blocking the app', async () => {
+    readUpdateStatusMock.mockResolvedValue({
+      phase: 'recovery',
+      version: '0.2.0',
+      errorMessage: 'Skill Index did not restart automatically.',
+      retryAvailable: false,
+    });
+    render(<App />);
+
+    const updateDialog = await screen.findByRole('dialog', { name: /Updating Skill Index/i });
+    expect(within(updateDialog).queryByRole('button', { name: /^Quit and try again$/i })).not.toBeInTheDocument();
+    fireEvent.click(within(updateDialog).getByRole('button', { name: /^Not now$/i }));
+
+    await waitFor(() => expect(dismissUpdateRecoveryMock).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('dialog', { name: /Updating Skill Index/i })).not.toBeInTheDocument();
   });
 
   it('relaunches automatically when an update is ready before onboarding has completed', async () => {
@@ -636,7 +700,7 @@ describe('App shell inventory views', () => {
       expect(installUpdateMock).toHaveBeenCalledTimes(1);
     });
     expect(await screen.findByRole('dialog', { name: /Updating Skill Index/i })).toHaveTextContent(
-      /Relaunching Skill Index/i,
+      /Preparing to restart Skill Index/i,
     );
   });
 

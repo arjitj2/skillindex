@@ -1,5 +1,7 @@
 # Skill Index
 
+> **Update recovery for 0.2.2 and 0.2.3:** If Skill Index is stuck on “Download complete,” Force Quit the app, download the latest DMG from [skillindex.app](https://skillindex.app), and drag Skill Index into Applications to replace the old copy. You do not need to delete `~/.skillindex`; your existing settings and local app data will be preserved.
+
 [![CI](https://github.com/arjitj2/skillindex/actions/workflows/ci.yml/badge.svg)](https://github.com/arjitj2/skillindex/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/arjitj2/skillindex/actions/workflows/codeql.yml/badge.svg)](https://github.com/arjitj2/skillindex/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/arjitj2/skillindex/badge)](https://scorecard.dev/viewer/?uri=github.com/arjitj2/skillindex)

@@ -20,7 +20,14 @@ import {
 } from '@shared/contracts';
 import { serializeIpcError } from '@shared/ipc-error';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
-import { getAutoUpdateStatus, installReadyAutoUpdate, requestAutoUpdateCheck } from '@main/auto-update';
+import {
+  dismissAutoUpdateRecovery,
+  getAutoUpdateStatus,
+  installReadyAutoUpdate,
+  openManualUpdateDownload,
+  requestAutoUpdateCheck,
+  retryReadyAutoUpdate,
+} from '@main/auto-update';
 import { getAppShellState } from '@main/app-shell';
 import { createInventoryRuntime } from '@main/inventory-runtime';
 import {
@@ -61,6 +68,9 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC_CHANNELS.readUpdateStatus);
   ipcMain.removeHandler(IPC_CHANNELS.checkForUpdates);
   ipcMain.removeHandler(IPC_CHANNELS.installUpdate);
+  ipcMain.removeHandler(IPC_CHANNELS.retryUpdateInstall);
+  ipcMain.removeHandler(IPC_CHANNELS.openManualUpdateDownload);
+  ipcMain.removeHandler(IPC_CHANNELS.dismissUpdateRecovery);
   ipcMain.removeHandler(IPC_CHANNELS.openPathInEditor);
   ipcMain.removeHandler(IPC_CHANNELS.revealPathInFinder);
   ipcMain.removeHandler(IPC_CHANNELS.chooseDirectory);
@@ -112,6 +122,9 @@ export function registerIpcHandlers(): void {
   registerIpcHandler(IPC_CHANNELS.readUpdateStatus, () => getAutoUpdateStatus());
   registerIpcHandler(IPC_CHANNELS.checkForUpdates, () => requestAutoUpdateCheck());
   registerIpcHandler(IPC_CHANNELS.installUpdate, () => installReadyAutoUpdate());
+  registerIpcHandler(IPC_CHANNELS.retryUpdateInstall, () => retryReadyAutoUpdate());
+  registerIpcHandler(IPC_CHANNELS.openManualUpdateDownload, () => openManualUpdateDownload());
+  registerIpcHandler(IPC_CHANNELS.dismissUpdateRecovery, () => dismissAutoUpdateRecovery());
   registerIpcHandler(IPC_CHANNELS.openPathInEditor, async (_event, filePath: string) => {
     const errorMessage = await shell.openPath(resolveOpenPath(filePath));
     if (errorMessage) {

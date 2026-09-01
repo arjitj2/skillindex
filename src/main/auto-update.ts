@@ -1,4 +1,7 @@
-import { app, BrowserWindow } from 'electron';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import { app, BrowserWindow, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import type { ProgressInfo, UpdateCheckResult, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater';
 
@@ -7,6 +10,11 @@ import { IPC_CHANNELS, type AutoUpdateDownloadProgress, type AutoUpdateStatus } 
 
 export const STARTUP_UPDATE_CHECK_DELAY_MS = 5_000;
 export const UPDATE_CHECK_INTERVAL_MS = 5 * 60_000;
+export const AUTO_UPDATE_INSTALL_SETTLE_DELAY_MS = 6_000;
+export const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15_000;
+export const AUTO_UPDATE_RETRY_MARKER_MAX_AGE_MS = 24 * 60 * 60_000;
+export const MANUAL_UPDATE_DOWNLOAD_URL = 'https://skillindex.app';
+const AUTO_UPDATE_RETRY_MARKER_FILE = 'pending-update-retry.json';
 
 export interface AutoUpdateEligibility {
   buildFlavor: SkillIndexBuildFlavor;
@@ -40,14 +48,41 @@ interface AutoUpdateRuntime {
   disableAutoUpdate?: boolean;
   isPackaged: boolean;
   logger: Pick<Console, 'error' | 'info'>;
+  consumePendingRetry: (version: string) => Promise<boolean>;
   setInterval: (callback: () => void, delayMs: number) => TimerHandle;
   setTimeout: (callback: () => void, delayMs: number) => TimerHandle;
   updater: AutoUpdaterLike;
 }
 
+interface AutoUpdateInstallRuntime {
+  clearTimeout: (handle: TimerHandle) => void;
+  now: () => number;
+  setTimeout: (callback: () => void, delayMs: number) => TimerHandle;
+  updater: Pick<AutoUpdaterLike, 'quitAndInstall'>;
+}
+
+export interface AutoUpdateRetryMarker {
+  version: string;
+  createdAt: string;
+  attemptCount: 1;
+}
+
+interface AutoUpdateRetryRuntime {
+  exit: (exitCode?: number) => void;
+  now: () => number;
+  readMarker: () => Promise<AutoUpdateRetryMarker | null>;
+  relaunch: () => void;
+  removeMarker: () => Promise<void>;
+  writeMarker: (marker: AutoUpdateRetryMarker) => Promise<void>;
+}
+
 let autoUpdateStatus: AutoUpdateStatus = { phase: 'disabled' };
 let hasRegisteredAutoUpdater = false;
 let hasUpdateCheckInFlight = false;
+let autoUpdateReadyAtMs: number | null = null;
+let installAttemptPromise: Promise<AutoUpdateStatus> | null = null;
+let clearInstallWatchdog: (() => void) | null = null;
+let retryConsumedVersion: string | null = null;
 
 export function shouldEnableAutoUpdates(eligibility: AutoUpdateEligibility): boolean {
   return eligibility.isPackaged
@@ -60,6 +95,9 @@ export function getAutoUpdateStatus(): AutoUpdateStatus {
 }
 
 export function configureAutoUpdates(runtime: AutoUpdateRuntime): boolean {
+  resetAutoUpdateInstallState();
+  autoUpdateReadyAtMs = null;
+  retryConsumedVersion = null;
   if (!shouldEnableAutoUpdates(runtime)) {
     setAutoUpdateStatus({ phase: 'disabled' });
     return false;
@@ -92,10 +130,14 @@ export function configureAutoUpdates(runtime: AutoUpdateRuntime): boolean {
     });
   });
   runtime.updater.on('update-downloaded', (info) => {
+    autoUpdateReadyAtMs = Date.now();
     setAutoUpdateStatus({
       phase: 'ready',
       version: info.version,
       lastCheckedAt: new Date().toISOString(),
+    });
+    void runtime.consumePendingRetry(info.version).catch((error: unknown) => {
+      runtime.logger.error('Failed to resume a pending auto-update retry.', error);
     });
   });
   runtime.updater.on('update-not-available', () => {
@@ -105,6 +147,7 @@ export function configureAutoUpdates(runtime: AutoUpdateRuntime): boolean {
     });
   });
   runtime.updater.on('error', (error) => {
+    resetAutoUpdateInstallState();
     runtime.logger.error('Auto-update check failed.', error);
     setAutoUpdateStatus({
       ...getAutoUpdateStatus(),
@@ -135,6 +178,7 @@ export function registerAutoUpdateLifecycle(): boolean {
     disableAutoUpdate: process.env.SKILL_INDEX_DISABLE_AUTO_UPDATE === '1',
     isPackaged: app.isPackaged,
     logger: console,
+    consumePendingRetry: (version) => consumePendingAutoUpdateRetry(version),
     setInterval,
     setTimeout,
     updater: autoUpdater,
@@ -153,13 +197,145 @@ export async function requestAutoUpdateCheck(): Promise<AutoUpdateStatus> {
   return getAutoUpdateStatus();
 }
 
-export function installReadyAutoUpdate(): AutoUpdateStatus {
+export async function installReadyAutoUpdate(
+  runtime: AutoUpdateInstallRuntime = {
+    clearTimeout,
+    now: Date.now,
+    setTimeout,
+    updater: autoUpdater,
+  },
+): Promise<AutoUpdateStatus> {
+  if (installAttemptPromise) {
+    return installAttemptPromise;
+  }
   if (getAutoUpdateStatus().phase !== 'ready') {
     return getAutoUpdateStatus();
   }
 
-  autoUpdater.quitAndInstall(false, true);
+  const attempt = performInstallAttempt(runtime);
+  installAttemptPromise = attempt;
+  try {
+    return await attempt;
+  } finally {
+    if (installAttemptPromise === attempt) {
+      installAttemptPromise = null;
+    }
+  }
+}
+
+async function performInstallAttempt(runtime: AutoUpdateInstallRuntime): Promise<AutoUpdateStatus> {
+
+  const settleDelayMs = autoUpdateReadyAtMs === null
+    ? 0
+    : Math.max(0, AUTO_UPDATE_INSTALL_SETTLE_DELAY_MS - (runtime.now() - autoUpdateReadyAtMs));
+  if (settleDelayMs > 0) {
+    await new Promise<void>((resolve) => {
+      runtime.setTimeout(resolve, settleDelayMs);
+    });
+  }
+
+  const readyStatus = getAutoUpdateStatus();
+  if (readyStatus.phase !== 'ready') {
+    return readyStatus;
+  }
+
+  const retryAvailable = retryConsumedVersion === readyStatus.version ? false : undefined;
+  setAutoUpdateStatus({
+    phase: 'installing',
+    version: readyStatus.version,
+    installStartedAt: new Date(runtime.now()).toISOString(),
+    retryAvailable,
+  });
+  runtime.updater.quitAndInstall(false, true);
+
+  const watchdogHandle = runtime.setTimeout(() => {
+    const currentStatus = getAutoUpdateStatus();
+    if (currentStatus.phase !== 'installing') {
+      return;
+    }
+    clearInstallWatchdog = null;
+    setAutoUpdateStatus({
+      phase: 'recovery',
+      version: currentStatus.version,
+      errorMessage: 'Skill Index did not restart automatically.',
+      retryAvailable: retryConsumedVersion !== currentStatus.version,
+    });
+  }, AUTO_UPDATE_INSTALL_WATCHDOG_MS);
+  clearInstallWatchdog = () => runtime.clearTimeout(watchdogHandle);
   return getAutoUpdateStatus();
+}
+
+export function dismissAutoUpdateRecovery(): AutoUpdateStatus {
+  const currentStatus = getAutoUpdateStatus();
+  if (currentStatus.phase !== 'recovery') {
+    return currentStatus;
+  }
+
+  resetAutoUpdateInstallState();
+  setAutoUpdateStatus({
+    phase: 'ready',
+    version: currentStatus.version,
+  });
+  return getAutoUpdateStatus();
+}
+
+export async function retryReadyAutoUpdate(
+  runtime: AutoUpdateRetryRuntime = createDefaultRetryRuntime(),
+): Promise<AutoUpdateStatus> {
+  const currentStatus = getAutoUpdateStatus();
+  if (currentStatus.phase !== 'recovery' || currentStatus.retryAvailable !== true || !currentStatus.version) {
+    return currentStatus;
+  }
+
+  const marker: AutoUpdateRetryMarker = {
+    version: currentStatus.version,
+    createdAt: new Date(runtime.now()).toISOString(),
+    attemptCount: 1,
+  };
+  await runtime.writeMarker(marker);
+  retryConsumedVersion = currentStatus.version;
+  setAutoUpdateStatus({
+    phase: 'installing',
+    version: currentStatus.version,
+    installStartedAt: marker.createdAt,
+    retryAvailable: false,
+  });
+  runtime.relaunch();
+  runtime.exit(0);
+  return getAutoUpdateStatus();
+}
+
+export async function consumePendingAutoUpdateRetry(
+  version: string,
+  retryRuntime: AutoUpdateRetryRuntime = createDefaultRetryRuntime(),
+  installRuntime?: AutoUpdateInstallRuntime,
+): Promise<boolean> {
+  if (retryConsumedVersion === version) {
+    return false;
+  }
+  const marker = await retryRuntime.readMarker();
+  if (!marker) {
+    return false;
+  }
+
+  const markerAgeMs = retryRuntime.now() - Date.parse(marker.createdAt);
+  const isValid = marker.version === version
+    && marker.attemptCount === 1
+    && Number.isFinite(markerAgeMs)
+    && markerAgeMs >= 0
+    && markerAgeMs <= AUTO_UPDATE_RETRY_MARKER_MAX_AGE_MS;
+  await retryRuntime.removeMarker();
+  if (!isValid) {
+    return false;
+  }
+
+  retryConsumedVersion = version;
+  await installReadyAutoUpdate(installRuntime);
+  return true;
+}
+
+export async function openManualUpdateDownload(): Promise<void> {
+  await shell.openExternal(MANUAL_UPDATE_DOWNLOAD_URL);
 }
 
 function setAutoUpdateStatus(status: AutoUpdateStatus): void {
@@ -172,7 +348,13 @@ async function checkForAutoUpdates(
   logger: Pick<Console, 'error'>,
 ): Promise<void> {
   const currentStatus = getAutoUpdateStatus();
-  if (hasUpdateCheckInFlight || currentStatus.phase === 'downloading' || currentStatus.phase === 'ready') {
+  if (
+    hasUpdateCheckInFlight
+    || currentStatus.phase === 'downloading'
+    || currentStatus.phase === 'ready'
+    || currentStatus.phase === 'installing'
+    || currentStatus.phase === 'recovery'
+  ) {
     return;
   }
 
@@ -190,6 +372,54 @@ async function checkForAutoUpdates(
   } finally {
     hasUpdateCheckInFlight = false;
   }
+}
+
+function resetAutoUpdateInstallState(): void {
+  clearInstallWatchdog?.();
+  clearInstallWatchdog = null;
+  installAttemptPromise = null;
+}
+
+function createDefaultRetryRuntime(): AutoUpdateRetryRuntime {
+  const markerPath = path.join(app.getPath('userData'), AUTO_UPDATE_RETRY_MARKER_FILE);
+  return {
+    exit: (exitCode) => app.exit(exitCode),
+    now: Date.now,
+    readMarker: async () => {
+      try {
+        const value = JSON.parse(await readFile(markerPath, 'utf8')) as unknown;
+        return isAutoUpdateRetryMarker(value) ? value : null;
+      } catch (error) {
+        if (isNodeError(error) && error.code === 'ENOENT') {
+          return null;
+        }
+        throw error;
+      }
+    },
+    relaunch: () => app.relaunch(),
+    removeMarker: async () => {
+      await rm(markerPath, { force: true });
+    },
+    writeMarker: async (marker) => {
+      await mkdir(path.dirname(markerPath), { recursive: true });
+      await writeFile(markerPath, `${JSON.stringify(marker)}\n`, 'utf8');
+    },
+  };
+}
+
+function isAutoUpdateRetryMarker(value: unknown): value is AutoUpdateRetryMarker {
+  return typeof value === 'object'
+    && value !== null
+    && 'version' in value
+    && typeof value.version === 'string'
+    && 'createdAt' in value
+    && typeof value.createdAt === 'string'
+    && 'attemptCount' in value
+    && value.attemptCount === 1;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error;
 }
 
 function broadcastAutoUpdateStatus(status: AutoUpdateStatus): void {

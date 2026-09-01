@@ -148,6 +148,17 @@ describe('createSkillIndexDesktopApi', () => {
       version: '0.2.0',
       lastCheckedAt: '2026-05-17T00:00:00.000Z',
     };
+    const installingUpdateStatus: AutoUpdateStatus = {
+      phase: 'installing',
+      version: '0.2.0',
+      installStartedAt: '2026-05-17T00:00:01.000Z',
+    };
+    const recoveryUpdateStatus: AutoUpdateStatus = {
+      phase: 'recovery',
+      version: '0.2.0',
+      errorMessage: 'Skill Index did not restart automatically.',
+      retryAvailable: true,
+    };
     const auditOperations: AuditOperation[] = [
       {
         id: 'audit-operation-1',
@@ -185,6 +196,9 @@ describe('createSkillIndexDesktopApi', () => {
       if (channel === IPC_CHANNELS.readUpdateStatus) return Promise.resolve(updateStatus);
       if (channel === IPC_CHANNELS.checkForUpdates) return Promise.resolve(updateStatus);
       if (channel === IPC_CHANNELS.installUpdate) return Promise.resolve(updateStatus);
+      if (channel === IPC_CHANNELS.retryUpdateInstall) return Promise.resolve(installingUpdateStatus);
+      if (channel === IPC_CHANNELS.openManualUpdateDownload) return Promise.resolve(undefined);
+      if (channel === IPC_CHANNELS.dismissUpdateRecovery) return Promise.resolve(recoveryUpdateStatus);
       if (channel === IPC_CHANNELS.openPathInEditor) return Promise.resolve(undefined);
       if (channel === IPC_CHANNELS.revealPathInFinder) return Promise.resolve(undefined);
       if (channel === IPC_CHANNELS.chooseDirectory) return Promise.resolve('/tmp/skillindex/repos/arjit-skills');
@@ -242,6 +256,9 @@ describe('createSkillIndexDesktopApi', () => {
     await expect(api.readUpdateStatus()).resolves.toEqual(updateStatus);
     await expect(api.checkForUpdates()).resolves.toEqual(updateStatus);
     await expect(api.installUpdate()).resolves.toEqual(updateStatus);
+    await expect(api.retryUpdateInstall()).resolves.toEqual(installingUpdateStatus);
+    await expect(api.openManualUpdateDownload()).resolves.toBeUndefined();
+    await expect(api.dismissUpdateRecovery()).resolves.toEqual(recoveryUpdateStatus);
     await expect(api.openPathInEditor('/tmp/skillindex/sandbox/.agents/skills/healthy-skill')).resolves.toBeUndefined();
     await expect(api.revealPathInFinder('/tmp/skillindex/plugins/github')).resolves.toBeUndefined();
     await expect(api.chooseDirectory({ title: 'Choose a preferred skills source' })).resolves.toBe('/tmp/skillindex/repos/arjit-skills');
@@ -314,6 +331,9 @@ describe('createSkillIndexDesktopApi', () => {
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.readUpdateStatus);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.checkForUpdates);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.installUpdate);
+    expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.retryUpdateInstall);
+    expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.openManualUpdateDownload);
+    expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.dismissUpdateRecovery);
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.openPathInEditor, '/tmp/skillindex/sandbox/.agents/skills/healthy-skill');
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.revealPathInFinder, '/tmp/skillindex/plugins/github');
     expect(invoke).toHaveBeenCalledWith(IPC_CHANNELS.chooseDirectory, { title: 'Choose a preferred skills source' });

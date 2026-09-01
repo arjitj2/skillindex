@@ -7,6 +7,9 @@ export const IPC_CHANNELS = {
   readUpdateStatus: 'app:update:read-status',
   checkForUpdates: 'app:update:check',
   installUpdate: 'app:update:install',
+  retryUpdateInstall: 'app:update:retry-install',
+  openManualUpdateDownload: 'app:update:open-manual-download',
+  dismissUpdateRecovery: 'app:update:dismiss-recovery',
   updateStatusUpdated: 'app:update:status-updated',
   openPathInEditor: 'app:open-path-in-editor',
   revealPathInFinder: 'app:reveal-path-in-finder',
@@ -85,6 +88,8 @@ export type AutoUpdatePhase =
   | 'checking'
   | 'downloading'
   | 'ready'
+  | 'installing'
+  | 'recovery'
   | 'error';
 
 export interface AutoUpdateStatus {
@@ -92,7 +97,9 @@ export interface AutoUpdateStatus {
   downloadProgress?: AutoUpdateDownloadProgress;
   version?: string;
   lastCheckedAt?: string;
+  installStartedAt?: string;
   errorMessage?: string;
+  retryAvailable?: boolean;
 }
 
 export interface AutoUpdateDownloadProgress {
@@ -1000,6 +1007,9 @@ export interface SkillIndexDesktopApi {
   readUpdateStatus(): Promise<AutoUpdateStatus>;
   checkForUpdates(): Promise<AutoUpdateStatus>;
   installUpdate(): Promise<AutoUpdateStatus>;
+  retryUpdateInstall(): Promise<AutoUpdateStatus>;
+  openManualUpdateDownload(): Promise<void>;
+  dismissUpdateRecovery(): Promise<AutoUpdateStatus>;
   openPathInEditor(filePath: string): Promise<void>;
   revealPathInFinder(filePath: string): Promise<void>;
   chooseDirectory(request?: ChooseDirectoryRequest): Promise<string | null>;
@@ -1064,6 +1074,15 @@ export function createSkillIndexDesktopApi(
     },
     async installUpdate() {
       return invoke(IPC_CHANNELS.installUpdate) as Promise<AutoUpdateStatus>;
+    },
+    async retryUpdateInstall() {
+      return invoke(IPC_CHANNELS.retryUpdateInstall) as Promise<AutoUpdateStatus>;
+    },
+    async openManualUpdateDownload() {
+      await invoke(IPC_CHANNELS.openManualUpdateDownload);
+    },
+    async dismissUpdateRecovery() {
+      return invoke(IPC_CHANNELS.dismissUpdateRecovery) as Promise<AutoUpdateStatus>;
     },
     async openPathInEditor(filePath) {
       await invoke(IPC_CHANNELS.openPathInEditor, filePath);

@@ -25,10 +25,17 @@ const PREVIEW_RESCAN_HOLD_MS = 2500;
 export function createInitialSettingsState(): SettingsState {
   return {
     customScanPaths: [],
-    onboardingCompletedAt: null,
+    onboardingCompletedAt: isBrowserPreviewOnboardingComplete()
+      ? '2026-09-01T00:00:00.000Z'
+      : null,
     preferredCanonicalSourcePath: null,
     showDevSidebarInventorySourceSwitcher: true,
   };
+}
+
+function isBrowserPreviewOnboardingComplete(): boolean {
+  return typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('mock-onboarding') === 'complete';
 }
 
 export function getBrowserPreviewDesktopApi(): SkillIndexDesktopApi {
@@ -69,7 +76,19 @@ const browserPreviewApi: SkillIndexDesktopApi = {
   openPathInEditor: () => Promise.resolve(),
   readUpdateStatus: () => Promise.resolve(getBrowserPreviewUpdateStatus()),
   checkForUpdates: () => Promise.resolve(getBrowserPreviewUpdateStatus()),
-  installUpdate: () => Promise.resolve(getBrowserPreviewUpdateStatus()),
+  installUpdate: () => Promise.resolve({
+    phase: 'installing',
+    version: '0.2.4',
+    installStartedAt: new Date().toISOString(),
+  }),
+  retryUpdateInstall: () => Promise.resolve({
+    phase: 'installing',
+    version: '0.2.4',
+    installStartedAt: new Date().toISOString(),
+    retryAvailable: false,
+  }),
+  openManualUpdateDownload: () => Promise.resolve(),
+  dismissUpdateRecovery: () => Promise.resolve({ phase: 'ready', version: '0.2.4' }),
   revealPathInFinder: () => Promise.resolve(),
   chooseDirectory: () => Promise.resolve('/Users/arjitjaiswal/repos/my-skills'),
   readSettings: () => resolveWithOptionalStartupHold(cloneSettingsState(browserPreviewSettingsState)),
@@ -240,8 +259,23 @@ function getBrowserPreviewUpdateStatus() {
   if (mockUpdate === 'ready') {
     return {
       phase: 'ready' as const,
-      version: '0.2.0',
+      version: '0.2.4',
       lastCheckedAt: new Date().toISOString(),
+    };
+  }
+  if (mockUpdate === 'installing') {
+    return {
+      phase: 'installing' as const,
+      version: '0.2.4',
+      installStartedAt: new Date().toISOString(),
+    };
+  }
+  if (mockUpdate === 'recovery') {
+    return {
+      phase: 'recovery' as const,
+      version: '0.2.4',
+      errorMessage: 'Skill Index did not restart automatically.',
+      retryAvailable: true,
     };
   }
   if (mockUpdate === 'downloading') {
@@ -253,7 +287,7 @@ function getBrowserPreviewUpdateStatus() {
         transferredBytes: 6_600_000,
       },
       phase: 'downloading' as const,
-      version: '0.2.0',
+      version: '0.2.4',
       lastCheckedAt: new Date().toISOString(),
     };
   }
