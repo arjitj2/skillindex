@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -72,6 +72,10 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   testFailSkillLinkAt?: number;
   /** Test-only deterministic failure point for skill Universal decision persistence. */
   testFailSkillDecisionPersist?: boolean;
+  /** Test-only deterministic failure point for staged subagent mutations. */
+  testFailSubagentMutationAt?: number;
+  /** Test-only deterministic failure point for subagent rendering. */
+  testFailSubagentRenderAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -119,6 +123,12 @@ interface SubagentWriteTarget {
   format: AgentSubagentParserKind;
   localExtrasKeys?: string[];
   path: string;
+}
+
+interface StagedSubagentMutation {
+  path: string;
+  rendered?: string;
+  symlinkTarget?: string;
 }
 
 export async function resolveInventoryIssue(
@@ -804,19 +814,29 @@ async function resolveSubagentIssueIfCurrent(
       });
       const canonicalPackage = isInvalidSubagentLocation(selectedLocation)
         ? null
-        : await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
-          preferExisting: false,
-        });
+        : createCanonicalSubagentPackageForPromotion(subagent, snapshot, selectedLocation, options.paths);
       const canonicalPath = canonicalPackage
         ? canonicalPackage.path
         : await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths);
-      const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
-      await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
-        replaceWithCanonicalSymlink(target.path, canonicalPath)));
       if (canonicalPackage) {
-        const targets = collectWritableSubagentTargetsForNewCanonical(snapshot, subagent, canonicalPackage);
-        await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-          writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+        const targets = collectWritableSubagentTargetsForNewCanonical(
+          snapshot,
+          subagent,
+          canonicalPackage,
+          selectedLocation.scope,
+        );
+        await executeSubagentPromotionTransaction({
+          canonicalPackage,
+          selectedLocation,
+          snapshot,
+          subagent,
+          targets: dedupeSubagentTargets(targets),
+          options,
+        });
+      } else {
+        const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
+        await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
+          replaceWithCanonicalSymlink(target.path, canonicalPath)));
       }
       return;
     }
@@ -949,6 +969,204 @@ async function ensureCanonicalSubagentPackage(
     path: canonicalPath,
     definition,
   };
+}
+
+function createCanonicalSubagentPackageForPromotion(
+  subagent: SubagentRecord,
+  snapshot: SkillInventorySnapshot,
+  selectedLocation: SubagentLocationRecord,
+  paths: SkillIndexPaths,
+): CanonicalSubagentPackage {
+  return {
+    path: resolveCanonicalSubagentPath(subagent, selectedLocation, paths),
+    definition: stripSubagentLocalExtras(readPortableDefinitionForSubagentLocation(
+      snapshot,
+      subagent.name,
+      selectedLocation,
+    )),
+  };
+}
+
+async function executeSubagentPromotionTransaction({
+  canonicalPackage,
+  selectedLocation,
+  snapshot,
+  subagent,
+  targets,
+  options,
+}: {
+  canonicalPackage: CanonicalSubagentPackage;
+  selectedLocation: SubagentLocationRecord;
+  snapshot: SkillInventorySnapshot;
+  subagent: SubagentRecord;
+  targets: SubagentWriteTarget[];
+  options: ResolveIssueOptions & { paths: SkillIndexPaths };
+}): Promise<void> {
+  const mutations = buildSubagentPromotionMutations(
+    canonicalPackage,
+    snapshot,
+    targets,
+    options,
+  );
+  await assertSubagentPromotionMutationPlan(mutations, canonicalPackage, selectedLocation, snapshot, subagent);
+  await applyStagedSubagentMutations(mutations, options);
+}
+
+function buildSubagentPromotionMutations(
+  canonicalPackage: CanonicalSubagentPackage,
+  snapshot: SkillInventorySnapshot,
+  targets: SubagentWriteTarget[],
+  options: ResolveIssueOptions,
+): StagedSubagentMutation[] {
+  const mutations: StagedSubagentMutation[] = [{
+    path: canonicalPackage.path,
+    rendered: renderPortableSubagentDefinition(canonicalPackage.definition, 'markdown-frontmatter'),
+  }];
+  for (const [index, target] of targets.entries()) {
+    if (options.testFailSubagentRenderAt === index + 1) {
+      throw new Error(`Injected subagent render failure at ${index + 1}.`);
+    }
+    const family = target.family ?? findSubagentLocationFamily(snapshot, target.agentId);
+    if (target.format === 'markdown-frontmatter'
+      && isMarkdownSubagentSymlinkCompatible(family)
+      && !hasSubagentLocalExtras(target)) {
+      mutations.push({ path: target.path, symlinkTarget: canonicalPackage.path });
+      continue;
+    }
+    const definition = mergeExistingSubagentTargetExtras(target, stripSubagentLocalExtras(canonicalPackage.definition));
+    mutations.push({
+      path: target.path,
+      rendered: renderPortableSubagentDefinition(definition, target.format, { family }),
+    });
+  }
+  return dedupeSubagentMutations(mutations);
+}
+
+function dedupeSubagentMutations(mutations: StagedSubagentMutation[]): StagedSubagentMutation[] {
+  const seen = new Set<string>();
+  return mutations.filter((mutation) => {
+    const key = path.normalize(mutation.path);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function assertSubagentPromotionMutationPlan(
+  mutations: StagedSubagentMutation[],
+  canonicalPackage: CanonicalSubagentPackage,
+  selectedLocation: SubagentLocationRecord,
+  snapshot: SkillInventorySnapshot,
+  subagent: SubagentRecord,
+): Promise<void> {
+  const allowedExistingPaths = new Set(subagent.locations.map((location) => path.normalize(location.path)));
+  for (const mutation of mutations) {
+    await assertSafeSubagentMutationDestination(mutation.path, selectedLocation.scope, snapshot, canonicalPackage.path);
+    const exists = await lstat(mutation.path).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    });
+    if (exists && !allowedExistingPaths.has(path.normalize(mutation.path))) {
+      throw new Error(`Subagent destination collision: ${mutation.path} belongs to a different subagent.`);
+    }
+  }
+}
+
+async function assertSafeSubagentMutationDestination(
+  destinationPath: string,
+  scope: SubagentLocationRecord['scope'],
+  snapshot: SkillInventorySnapshot,
+  canonicalPath: string,
+): Promise<void> {
+  const roots = [path.dirname(canonicalPath), ...(snapshot.agents ?? [])
+    .filter((agent) => agent.scope === scope && agent.writable && agent.subagentsLocation?.path)
+    .map((agent) => agent.subagentsLocation?.path ?? '')]
+    .filter((root) => root.length > 0);
+  if (!roots.some((root) => isExactSubagentChild(root, destinationPath))) {
+    throw new Error('Subagent mutation requires an exact writable Universal or agent subagent destination in the selected scope.');
+  }
+  const destinationParent = path.dirname(destinationPath);
+  const resolvedParent = await resolveSubagentNearestExistingParent(destinationParent);
+  const resolvedRoots = await Promise.all(roots.map(resolveSubagentNearestExistingParent));
+  if (!resolvedRoots.some((root) => isExactSubagentChild(root, path.join(resolvedParent, path.basename(destinationPath))))) {
+    throw new Error('Subagent mutation destination escapes its writable root through a path alias.');
+  }
+  const pluginRoots = (snapshot.plugins ?? []).map((plugin) => plugin.rootPath);
+  const resolvedPluginRoots = await Promise.all(pluginRoots.map(resolveSubagentNearestExistingParent));
+  if (pluginRoots.concat(resolvedPluginRoots).some((root) => isSubagentPathContainedBy(root, destinationPath)
+    || isSubagentPathContainedBy(root, resolvedParent))) {
+    throw new Error('Subagent mutations cannot write into a plugin-managed cache path.');
+  }
+  if (destinationPath !== canonicalPath && path.normalize(destinationPath) === path.normalize(canonicalPath)) {
+    throw new Error('Subagent mutation plan contains overlapping destination aliases.');
+  }
+}
+
+function isExactSubagentChild(root: string, target: string): boolean {
+  const relative = path.relative(path.normalize(root), path.normalize(target));
+  return relative !== '' && !relative.includes(path.sep) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+function isSubagentPathContainedBy(root: string, target: string): boolean {
+  const relative = path.relative(path.normalize(root), path.normalize(target));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function resolveSubagentNearestExistingParent(targetPath: string): Promise<string> {
+  let candidate = path.normalize(targetPath);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return path.join(await realpath(candidate), ...missing.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return candidate;
+    missing.push(path.basename(candidate));
+    candidate = parent;
+  }
+}
+
+async function applyStagedSubagentMutations(
+  mutations: StagedSubagentMutation[],
+  options: ResolveIssueOptions,
+): Promise<void> {
+  const staged = await Promise.all(mutations.map(async (mutation) => {
+    const parent = path.dirname(mutation.path);
+    await mkdir(parent, { recursive: true });
+    const stagePath = path.join(parent, `.${path.basename(mutation.path)}.stage-${randomUUID()}`);
+    if (mutation.symlinkTarget) await symlink(mutation.symlinkTarget, stagePath);
+    else await writeFile(stagePath, mutation.rendered ?? '', 'utf8');
+    return { ...mutation, stagePath, backupPath: path.join(parent, `.${path.basename(mutation.path)}.backup-${randomUUID()}`), installed: false, backedUp: false };
+  }));
+  try {
+    for (const [index, mutation] of staged.entries()) {
+      mutation.backedUp = await rename(mutation.path, mutation.backupPath).then(() => true).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      });
+      if (options.testFailSubagentMutationAt === index + 1) {
+        throw new Error(`Injected subagent mutation failure at ${index + 1}.`);
+      }
+      await rename(mutation.stagePath, mutation.path);
+      mutation.installed = true;
+    }
+  } catch (error) {
+    const failures: unknown[] = [];
+    for (const mutation of staged.slice().reverse()) {
+      try {
+        if (mutation.installed) await rm(mutation.path, { recursive: true, force: true });
+        if (mutation.backedUp) await rename(mutation.backupPath, mutation.path);
+      } catch (rollbackError) { failures.push(rollbackError); }
+    }
+    await Promise.all(staged.map((mutation) => rm(mutation.stagePath, { recursive: true, force: true }).catch(() => undefined)));
+    if (failures.length > 0) throw new AggregateError([error, ...failures], 'Subagent promotion failed and rollback was incomplete.');
+    throw error;
+  }
+  await Promise.all(staged.map((mutation) => mutation.backedUp
+    ? rm(mutation.backupPath, { recursive: true, force: true })
+    : Promise.resolve()));
 }
 
 function findCanonicalSubagentLocation(
@@ -1114,6 +1332,7 @@ function collectWritableSubagentTargetsForNewCanonical(
   snapshot: SkillInventorySnapshot,
   subagent: SubagentRecord,
   canonicalPackage: CanonicalSubagentPackage,
+  scope: SubagentLocationRecord['scope'],
 ): SubagentWriteTarget[] {
   const enabledPluginSources = (subagent.managedSourceCandidates ?? [])
     .filter((candidate) => candidate.plugin.enabled === true)
@@ -1124,6 +1343,7 @@ function collectWritableSubagentTargetsForNewCanonical(
       const format = agent.subagentParserKind ?? 'unknown';
       return agent.installState === 'installed'
         && agent.writable
+        && agent.scope === scope
         && agent.subagentsLocation?.state === 'available'
         && Boolean(agent.subagentsLocation.path)
         && isSubagentFormatRenderableFromUniversal(format, 'markdown-frontmatter')
