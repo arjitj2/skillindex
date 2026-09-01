@@ -173,6 +173,21 @@ selection, but not in installed-copy divergence. Resolution must reject plugin
 paths as mutation targets and canonical destinations at the lowest shared
 filesystem boundary, even if a caller supplies one directly.
 
+## Refresh and Cached Startup
+
+File watching refreshes changes inside already-discovered skill roots. Changes
+to plugin topology—including a new sibling plugin version—as well as plugin MCP
+and subagent files are discovered by the startup scan or a manual **Rescan**.
+Every mutation performs a fresh scan and revalidates the selected managed-source
+candidate before planning any writes.
+
+The first startup paint may use a cached inventory snapshot while asynchronous
+hydration discovers the current plugin state. A plugin skill whose cache source
+was removed may therefore appear briefly until hydration completes. This cached
+view is presentation-only: a resolution attempted during that interval still
+uses the fresh action scan, rejects a vanished candidate, and leaves Universal,
+agent locations, and the plugin cache unchanged.
+
 ## Sandbox Fixtures
 
 The representative Sandbox will include deterministic plugin scenarios for all
@@ -208,8 +223,9 @@ Verification follows the `skillindex-testing` ladder:
 5. For each resolution flow, verify the resulting filesystem state: Universal
    contains a real copy, writable symlinks target Universal, plugin caches are
    byte-for-byte untouched, and native plugin hosts do not receive duplicates.
-6. Confirm watcher-driven rescans settle on the expected structural status and
-   advisory state.
+6. Confirm watcher-driven rescans within existing skill roots settle on the
+   expected structural status and advisory state; use startup or manual Rescan
+   to verify new plugin versions, plugin MCPs, and plugin subagents.
 7. Capture fresh screenshots of every materially changed UI state and include
    them in the final report.
 

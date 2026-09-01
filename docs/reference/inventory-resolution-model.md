@@ -69,6 +69,21 @@ capability. Skill Index does not create a duplicate local materialization in
 that host, while other compatible writable agents can still receive the
 Universal representation.
 
+## Refresh and Cached Startup
+
+Automatic file watching covers changes inside skill roots that are already in
+the inventory. Plugin topology changes, including newly added sibling versions,
+and plugin MCP or subagent changes are discovered on startup or after a manual
+**Rescan**. Resolution and capability actions do not trust the displayed
+snapshot for writes: each action performs a fresh full scan and revalidates the
+selected managed-source candidate before changing Universal or agent locations.
+
+Skill Index may initially paint its cached inventory while asynchronous startup
+hydration discovers current plugin state. A removed plugin skill source can
+therefore remain visible briefly. Hydration removes that stale candidate; if a
+user acts before it does, fresh validation rejects the vanished source without
+modifying Universal, agent locations, or plugin cache files.
+
 ## Skills
 
 | Reason | Label | When it appears | Resolution |

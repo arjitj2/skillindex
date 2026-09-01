@@ -112,12 +112,12 @@ export function SettingsWorkspaceView({
               title="Inventory refresh"
             />
             <SettingsValueRow
-              description="Re-index automatically when watched inventory files change on disk."
+              description="Re-index existing watched skill roots when their files change. New plugin versions, plugin MCPs, and plugin subagents refresh on startup or manual Rescan."
               label="Watch files for changes"
               trailing={<StaticSwitch active />}
             />
             <SettingsValueRow
-              description="Run a fresh inventory refresh when Skill Index opens."
+              description="Run a fresh inventory refresh when Skill Index opens, including plugin versions, MCPs, and subagents."
               label="Rescan when Skill Index opens"
               trailing={<StaticSwitch active />}
             />

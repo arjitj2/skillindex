@@ -960,7 +960,13 @@ describe('App shell inventory views', () => {
     expect(within(universalLocations).getByText(`${DEFAULT_SANDBOX_ROOT}/.agents/mcp.json`)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Inventory refresh' })).toBeInTheDocument();
     expect(screen.getByText('Watch files for changes')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Re-index existing watched skill roots when their files change. New plugin versions, plugin MCPs, and plugin subagents refresh on startup or manual Rescan.',
+    )).toBeInTheDocument();
     expect(screen.getByText('Rescan when Skill Index opens')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Run a fresh inventory refresh when Skill Index opens, including plugin versions, MCPs, and subagents.',
+    )).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Custom scan paths for skills' })).toBeInTheDocument();
     const settingsSourceControl = screen.getByRole('radiogroup', { name: 'Inventory source' });
     expect(within(settingsSourceControl).getByRole('radio', { name: /Sandbox/i })).toHaveAttribute('aria-checked', 'true');
