@@ -50,6 +50,7 @@ import { sanitizeJsonc, sortRecordValue } from '@main/json-utils';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
 import {
   assertSafeSkillPackageName,
+  assertPluginManagedSkillPackageSymlinksContained,
   assertSkillSourceAndDestinationDoNotOverlap,
   assertSafeUniversalSkillMutation,
   assertSafeWritableSkillLinkMutation,
@@ -1883,9 +1884,21 @@ async function ensureCanonicalSkillPackage(
   const parentPath = path.dirname(canonicalPath);
   const stagePath = path.join(parentPath, `.${path.basename(canonicalPath)}.stage-${randomUUID()}`);
   const backupPath = path.join(parentPath, `.${path.basename(canonicalPath)}.backup-${randomUUID()}`);
+  const selectedSourceIsPluginManaged = selectedLocation.provenance?.kind === 'plugin';
+  if (selectedSourceIsPluginManaged) {
+    await assertPluginManagedSkillPackageSymlinksContained(selectedLocation.path);
+  }
   await mkdir(parentPath, { recursive: true });
   try {
-    await cp(selectedLocation.path, stagePath, { recursive: true, dereference: true, force: true });
+    await cp(selectedLocation.path, stagePath, {
+      recursive: true,
+      dereference: !selectedSourceIsPluginManaged,
+      force: true,
+      verbatimSymlinks: selectedSourceIsPluginManaged,
+    });
+    if (selectedSourceIsPluginManaged) {
+      await assertPluginManagedSkillPackageSymlinksContained(stagePath);
+    }
     await readFile(path.join(stagePath, 'SKILL.md'), 'utf8');
     await rename(canonicalPath, backupPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;

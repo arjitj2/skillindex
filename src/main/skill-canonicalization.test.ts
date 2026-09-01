@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSkillCanonical } from '@main/skill-canonicalization';
 import { applyCapabilityAction } from '@main/capability-actions';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
+import { scanInventory } from '@main/scan-inventory';
 import { resolveSkillIndexPaths, writeSkillIndexConfig } from '@shared/skill-index-paths';
 
 describe('makeSkillCanonical', () => {
@@ -533,6 +534,148 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(pluginPath, 'assets', 'payload.bin'))).toEqual(beforePluginAsset);
     expect(await readFile(path.join(nextPluginPath, 'SKILL.md'))).toEqual(beforeNextPluginSkill);
     expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
+  });
+
+  it.each([
+    { kind: 'file' as const, leakedRelativePath: 'assets/leak.txt' },
+    { kind: 'directory' as const, leakedRelativePath: 'resources/leak/secret.txt' },
+  ])('rejects a plugin package whose nested $kind symlink escapes its managed source without reading or mutating the target', async ({
+    kind,
+    leakedRelativePath,
+  }) => {
+    const root = await createRoot(`skillindex-canonicalize-plugin-${kind}-escape-`);
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'escape-tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'escape-tools:foo');
+    const factoryPath = path.join(homeDir, '.factory', 'skills', 'escape-tools:foo');
+    const outsideRoot = path.join(root, 'outside');
+    const outsideSecret = kind === 'file'
+      ? path.join(outsideRoot, 'secret.txt')
+      : path.join(outsideRoot, 'directory', 'secret.txt');
+    const linkPath = kind === 'file'
+      ? path.join(pluginPath, 'assets', 'leak.txt')
+      : path.join(pluginPath, 'resources', 'leak');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'escape-tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(outsideSecret, 'outside secret v1\n');
+    await mkdir(path.dirname(linkPath), { recursive: true });
+    await symlink(path.relative(path.dirname(linkPath), kind === 'file' ? outsideSecret : path.dirname(outsideSecret)), linkPath);
+    await writeSkillFile(path.join(homeDir, '.factory', 'settings.json'), '{}\n');
+
+    const firstScan = await scanInventory({
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    });
+    const firstLocation = firstScan.skills.find((skill) => skill.name === 'escape-tools:foo')
+      ?.locations.find((location) => location.path === pluginPath);
+    expect(firstLocation?.packageFiles?.map((file) => file.relativePath)).not.toContain(leakedRelativePath);
+    const firstHash = firstLocation?.contentHash;
+
+    await writeFile(outsideSecret, 'outside secret v2 that must not affect the managed package hash\n', 'utf8');
+    const secondScan = await scanInventory({
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    });
+    expect(secondScan.skills.find((skill) => skill.name === 'escape-tools:foo')
+      ?.locations.find((location) => location.path === pluginPath)?.contentHash).toBe(firstHash);
+
+    await writeSkillIndexConfig(paths.configFile, {
+      customScanPaths: [], preferredCanonicalSourcePath: null, dismissedDriftSignatures: [], dismissedMcpSignatures: [],
+    });
+    await writeFile(paths.cacheFile, 'cache-sentinel\n', 'utf8');
+    const pluginEntrypointBefore = await readFile(path.join(pluginPath, 'SKILL.md'));
+    const outsideBefore = await readFile(outsideSecret);
+    const linkTargetBefore = await readlink(linkPath);
+    const configBefore = await readFile(paths.configFile);
+    const cacheBefore = await readFile(paths.cacheFile);
+
+    await expect(makeSkillCanonical({
+      skillName: 'escape-tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    })).rejects.toThrow(/symlink.*escapes.*managed source/i);
+
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'))).toEqual(pluginEntrypointBefore);
+    expect(await readFile(outsideSecret)).toEqual(outsideBefore);
+    expect(await readlink(linkPath)).toBe(linkTargetBefore);
+    expect(await readFile(paths.configFile)).toEqual(configBefore);
+    expect(await readFile(paths.cacheFile)).toEqual(cacheBefore);
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(factoryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a relative in-package plugin symlink whose target remains inside the exported Universal package', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-contained-link-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'contained-tools', '1.0.0');
+    const pluginPath = path.join(pluginRoot, 'skills', 'foo');
+    const universalPath = path.join(homeDir, '.agents', 'skills', 'contained-tools:foo');
+    const assetPath = path.join(pluginPath, 'assets', 'payload.txt');
+    const aliasPath = path.join(pluginPath, 'assets', 'alias.txt');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'contained-tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(pluginPath, 'SKILL.md'), '# Plugin foo\n');
+    await writeSkillFile(assetPath, 'contained payload\n');
+    await symlink('payload.txt', aliasPath);
+
+    await makeSkillCanonical({
+      skillName: 'contained-tools:foo',
+      selectedVariantPath: pluginPath,
+    }, {
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+    });
+
+    expect(await readlink(path.join(universalPath, 'assets', 'alias.txt'))).toBe('payload.txt');
+    expect(await readFile(path.join(universalPath, 'assets', 'alias.txt'), 'utf8')).toBe('contained payload\n');
+    expect(await readlink(aliasPath)).toBe('payload.txt');
+  });
+
+  it('does not discover a plugin skill package through a directory symlink that escapes the managed skill root', async () => {
+    const root = await createRoot('skillindex-plugin-discovery-link-escape-');
+    const homeDir = await createRoot('skillindex-live-home-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root }, homeDir });
+    const pluginRoot = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'discovery-tools', '1.0.0');
+    const pluginSkillsRoot = path.join(pluginRoot, 'skills');
+    const outsideSkill = path.join(root, 'outside', 'borrowed-skill');
+    const linkedSkill = path.join(pluginSkillsRoot, 'borrowed-skill');
+
+    await mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'discovery-tools', version: '1.0.0' }), 'utf8');
+    await writeSkillFile(path.join(outsideSkill, 'SKILL.md'), '# Outside skill must remain undiscovered\n');
+    await mkdir(pluginSkillsRoot, { recursive: true });
+    await symlink(path.relative(pluginSkillsRoot, outsideSkill), linkedSkill);
+
+    const snapshot = await scanInventory({
+      paths,
+      homeDir,
+      includeSandboxSources: false,
+      includeLiveSources: true,
+      writeCache: false,
+    });
+
+    expect(snapshot.skills.some((skill) => skill.name === 'discovery-tools:borrowed-skill')).toBe(false);
+    expect(await readlink(linkedSkill)).toBe(path.relative(pluginSkillsRoot, outsideSkill));
+    expect(await readFile(path.join(outsideSkill, 'SKILL.md'), 'utf8')).toContain('must remain undiscovered');
   });
 
   it('requires an exact current managed-source path for plugin-only promotion', async () => {

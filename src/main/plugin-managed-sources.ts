@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -151,6 +151,65 @@ export async function assertSkillSourceAndDestinationDoNotOverlap(
   const destinationResolved = await resolvePathThroughNearestExistingParent(destinationPath);
   if (isPathContainedBy(sourceResolved, destinationResolved) || isPathContainedBy(destinationResolved, sourceResolved)) {
     throw new Error('Selected skill source must not overlap the Universal destination.');
+  }
+}
+
+/**
+ * Verifies that a plugin-managed package can be exported without dereferencing
+ * nested links outside that package. Relative links whose resolved targets stay
+ * inside the package are portable and may be preserved by the staged copy.
+ */
+export async function assertPluginManagedSkillPackageSymlinksContained(packageRoot: string): Promise<void> {
+  const rootStats = await lstat(packageRoot);
+  if (rootStats.isSymbolicLink()) {
+    throw new Error('Plugin skill package roots must not be symlinks when exported to Universal.');
+  }
+
+  const resolvedRoot = await realpath(packageRoot);
+  await assertContainedPackageDirectory(packageRoot, resolvedRoot, packageRoot, new Set());
+}
+
+async function assertContainedPackageDirectory(
+  lexicalRoot: string,
+  resolvedRoot: string,
+  currentPath: string,
+  activeDirectories: Set<string>,
+): Promise<void> {
+  const resolvedCurrent = await realpath(currentPath);
+  if (activeDirectories.has(resolvedCurrent)) return;
+  activeDirectories.add(resolvedCurrent);
+
+  try {
+    const entries = await readdir(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(currentPath, entry.name);
+      if (entry.isSymbolicLink()) {
+        const linkTarget = await readlink(entryPath);
+        if (path.isAbsolute(linkTarget)) {
+          throw new Error(`Plugin skill package symlink cannot be exported portably: ${entryPath}.`);
+        }
+        const lexicalTarget = path.resolve(path.dirname(entryPath), linkTarget);
+        let resolvedTarget: string;
+        try {
+          resolvedTarget = await realpath(entryPath);
+        } catch {
+          throw new Error(`Plugin skill package contains an unreadable symlink and cannot be exported safely: ${entryPath}.`);
+        }
+        if (!isPathContainedBy(lexicalRoot, lexicalTarget) || !isPathContainedBy(resolvedRoot, resolvedTarget)) {
+          throw new Error(`Plugin skill package symlink escapes its managed source: ${entryPath}.`);
+        }
+        if ((await stat(entryPath)).isDirectory()) {
+          await assertContainedPackageDirectory(lexicalRoot, resolvedRoot, entryPath, activeDirectories);
+        }
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        await assertContainedPackageDirectory(lexicalRoot, resolvedRoot, entryPath, activeDirectories);
+      }
+    }
+  } finally {
+    activeDirectories.delete(resolvedCurrent);
   }
 }
 

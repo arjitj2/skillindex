@@ -377,7 +377,8 @@ function normalizeSelfQualifiedSkillName(skillName: string): string {
 }
 
 async function collectSkillEntryFiles(source: SkillScanSource): Promise<SkillPackageEntry[]> {
-  return collectNestedSkillEntryFiles(source, source.skillsDir, source.skillsDir, new Set());
+  const resolvedManagedRoot = source.kind === 'plugin' ? await safeRealpath(source.skillsDir) : undefined;
+  return collectNestedSkillEntryFiles(source, source.skillsDir, source.skillsDir, new Set(), resolvedManagedRoot);
 }
 
 async function collectNestedSkillEntryFiles(
@@ -385,6 +386,7 @@ async function collectNestedSkillEntryFiles(
   rootDir: string,
   currentDir: string,
   activeDirectories: Set<string>,
+  resolvedManagedRoot: string | undefined,
 ): Promise<SkillPackageEntry[]> {
   const visitKey = await getDirectoryVisitKey(currentDir);
   if (visitKey && activeDirectories.has(visitKey)) {
@@ -411,6 +413,12 @@ async function collectNestedSkillEntryFiles(
       ) {
         continue;
       }
+      if (entry.isSymbolicLink()
+        && source.kind === 'plugin'
+        && (!resolvedManagedRoot
+          || !await isContainedRelativePackageSymlink(rootDir, resolvedManagedRoot, entryPath))) {
+        continue;
+      }
 
       const skillPackage = await describeExistingSkillPackage(rootDir, entryPath);
       if (skillPackage) {
@@ -419,7 +427,7 @@ async function collectNestedSkillEntryFiles(
       }
 
       if (await isDirectoryLikePath(entryPath)) {
-        files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, activeDirectories)));
+        files.push(...(await collectNestedSkillEntryFiles(source, rootDir, entryPath, activeDirectories, resolvedManagedRoot)));
       }
     }
 
@@ -448,7 +456,7 @@ async function readSkillLocation(
   const modifiedAt = await getLocationModifiedAt(rootPath, packageEntry.entrypointPath, fileType, resolvedPath);
   const packageFiles = fileType === 'symlink' && resolvedPath === undefined
     ? []
-    : await readPackageFiles(rootPath);
+    : await readPackageFiles(rootPath, source.kind === 'plugin');
   const entrypointText = packageFiles.find((file) => file.relativePath === 'SKILL.md')?.text;
   const contentHash = createPackageContentHash(packageFiles);
 
@@ -2494,8 +2502,9 @@ async function isBrokenTopLevelSkillSymlink(rootDir: string, rootPath: string): 
   }
 }
 
-async function readPackageFiles(rootPath: string): Promise<SkillPackageFileRecord[]> {
-  const files = await walkPackageFiles(rootPath, rootPath, new Set());
+async function readPackageFiles(rootPath: string, constrainSymlinksToPackage = false): Promise<SkillPackageFileRecord[]> {
+  const resolvedManagedRoot = constrainSymlinksToPackage ? await safeRealpath(rootPath) : undefined;
+  const files = await walkPackageFiles(rootPath, rootPath, new Set(), constrainSymlinksToPackage, resolvedManagedRoot);
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
@@ -2503,6 +2512,8 @@ async function walkPackageFiles(
   rootDir: string,
   currentDir: string,
   activeDirectories: Set<string>,
+  constrainSymlinksToPackage: boolean,
+  resolvedManagedRoot: string | undefined,
 ): Promise<SkillPackageFileRecord[]> {
   const visitKey = await getDirectoryVisitKey(currentDir);
   if (visitKey && activeDirectories.has(visitKey)) {
@@ -2528,14 +2539,31 @@ async function walkPackageFiles(
 
       const entryPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+        files.push(...(await walkPackageFiles(
+          rootDir,
+          entryPath,
+          activeDirectories,
+          constrainSymlinksToPackage,
+          resolvedManagedRoot,
+        )));
         continue;
       }
 
       if (entry.isSymbolicLink()) {
+        if (constrainSymlinksToPackage
+          && (!resolvedManagedRoot
+            || !await isContainedRelativePackageSymlink(rootDir, resolvedManagedRoot, entryPath))) {
+          continue;
+        }
         const stats = await safeStat(entryPath);
         if (stats?.isDirectory()) {
-          files.push(...(await walkPackageFiles(rootDir, entryPath, activeDirectories)));
+          files.push(...(await walkPackageFiles(
+            rootDir,
+            entryPath,
+            activeDirectories,
+            constrainSymlinksToPackage,
+            resolvedManagedRoot,
+          )));
           continue;
         }
       }
@@ -2552,6 +2580,25 @@ async function walkPackageFiles(
       activeDirectories.delete(visitKey);
     }
   }
+}
+
+async function isContainedRelativePackageSymlink(
+  lexicalRoot: string,
+  resolvedRoot: string,
+  symlinkPath: string,
+): Promise<boolean> {
+  const target = await safeReadlink(symlinkPath);
+  if (!target || path.isAbsolute(target)) return false;
+  const lexicalTarget = path.resolve(path.dirname(symlinkPath), target);
+  const resolvedTarget = await safeRealpath(symlinkPath);
+  return isPathContainedBy(lexicalRoot, lexicalTarget)
+    && Boolean(resolvedTarget && isPathContainedBy(resolvedRoot, resolvedTarget));
+}
+
+function isPathContainedBy(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === ''
+    || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function shouldIgnorePackageEntry(name: string, isDirectoryEntry: boolean): boolean {

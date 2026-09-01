@@ -12,6 +12,7 @@ import {
 import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-inventory';
 import {
   assertSafeSkillPackageName,
+  assertPluginManagedSkillPackageSymlinksContained,
   assertSkillSourceAndDestinationDoNotOverlap,
   assertSafeUniversalSkillMutation,
   assertSafeWritableSkillLinkMutation,
@@ -272,9 +273,21 @@ async function materializeCanonicalFile({
   const parentPath = path.dirname(canonicalPath);
   const stagePath = path.join(parentPath, `.${path.basename(canonicalPath)}.stage-${randomUUID()}`);
   const backupPath = path.join(parentPath, `.${path.basename(canonicalPath)}.backup-${randomUUID()}`);
+  const selectedSourceIsPluginManaged = selectedSource.provenance?.kind === 'plugin';
+  if (selectedSourceIsPluginManaged) {
+    await assertPluginManagedSkillPackageSymlinksContained(selectedSource.path);
+  }
   await mkdir(parentPath, { recursive: true });
   try {
-    await cp(selectedSource.path, stagePath, { recursive: true, dereference: true, force: true });
+    await cp(selectedSource.path, stagePath, {
+      recursive: true,
+      dereference: !selectedSourceIsPluginManaged,
+      force: true,
+      verbatimSymlinks: selectedSourceIsPluginManaged,
+    });
+    if (selectedSourceIsPluginManaged) {
+      await assertPluginManagedSkillPackageSymlinksContained(stagePath);
+    }
     await readFile(path.join(stagePath, 'SKILL.md'), 'utf8');
     await rename(canonicalPath, backupPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;
