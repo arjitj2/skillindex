@@ -77,6 +77,23 @@ describe('removeInventoryItem', () => {
     expect(claudeConfig.mcpServers).not.toHaveProperty('removeMe');
   });
 
+  it('never removes a managed plugin MCP definition from its cache config', async () => {
+    const paths = await createPaths('skillindex-remove-plugin-mcp-');
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'protected-mcp', '1.0.0');
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const pluginConfig = JSON.stringify({
+      mcpServers: { protected: { command: 'node', args: ['server.js'] } },
+    }, null, 2);
+    await writeJsonFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), { name: 'protected-mcp', version: '1.0.0' });
+    await writeFile(pluginConfigPath, pluginConfig, 'utf8');
+
+    await expect(removeInventoryItem(
+      { entity: 'mcp', mcpName: 'protected-mcp:protected' },
+      { paths, includeSandboxSources: true, includeLiveSources: false },
+    )).rejects.toThrow('no removable config locations');
+    expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+  });
+
   it('moves a subagent definition from every scanned location to Trash', async () => {
     const paths = await createPaths('skillindex-remove-subagent-');
     const canonicalSubagentPath = path.join(paths.sandboxRoot, '.agents', 'agents', 'remove-me.md');

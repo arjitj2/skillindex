@@ -216,19 +216,11 @@ export function reconcileCachedMcps(
   return cachedMcps
     .map((mcp) => {
       const locations = mcp.locations.filter((location) => activeOwnerIds.has(location.agentId));
-      const expectedLocations = (mcp.expectedLocations ?? []).filter((location) => activeOwnerIds.has(location.agentId));
-      const missingLocations = (mcp.missingLocations ?? []).filter((location) => activeOwnerIds.has(location.agentId));
-      if (locations.length === 0 && expectedLocations.length === 0 && missingLocations.length === 0) {
-        return null;
-      }
-
+      // Expected owners are derived metadata, never evidence that an MCP still
+      // exists. In particular a plugin-only entry must disappear as soon as its
+      // current managed source is removed.
       if (locations.length === 0) {
-        return {
-          ...mcp,
-          expectedLocations,
-          missingLocations,
-          signature: mcp.status === 'needs-attention' ? createMcpSignature(mcp.name, locations, expectedLocations, missingLocations) : undefined,
-        };
+        return null;
       }
 
       return classifyMcpLocations(mcp.name, locations, parseableOwners, pluginSourcesByLocation);

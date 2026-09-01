@@ -1,13 +1,13 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { applyCapabilityAction } from '@main/capability-actions';
-import { addMcpServer, resolveInventoryIssue } from '@main/issue-resolution';
+import { addMcpServer, resolveInventoryIssue, writeMcpDefinitions } from '@main/issue-resolution';
 import { verifyMcpConnection } from '@main/mcp-connectivity';
 import type { McpConnectivityProbeTarget } from '@main/mcp-inventory';
 import { seedRepresentativeFixtures } from '@main/sandbox-fixtures';
@@ -91,6 +91,42 @@ describe('resolveInventoryIssue', () => {
       status: 'healthy',
       issueReasons: [],
     });
+  });
+
+  it('writes through an MCP config symlink without changing its topology or mode', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-symlink-write-'));
+    const referentPath = path.join(root, 'real', 'mcp.json');
+    const configPath = path.join(root, 'config', 'mcp.json');
+    await mkdir(path.dirname(referentPath), { recursive: true });
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(referentPath, `${JSON.stringify({ servers: { keep: { command: 'node', args: ['keep.js'] } } })}\n`, 'utf8');
+    await chmod(referentPath, 0o600);
+    await symlink(referentPath, configPath);
+
+    await writeMcpDefinitions(configPath, 'json-servers', {
+      keep: { command: 'node', args: ['keep.js'] },
+      added: { command: 'node', args: ['added.js'] },
+    }, 'json-type-url');
+
+    expect((await lstat(configPath)).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(await readFile(referentPath, 'utf8'))).toMatchObject({
+      servers: { keep: { command: 'node' }, added: { command: 'node' } },
+    });
+    expect((await stat(referentPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it('rejects direct writes into conventional plugin cache roots, including aliases', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-mcp-plugin-write-'));
+    const pluginConfigPath = path.join(root, '.codex', 'plugins', 'cache', 'unindexed', 'server', '.mcp.json');
+    const aliasPath = path.join(root, 'alias.json');
+    await mkdir(path.dirname(pluginConfigPath), { recursive: true });
+    await writeFile(pluginConfigPath, JSON.stringify({ mcpServers: {} }), 'utf8');
+    await symlink(pluginConfigPath, aliasPath);
+
+    await expect(writeMcpDefinitions(pluginConfigPath, 'jsonc-mcpServers', {}, 'json-type-url'))
+      .rejects.toThrow('plugin-managed cache path');
+    await expect(writeMcpDefinitions(aliasPath, 'json-servers', {}, 'json-type-url'))
+      .rejects.toThrow('plugin-managed cache path');
   });
 
   it('adds a new MCP Server definition to selected writable configs', async () => {

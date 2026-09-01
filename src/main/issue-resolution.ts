@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -188,7 +188,7 @@ export async function addMcpServer(
     paths,
   });
   const definition = buildMcpServerDefinition(request);
-  const mutationTargets = getAddMcpServerTargets(snapshot, request.transport);
+  const mutationTargets = await coalesceMcpMutationTargets(getAddMcpServerTargets(snapshot, request.transport));
 
   if (mutationTargets.length === 0) {
     throw new Error('No writable MCP config targets are available for adding a server.');
@@ -570,7 +570,9 @@ async function resolveMcpIssueIfCurrent(
   });
   const selectedDefinition = parseSelectedMcpDefinition(selectedVariant);
   const agentLocalDefinitions = collectAgentLocalDefinitionsForMcp(mcp, selectedDefinition);
-  const mutationTargets = collectMcpResolutionTargets(snapshot, request.issue, mcp, selectedVariant, options);
+  const mutationTargets = await coalesceMcpMutationTargets(
+    collectMcpResolutionTargets(snapshot, request.issue, mcp, selectedVariant, options),
+  );
 
   if (mutationTargets.length === 0) {
     throw new Error(`MCP "${request.mcpName}" has no writable supported targets for ${request.issue}.`);
@@ -679,6 +681,22 @@ function dedupeMcpMutationTargets(targets: McpMutationTarget[]): McpMutationTarg
     seen.add(key);
     return true;
   });
+}
+
+async function coalesceMcpMutationTargets(targets: McpMutationTarget[]): Promise<McpMutationTarget[]> {
+  const byPhysicalPath = new Map<string, McpMutationTarget>();
+  for (const target of targets) {
+    const physicalPath = await resolveSafeMcpConfigWritePath(target.configPath);
+    const existing = byPhysicalPath.get(physicalPath);
+    if (existing) {
+      if (existing.parserKind !== target.parserKind || existing.writeDialect !== target.writeDialect) {
+        throw new Error('MCP resolution cannot combine aliases with incompatible config dialects.');
+      }
+      continue;
+    }
+    byPhysicalPath.set(physicalPath, { ...target, configPath: physicalPath });
+  }
+  return [...byPhysicalPath.values()];
 }
 
 async function assertSafeMcpMutationTargets(
@@ -2095,6 +2113,7 @@ export async function writeMcpDefinitions(
   definitions: McpServerDefinitions,
   writeDialect: AgentMcpWriteDialect,
 ): Promise<void> {
+  configPath = await resolveSafeMcpConfigWritePath(configPath);
   if (parserKind === 'toml') {
     let raw = '';
     try {
@@ -2252,14 +2271,44 @@ async function writeJsonMcpDefinitions(
 }
 
 async function writeMcpConfigAtomically(configPath: string, contents: string): Promise<void> {
+  configPath = await resolveSafeMcpConfigWritePath(configPath);
   await mkdir(path.dirname(configPath), { recursive: true });
   const stagedPath = `${configPath}.skillindex-${randomUUID()}.tmp`;
   try {
     await writeFile(stagedPath, contents, 'utf8');
+    try {
+      const existing = await stat(configPath);
+      await chmodMcpConfig(stagedPath, existing.mode & 0o777);
+    } catch (error) {
+      if (!isFileNotFoundError(error)) throw error;
+    }
     await rename(stagedPath, configPath);
   } finally {
     await rm(stagedPath, { force: true });
   }
+}
+
+async function chmodMcpConfig(configPath: string, mode: number): Promise<void> {
+  const { chmod } = await import('node:fs/promises');
+  await chmod(configPath, mode);
+}
+
+async function resolveSafeMcpConfigWritePath(configPath: string): Promise<string> {
+  const lexicalPath = path.normalize(configPath);
+  if (isConventionalPluginCachePath(lexicalPath)) {
+    throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+  }
+  const physicalPath = await resolvePathThroughNearestExistingParent(lexicalPath);
+  if (isConventionalPluginCachePath(physicalPath)) {
+    throw new Error('MCP mutations cannot write into a plugin-managed cache path.');
+  }
+  return physicalPath;
+}
+
+function isConventionalPluginCachePath(targetPath: string): boolean {
+  const segments = path.normalize(targetPath).split(path.sep).map((segment) => segment.toLowerCase());
+  return segments.some((segment, index) =>
+    (segment === '.codex' || segment === '.claude') && segments[index + 1] === 'plugins');
 }
 
 function isPathWithin(rootPath: string, targetPath: string): boolean {

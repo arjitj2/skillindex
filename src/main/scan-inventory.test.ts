@@ -3758,6 +3758,40 @@ describe('representative-agent scan foundation', () => {
     });
   });
 
+  it('rebuilds cached plugin MCP candidates when enablement, entries, or bundles change', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-mcp-cache-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+    const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', '1.0.0');
+    const pluginConfigPath = path.join(pluginRoot, '.mcp.json');
+    const codexConfigPath = path.join(homeDir, '.codex', 'config.toml');
+    const scanOptions = { paths, homeDir, includeLiveSources: true, includeSandboxSources: false } as const;
+
+    await mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await writeFile(codexConfigPath, 'model = "gpt-5"\n', 'utf8');
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version: '1.0.0' }), 'utf8');
+    await writeFile(pluginConfigPath, JSON.stringify({ mcpServers: { pluginCache: { command: 'node', args: ['server.js'] } } }), 'utf8');
+
+    const freshInitial = await scanInventory(scanOptions);
+    expect(freshInitial.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.managedSourceCandidates?.[0]?.evidence)
+      .toBe('cached-unknown');
+
+    await writeFile(codexConfigPath, '[plugins."tools@official"]\nenabled = true\n', 'utf8');
+    const cachedEnabled = await readCachedInventory(scanOptions);
+    const freshEnabled = await scanInventory({ ...scanOptions, writeCache: false });
+    expect(cachedEnabled?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.issueReasons)
+      .toEqual(freshEnabled.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.issueReasons);
+    expect(cachedEnabled?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')?.managedSourceCandidates?.[0]?.evidence)
+      .toBe('enabled-installation');
+
+    await writeFile(pluginConfigPath, JSON.stringify({ mcpServers: {} }), 'utf8');
+    expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
+
+    await rm(pluginRoot, { recursive: true, force: true });
+    expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
+  });
+
   it('annotates comparable plugin versions within each host and marketplace group', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-evidence-groups-'));
     const homeDir = path.join(root, 'home');

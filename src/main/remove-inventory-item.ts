@@ -173,13 +173,10 @@ function buildMcpRemovalTarget(
   snapshot: SkillInventorySnapshot,
   location: McpLocationRecord,
 ): Omit<McpRemovalTarget, 'definitionNames'> | null {
-  if (location.agentId.startsWith('plugin:') || location.provenance?.kind === 'plugin') {
-    return {
-      agentId: location.agentId,
-      configPath: location.configPath,
-      parserKind: 'jsonc-mcpServers',
-      writeDialect: 'json-type-url',
-    };
+  if (location.canonicalRole === 'managed-source'
+    || location.agentId.startsWith('plugin:')
+    || location.provenance?.kind === 'plugin') {
+    return null;
   }
 
   const agent = (snapshot.agents ?? []).find((entry) => entry.id === location.agentId);
