@@ -73,8 +73,9 @@ satisfied by an enabled native Claude plugin.
 
 Adding a new skill does not proactively write to every compatibility directory.
 New skills are written to Universal first, then linked into installed agents'
-primary skill locations. Compatibility directories primarily make existing
-agent-readable skills visible to inventory and repair.
+primary skill locations, except the exact agent family already satisfied by an
+enabled native plugin for that skill. Compatibility directories primarily make
+existing agent-readable skills visible to inventory and repair.
 
 `compatibleProjectSkillsDirs` documents project-level compatibility paths, but
 the current skill inventory scan creates sources from global compatibility
