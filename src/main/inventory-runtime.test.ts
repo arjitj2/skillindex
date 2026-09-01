@@ -1091,6 +1091,72 @@ describe('inventory runtime', () => {
     expect(operation.actions.map((action) => action.path)).toEqual([universalPath]);
   });
 
+  it.each([
+    { entity: 'skill' as const, capabilityName: 'remove-links:shared-skill' },
+    { entity: 'subagent' as const, capabilityName: 'remove-links:shared-agent' },
+  ])('removes and restores a live plugin-targeted $entity agent symlink without touching its referent', async ({
+    entity,
+    capabilityName,
+  }) => {
+    const root = await mkdtemp(path.join(tmpdir(), `skillindex-runtime-remove-live-plugin-link-${entity}-`));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'remove-links', '1.0.0');
+    const pluginTarget = entity === 'skill'
+      ? path.join(pluginRoot, 'skills', 'shared-skill')
+      : path.join(pluginRoot, 'agents', 'shared-agent.md');
+    const universalPath = entity === 'skill'
+      ? path.join(paths.sandboxAgentsSkillsDir, capabilityName)
+      : path.join(paths.sandboxRoot, '.agents', 'agents', 'remove-links-shared-agent.md');
+    const agentLink = entity === 'skill'
+      ? path.join(paths.sandboxRoot, '.claude', 'skills', capabilityName)
+      : path.join(paths.sandboxRoot, '.claude', 'agents', 'remove-links-shared-agent.md');
+    const pluginText = entity === 'skill'
+      ? '---\nname: shared-skill\ndescription: Plugin skill\n---\nPlugin skill body.\n'
+      : '---\nname: shared-agent\ndescription: Plugin agent\n---\nPlugin agent body.\n';
+    const universalText = entity === 'skill'
+      ? '---\nname: remove-links:shared-skill\ndescription: Universal skill\n---\nUniversal skill body.\n'
+      : '---\nname: shared-agent\ndescription: Universal agent\n---\nUniversal agent body.\n';
+
+    await Promise.all([
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'remove-links', version: '1.0.0' })),
+      writeRuntimeFile(entity === 'skill' ? path.join(pluginTarget, 'SKILL.md') : pluginTarget, pluginText),
+      writeRuntimeFile(entity === 'skill' ? path.join(universalPath, 'SKILL.md') : universalPath, universalText),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.claude', 'settings.json'), '{}\n'),
+      mkdir(path.dirname(agentLink), { recursive: true }),
+    ]);
+    await symlink(pluginTarget, agentLink);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'claude' },
+    } as const;
+    await runtime.scanInventory(scanOptions);
+    const pluginBytesBefore = await readFile(entity === 'skill' ? path.join(pluginTarget, 'SKILL.md') : pluginTarget);
+
+    await runtime.removeInventoryItem(entity === 'skill'
+      ? { entity, skillName: capabilityName }
+      : { entity, subagentName: capabilityName }, {
+      ...scanOptions,
+      trashItem: async (targetPath) => rm(targetPath, { recursive: true, force: true }),
+    });
+
+    await expect(pathExists(universalPath)).resolves.toBe(false);
+    await expect(pathExists(agentLink)).resolves.toBe(false);
+    expect(await readFile(entity === 'skill' ? path.join(pluginTarget, 'SKILL.md') : pluginTarget)).toEqual(pluginBytesBefore);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([universalPath, agentLink]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+
+    await runtime.undoAuditOperation(operation.id);
+    expect((await lstat(agentLink)).isSymbolicLink()).toBe(true);
+    expect(await readlink(agentLink)).toBe(pluginTarget);
+    await expect(pathExists(universalPath)).resolves.toBe(true);
+    expect(await readFile(entity === 'skill' ? path.join(pluginTarget, 'SKILL.md') : pluginTarget)).toEqual(pluginBytesBefore);
+  });
+
   it('uses sandbox state and preserves root state while removing and undoing without explicit paths', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-remove-sandbox-state-'));
     const env = { SKILL_INDEX_DATA_DIR: root };

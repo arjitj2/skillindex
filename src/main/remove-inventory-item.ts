@@ -145,8 +145,28 @@ async function isSafeRemovalTarget(
     return false;
   }
 
-  const resolvedPath = await resolvePathThroughNearestExistingParent(lexicalPath);
   const resolvedPluginRoots = await Promise.all(pluginRoots.map(resolvePathThroughNearestExistingParent));
+  const resolvedParent = await resolvePathThroughNearestExistingParent(path.dirname(lexicalPath));
+  const physicalEntryPath = path.join(resolvedParent, path.basename(lexicalPath));
+  if (isConventionalPluginCachePath(physicalEntryPath)
+    || pluginRoots.concat(resolvedPluginRoots).some((root) => isPathWithin(root, physicalEntryPath))) {
+    return false;
+  }
+
+  try {
+    if ((await lstat(lexicalPath)).isSymbolicLink()) {
+      // Trash removes the agent-owned directory entry, not its referent. A
+      // legacy link may still point into a live managed cache and is safe to
+      // unlink as long as the link itself is outside every plugin root.
+      return true;
+    }
+  } catch (error) {
+    if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const resolvedPath = await resolvePathThroughNearestExistingParent(lexicalPath);
   return !isConventionalPluginCachePath(resolvedPath)
     && !pluginRoots.concat(resolvedPluginRoots).some((root) => isPathWithin(root, resolvedPath));
 }
