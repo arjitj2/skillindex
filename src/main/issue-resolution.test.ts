@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -140,6 +140,71 @@ describe('resolveInventoryIssue', () => {
       server: { command: 'node', args: ['server.js'] },
     }, 'json-type-url')).rejects.toThrow('hard-linked config file');
     expect((await stat(configPath)).ino).toBe((await stat(aliasPath)).ino);
+  });
+
+  it('rolls back public addMcpServer after the second atomic config commit is induced to fail', async () => {
+    const paths = await createPaths('skillindex-add-mcp-transaction-');
+    const universalPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const universalReferent = path.join(paths.sandboxRoot, 'real', 'universal-mcp.json');
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const universalOriginal = `${JSON.stringify({ servers: { keepUniversal: { command: 'node', args: ['keep.js'] } } })}\n`;
+    const factoryOriginal = `${JSON.stringify({ mcpServers: { keepFactory: { command: 'node', args: ['keep.js'] } }, telemetry: { enabled: false } })}\n`;
+    await mkdir(path.join(paths.sandboxRoot, '.agents', 'skills'), { recursive: true });
+    await mkdir(path.dirname(universalReferent), { recursive: true });
+    await mkdir(path.dirname(factoryPath), { recursive: true });
+    await writeFile(universalReferent, universalOriginal, 'utf8');
+    await chmod(universalReferent, 0o600);
+    await symlink(universalReferent, universalPath);
+    await writeFile(factoryPath, factoryOriginal, 'utf8');
+    await chmod(factoryPath, 0o600);
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+
+    await expect(addMcpServer(
+      { name: 'transactional', transport: 'stdio', command: 'node', args: ['new.js'] },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+        testFailMcpCommitAt: 1,
+      },
+    )).rejects.toThrow('MCP config commit failed before atomic rename.');
+
+    expect((await lstat(universalPath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(universalReferent, 'utf8')).toBe(universalOriginal);
+    expect(await readFile(factoryPath, 'utf8')).toBe(factoryOriginal);
+    expect((await stat(universalReferent)).mode & 0o777).toBe(0o600);
+    expect((await stat(factoryPath)).mode & 0o777).toBe(0o600);
+    expect((await readdir(path.dirname(universalReferent))).every((name) => !name.includes('.skillindex-'))).toBe(true);
+    expect((await readdir(path.dirname(factoryPath))).every((name) => !name.includes('.skillindex-'))).toBe(true);
+  });
+
+  it('rejects incompatible symlinked MCP config dialects through public addMcpServer before mutation', async () => {
+    const paths = await createPaths('skillindex-add-mcp-alias-dialect-');
+    const referentPath = path.join(paths.sandboxRoot, 'real', 'shared.json');
+    const universalPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const original = `${JSON.stringify({ servers: { keep: { command: 'node', args: ['keep.js'] } } })}\n`;
+    await mkdir(path.join(paths.sandboxRoot, '.agents', 'skills'), { recursive: true });
+    await mkdir(path.dirname(referentPath), { recursive: true });
+    await mkdir(path.dirname(factoryPath), { recursive: true });
+    await writeFile(referentPath, original, 'utf8');
+    await symlink(referentPath, universalPath);
+    await symlink(referentPath, factoryPath);
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+
+    await expect(addMcpServer(
+      { name: 'cannot-alias', transport: 'stdio', command: 'node', args: ['server.js'] },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+      },
+    )).rejects.toThrow('incompatible config dialects');
+    expect(await readFile(referentPath, 'utf8')).toBe(original);
+    expect((await lstat(universalPath)).isSymbolicLink()).toBe(true);
+    expect((await lstat(factoryPath)).isSymbolicLink()).toBe(true);
   });
 
   it('adds a new MCP Server definition to selected writable configs', async () => {
@@ -3380,6 +3445,66 @@ describe('resolveInventoryIssue', () => {
       status: 'healthy',
       issueReasons: [],
     });
+  });
+
+  it('classifies and resolves native plugin MCP delivery only for the matching enabled plugin host', async () => {
+    const paths = await createPaths('skillindex-native-plugin-mcp-matrix-');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const factoryConfigPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const originRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-bundled', 'native-matrix', '1.0.0');
+    const unrelatedRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-bundled', 'unrelated-matrix', '1.0.0');
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+    } as const;
+
+    await writeSkillFile(universalConfigPath, `${JSON.stringify({
+      servers: { shared: { command: 'node', args: ['shared.js'] } },
+    })}\n`);
+    await writeSkillFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+    await writeSkillFile(path.join(originRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'native-matrix', version: '1.0.0' }));
+    await writeSkillFile(path.join(originRoot, '.mcp.json'), JSON.stringify({
+      mcpServers: { shared: { command: 'node', args: ['shared.js'] } },
+    }));
+    await writeSkillFile(codexConfigPath, '[plugins."native-matrix@openai-bundled"]\nenabled = true\n');
+
+    const enabled = await scanInventory(scanOptions);
+    const enabledRecord = enabled.mcps?.find((mcp) => mcp.name === 'native-matrix:shared');
+    expect(enabledRecord?.missingLocations).toEqual([
+      expect.objectContaining({ agentId: 'sandbox-factory' }),
+    ]);
+
+    await resolveInventoryIssue(
+      {
+        entity: 'mcp',
+        issue: 'missing-from-agents',
+        mcpName: 'native-matrix:shared',
+        selectedVariantPath: universalConfigPath,
+      },
+      scanOptions,
+    );
+    expect(await readFile(codexConfigPath, 'utf8')).not.toContain('[mcp_servers.shared]');
+    expect(await readFile(factoryConfigPath, 'utf8')).toContain('"shared"');
+
+    await writeSkillFile(codexConfigPath, 'model = "gpt-5"\n');
+    const disabled = await scanInventory(scanOptions);
+    expect(disabled.mcps?.find((mcp) => mcp.name === 'native-matrix:shared')?.missingLocations).toEqual([
+      expect.objectContaining({ agentId: 'sandbox-codex' }),
+    ]);
+
+    await writeSkillFile(path.join(unrelatedRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'unrelated-matrix', version: '1.0.0' }));
+    await writeSkillFile(path.join(unrelatedRoot, '.mcp.json'), JSON.stringify({
+      mcpServers: { shared: { command: 'node', args: ['shared.js'] } },
+    }));
+    await writeSkillFile(codexConfigPath, '[plugins."unrelated-matrix@openai-bundled"]\nenabled = true\n');
+    const unrelated = await scanInventory(scanOptions);
+    const unrelatedRecord = unrelated.mcps?.find((mcp) => mcp.name === 'shared');
+    expect(unrelatedRecord?.missingLocations).toEqual([
+      expect.objectContaining({ agentId: 'sandbox-codex' }),
+    ]);
   });
 
   it('rolls back staged plugin MCP promotion writes when a later target fails', async () => {

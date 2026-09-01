@@ -188,6 +188,9 @@ export function readCachedInventorySync(
   // current native delivery; the async scan repopulates it immediately.
   const syncSafeSnapshot: SkillInventorySnapshot = {
     ...cachedSnapshot,
+    // Ensure reconciliation recomputes operational MCP expected/missing status
+    // rather than taking the cached-source fast path.
+    sourceIds: [],
     mcps: (cachedSnapshot.mcps ?? [])
       .map((mcp) => ({
         ...mcp,

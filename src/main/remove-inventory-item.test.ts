@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -92,6 +92,49 @@ describe('removeInventoryItem', () => {
       { paths, includeSandboxSources: true, includeLiveSources: false },
     )).rejects.toThrow('no removable config locations');
     expect(await readFile(pluginConfigPath, 'utf8')).toBe(pluginConfig);
+  });
+
+  it('rolls back public MCP removal when the later atomic config commit fails', async () => {
+    const paths = await createPaths('skillindex-remove-mcp-transaction-');
+    const universalPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const universalReferent = path.join(paths.sandboxRoot, 'real', 'universal-mcp.json');
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const universalOriginal = `${JSON.stringify({ servers: {
+      removeTransactional: { command: 'node', args: ['remove.js'] },
+      keepUniversal: { command: 'node', args: ['keep.js'] },
+    } })}\n`;
+    const factoryOriginal = `${JSON.stringify({ mcpServers: {
+      removeTransactional: { command: 'node', args: ['remove.js'] },
+      keepFactory: { command: 'node', args: ['keep.js'] },
+    }, telemetry: { enabled: false } })}\n`;
+    await mkdir(path.join(paths.sandboxRoot, '.agents', 'skills'), { recursive: true });
+    await mkdir(path.dirname(universalReferent), { recursive: true });
+    await mkdir(path.dirname(factoryPath), { recursive: true });
+    await writeFile(universalReferent, universalOriginal, 'utf8');
+    await chmod(universalReferent, 0o600);
+    await symlink(universalReferent, universalPath);
+    await writeFile(factoryPath, factoryOriginal, 'utf8');
+    await chmod(factoryPath, 0o600);
+    await writeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n', 'utf8');
+
+    await expect(removeInventoryItem(
+      { entity: 'mcp', mcpName: 'removeTransactional' },
+      {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: { SKILL_INDEX_AGENT_SUBSET: 'factory' },
+        testFailMcpCommitAt: 1,
+      },
+    )).rejects.toThrow('MCP config commit failed before atomic rename.');
+
+    expect((await lstat(universalPath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(universalReferent, 'utf8')).toBe(universalOriginal);
+    expect(await readFile(factoryPath, 'utf8')).toBe(factoryOriginal);
+    expect((await stat(universalReferent)).mode & 0o777).toBe(0o600);
+    expect((await stat(factoryPath)).mode & 0o777).toBe(0o600);
+    expect((await readdir(path.dirname(universalReferent))).every((name) => !name.includes('.skillindex-'))).toBe(true);
+    expect((await readdir(path.dirname(factoryPath))).every((name) => !name.includes('.skillindex-'))).toBe(true);
   });
 
   it('moves a subagent definition from every scanned location to Trash', async () => {

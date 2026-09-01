@@ -3793,6 +3793,53 @@ describe('representative-agent scan foundation', () => {
     expect((await readCachedInventory(scanOptions))?.mcps?.find((mcp) => mcp.name === 'tools:pluginCache')).toBeUndefined();
   });
 
+  it('recomputes synchronous cached MCP missing status after native plugin satisfaction disappears', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-sync-plugin-mcp-status-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') } });
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-bundled', 'sync-native', '1.0.0');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfigPath = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const options = {
+      paths,
+      includeLiveSources: false,
+      includeSandboxSources: true,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+    } as const;
+
+    await mkdir(path.dirname(universalConfigPath), { recursive: true });
+    await mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+    await writeFile(universalConfigPath, `${JSON.stringify({
+      servers: {
+        nativeServer: { command: 'node', args: ['native.js'] },
+        ordinaryServer: { command: 'node', args: ['ordinary.js'] },
+      },
+    })}\n`, 'utf8');
+    await writeFile(codexConfigPath, '[plugins."sync-native@openai-bundled"]\nenabled = true\n', 'utf8');
+    await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'sync-native', version: '1.0.0' }), 'utf8');
+    await writeFile(path.join(pluginRoot, '.mcp.json'), JSON.stringify({
+      mcpServers: { nativeServer: { command: 'node', args: ['native.js'] } },
+    }), 'utf8');
+
+    const initial = await scanInventory(options);
+    expect(initial.mcps?.find((mcp) => mcp.name === 'sync-native:nativeServer')).toMatchObject({
+      status: 'healthy',
+      missingLocations: [],
+    });
+
+    await writeFile(codexConfigPath, 'model = "gpt-5"\n', 'utf8');
+    const sync = readCachedInventorySync(options);
+    const native = sync?.mcps?.find((mcp) => mcp.name === 'sync-native:nativeServer');
+    expect(native?.managedSourceCandidates).toBeUndefined();
+    expect(native?.missingLocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentId: 'sandbox-codex' }),
+    ]));
+    expect(native?.issueReasons).toContain('missing-from-agents');
+    // Non-plugin records remain in the warm bootstrap even though their status is
+    // independently reconciled against the currently installed agents.
+    expect(sync?.mcps?.find((mcp) => mcp.name === 'ordinaryServer')).toBeDefined();
+  });
+
   it('annotates comparable plugin versions within each host and marketplace group', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-evidence-groups-'));
     const homeDir = path.join(root, 'home');

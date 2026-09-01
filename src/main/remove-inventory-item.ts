@@ -24,6 +24,10 @@ import { scanInventory, type ScanSkillInventoryOptions } from '@main/scan-invent
 export interface RemoveInventoryItemOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
   trashItem?: TrashItem;
+  /** Test-only deterministic failure point for staged MCP config mutations. */
+  testFailMcpMutationAt?: number;
+  /** Test-only failure immediately before an MCP config's atomic commit. */
+  testFailMcpCommitAt?: number;
 }
 
 interface McpRemovalTarget extends McpMutationTarget {
@@ -47,7 +51,7 @@ export async function removeInventoryItem(
   if (request.entity === 'skill') {
     await removeSkillFromAllLocations(snapshot, request.skillName, options.trashItem ?? trashPathWithElectron);
   } else if (request.entity === 'mcp') {
-    await removeMcpFromAllLocations(snapshot, request.mcpName);
+    await removeMcpFromAllLocations(snapshot, request.mcpName, options);
   } else {
     await removeSubagentFromAllLocations(snapshot, request.subagentName, options.trashItem ?? trashPathWithElectron);
   }
@@ -112,7 +116,11 @@ async function trashPathWithElectron(targetPath: string): Promise<void> {
   await shell.trashItem(targetPath);
 }
 
-async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpName: string): Promise<void> {
+async function removeMcpFromAllLocations(
+  snapshot: SkillInventorySnapshot,
+  mcpName: string,
+  options: Pick<RemoveInventoryItemOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'>,
+): Promise<void> {
   const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === mcpName);
   if (!mcp) {
     throw new Error(`MCP "${mcpName}" was not found in the current inventory.`);
@@ -137,7 +145,7 @@ async function removeMcpFromAllLocations(snapshot: SkillInventorySnapshot, mcpNa
     return changed ? { ...target, definitions } : null;
   }));
   const mutationUpdates = updates.filter((target) => target !== null);
-  await writeMcpDefinitionsTransaction(mutationUpdates);
+  await writeMcpDefinitionsTransaction(mutationUpdates, options);
 }
 
 function collectMcpRemovalTargets(

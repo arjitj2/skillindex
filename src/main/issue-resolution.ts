@@ -82,6 +82,8 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   testFailSubagentStageAfterCreateAt?: number;
   /** Test-only deterministic failure point for staged MCP config mutations. */
   testFailMcpMutationAt?: number;
+  /** Test-only failure immediately before an MCP config's atomic commit. */
+  testFailMcpCommitAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -728,7 +730,7 @@ async function readMcpConfigContents(configPath: string): Promise<string | undef
 
 export async function writeMcpDefinitionsTransaction(
   updates: Array<McpMutationTarget & { definitions: McpServerDefinitions }>,
-  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt'> = {},
+  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'> = {},
 ): Promise<void> {
   const targets = await coalesceMcpMutationTargets(updates);
   await writeMcpResolutionTransaction(
@@ -742,7 +744,7 @@ export async function writeMcpDefinitionsTransaction(
 
 async function writeMcpResolutionTransaction(
   updates: Array<McpMutationTarget & { definitions: McpServerDefinitions; originalContents: string | undefined }>,
-  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt'>,
+  options: Pick<ResolveIssueOptions, 'testFailMcpMutationAt' | 'testFailMcpCommitAt'>,
 ): Promise<void> {
   const written: Array<McpMutationTarget & { originalContents: string | undefined }> = [];
   try {
@@ -750,7 +752,9 @@ async function writeMcpResolutionTransaction(
       if (options.testFailMcpMutationAt === index) {
         throw new Error(`MCP mutation failed at staged target ${index}.`);
       }
-      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect);
+      await writeMcpDefinitions(target.configPath, target.parserKind, target.definitions, target.writeDialect, {
+        failBeforeCommit: options.testFailMcpCommitAt === index,
+      });
       written.push(target);
     }
   } catch (error) {
@@ -2124,6 +2128,7 @@ export async function writeMcpDefinitions(
   parserKind: McpMutationTarget['parserKind'],
   definitions: McpServerDefinitions,
   writeDialect: AgentMcpWriteDialect,
+  writeOptions: { failBeforeCommit?: boolean } = {},
 ): Promise<void> {
   configPath = await resolveSafeMcpConfigWritePath(configPath);
   if (parserKind === 'toml') {
@@ -2137,7 +2142,7 @@ export async function writeMcpDefinitions(
     }
 
     const tomlDefinitions = mapRecordValue(definitions, (definition) => toTomlMcpDefinition(definition, writeDialect === 'toml-transport-array' ? 'transport-array' : 'codex'));
-    await writeMcpConfigAtomically(configPath, updateTomlMcpServers(raw, tomlDefinitions));
+    await writeMcpConfigAtomically(configPath, updateTomlMcpServers(raw, tomlDefinitions), writeOptions);
     return;
   }
 
@@ -2156,6 +2161,7 @@ export async function writeMcpDefinitions(
     await writeMcpConfigAtomically(
       configPath,
       updateTomlMcpServerArray(raw, isMcpServerDefinitions(sortedDefinitions) ? sortedDefinitions : tomlDefinitions),
+      writeOptions,
     );
     return;
   }
@@ -2179,6 +2185,7 @@ export async function writeMcpDefinitions(
         ...preservedConfig,
         mcp: sortRecordValue(mapRecordValue(definitions, (definition) => mapMcpDefinitionForWriteDialect(definition, 'json-opencode'))),
       }, null, 2)}\n`,
+      writeOptions,
     );
     return;
   }
@@ -2186,14 +2193,14 @@ export async function writeMcpDefinitions(
   if (parserKind === 'jsonc-dotted-amp-mcpServers' || parserKind === 'jsonc-dotted-zencoder-mcpServers') {
     await writeJsoncMcpDefinitions(configPath, mapMcpDefinitionsForWriteDialect(definitions, writeDialect), {
       field: parserKind === 'jsonc-dotted-amp-mcpServers' ? 'amp.mcpServers' : 'zencoder.mcpServers',
-    });
+    }, writeOptions);
     return;
   }
 
   if (parserKind === 'jsonc-mcp-servers') {
     await writeJsoncMcpDefinitions(configPath, mapMcpDefinitionsForWriteDialect(definitions, writeDialect), {
       fieldPath: ['mcp', 'servers'],
-    });
+    }, writeOptions);
     return;
   }
 
@@ -2202,7 +2209,7 @@ export async function writeMcpDefinitions(
     field: jsonTarget.field,
     jsonc: isJsoncMcpParserKind(parserKind),
     removeFields: jsonTarget.removeFields,
-  });
+  }, writeOptions);
 }
 
 function parseMcpDefinitions(
@@ -2256,6 +2263,7 @@ async function writeJsoncMcpDefinitions(
   configPath: string,
   definitions: Record<string, unknown>,
   target: { field?: string; fieldPath?: string[] },
+  writeOptions: { failBeforeCommit?: boolean },
 ): Promise<void> {
   const parsedConfig = await readJsonConfigObject(configPath, { jsonc: true });
 
@@ -2265,13 +2273,14 @@ async function writeJsoncMcpDefinitions(
     setNestedRecordValue(parsedConfig, target.fieldPath, sortRecordValue(definitions));
   }
 
-  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`);
+  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, writeOptions);
 }
 
 async function writeJsonMcpDefinitions(
   configPath: string,
   definitions: McpServerDefinitions,
   target: { field: 'servers' | 'mcpServers' | 'mcp'; jsonc: boolean; removeFields: Array<'servers' | 'mcpServers' | 'mcp'> },
+  writeOptions: { failBeforeCommit?: boolean },
 ): Promise<void> {
   const parsedConfig = await readJsonConfigObject(configPath, { jsonc: target.jsonc });
   for (const field of target.removeFields) {
@@ -2279,10 +2288,14 @@ async function writeJsonMcpDefinitions(
   }
   parsedConfig[target.field] = sortRecordValue(definitions);
 
-  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`);
+  await writeMcpConfigAtomically(configPath, `${JSON.stringify(parsedConfig, null, 2)}\n`, writeOptions);
 }
 
-async function writeMcpConfigAtomically(configPath: string, contents: string): Promise<void> {
+async function writeMcpConfigAtomically(
+  configPath: string,
+  contents: string,
+  options: { failBeforeCommit?: boolean } = {},
+): Promise<void> {
   configPath = await resolveSafeMcpConfigWritePath(configPath);
   await mkdir(path.dirname(configPath), { recursive: true });
   const stagedPath = `${configPath}.skillindex-${randomUUID()}.tmp`;
@@ -2293,6 +2306,9 @@ async function writeMcpConfigAtomically(configPath: string, contents: string): P
       await chmodMcpConfig(stagedPath, existing.mode & 0o777);
     } catch (error) {
       if (!isFileNotFoundError(error)) throw error;
+    }
+    if (options.failBeforeCommit) {
+      throw new Error('MCP config commit failed before atomic rename.');
     }
     await rename(stagedPath, configPath);
   } finally {
