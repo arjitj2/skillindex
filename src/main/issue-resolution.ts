@@ -161,6 +161,7 @@ export async function resolveInventoryIssue(
   });
 
   assertResolutionIssueIsCurrent(snapshot, request);
+  assertExplicitPluginPromotionSelection(snapshot, request);
 
   if (request.entity === 'skill') {
     await resolveSkillIssueIfCurrent(snapshot, request, {
@@ -185,6 +186,56 @@ export async function resolveInventoryIssue(
   });
   assertResolutionIssueWasResolved(nextSnapshot, request);
   return nextSnapshot;
+}
+
+function assertExplicitPluginPromotionSelection(
+  snapshot: SkillInventorySnapshot,
+  request: ResolveIssueRequest,
+): void {
+  if (request.entity === 'skill') {
+    const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
+    if (!skill || !isPluginOnlySkillPromotion(skill)) return;
+    assertCurrentManagedSourcePath(skill.managedSourceCandidates, request.selectedVariantPath);
+    return;
+  }
+
+  if (request.entity === 'mcp') {
+    const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
+    if (!mcp || request.issue !== 'missing-universal' || !isPluginOnlyMcpPromotion(mcp)) return;
+    assertCurrentManagedSourcePath(mcp.managedSourceCandidates, request.selectedVariantPath);
+    return;
+  }
+
+  const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
+  if (!subagent || request.issue !== 'missing-universal' || !isPluginOnlySubagentPromotion(subagent)) return;
+  assertCurrentManagedSourcePath(subagent.managedSourceCandidates, request.selectedVariantPath);
+}
+
+function assertCurrentManagedSourcePath(
+  candidates: SkillRecord['managedSourceCandidates'],
+  selectedVariantPath: string | undefined,
+): void {
+  if (!selectedVariantPath || !(candidates ?? []).some((candidate) =>
+    candidate.relationship === 'universal-missing' && candidate.path === selectedVariantPath)) {
+    throw new Error('Select a current plugin candidate before promoting it to Universal.');
+  }
+}
+
+function isPluginOnlySkillPromotion(skill: SkillRecord): boolean {
+  return (skill.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !skill.locations.some((location) =>
+      location.fileType === 'real-file' && location.canonicalRole !== 'managed-source');
+}
+
+function isPluginOnlyMcpPromotion(mcp: NonNullable<SkillInventorySnapshot['mcps']>[number]): boolean {
+  return (mcp.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !mcp.locations.some((location) => location.canonicalRole !== 'managed-source');
+}
+
+function isPluginOnlySubagentPromotion(subagent: SubagentRecord): boolean {
+  return (subagent.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !subagent.locations.some((location) =>
+      location.fileType === 'real-file' && location.canonicalRole !== 'managed-source');
 }
 
 export async function addMcpServer(

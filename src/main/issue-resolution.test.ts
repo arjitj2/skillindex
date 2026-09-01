@@ -1436,6 +1436,7 @@ describe('resolveInventoryIssue', () => {
         entity: 'skill',
         issue: 'missing-canonical',
         skillName: 'tools:foo',
+        selectedVariantPath: pluginSkillPath,
       },
       {
         paths,
@@ -1583,6 +1584,7 @@ describe('resolveInventoryIssue', () => {
       entity: 'skill',
       issue: 'broken-symlink',
       skillName: 'tools:foo',
+      selectedVariantPath: pluginPath,
     }, {
       paths,
       homeDir,
@@ -1668,6 +1670,7 @@ describe('resolveInventoryIssue', () => {
         entity: 'skill',
         issue: 'broken-symlink',
         skillName: buildSkillName,
+        selectedVariantPath: buildSkillPath,
       },
       scanOptions,
     );
@@ -2290,6 +2293,41 @@ describe('resolveInventoryIssue', () => {
       includeSandboxSources: true,
       includeLiveSources: false,
     })).rejects.toThrow('Skill "missing-symlink-skill" no longer has Missing Symlinks.');
+  });
+
+  it('requires exact current managed-source paths for plugin-only MCP and subagent promotion', async () => {
+    const paths = await createPaths('skillindex-resolve-plugin-explicit-selection-');
+    await seedRepresentativeFixtures({ paths });
+    const snapshot = await scanInventory({
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    });
+    const mcp = snapshot.mcps?.find((entry) => entry.name === 'plugin-bound-mcp:plugin-bound-mcp');
+    const subagent = snapshot.subagents?.find((entry) => entry.name === 'plugin-version-choice-subagent:plugin-version-choice-subagent');
+    expect(mcp?.managedSourceCandidates).toHaveLength(1);
+    expect(subagent?.managedSourceCandidates).toHaveLength(2);
+
+    await expect(resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: mcp?.name ?? '',
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/select a current plugin candidate/i);
+
+    await expect(resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      subagentName: subagent?.name ?? '',
+      selectedVariantPath: path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'deleted', 'agents', 'plugin-version-choice-subagent.md'),
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/select a current plugin candidate/i);
   });
 
   it('uses plugin A as Universal while keeping plugin B as a healthy separate version', async () => {

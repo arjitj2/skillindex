@@ -535,6 +535,32 @@ describe('makeSkillCanonical', () => {
     expect(await readFile(path.join(nextPluginPath, 'assets', 'payload.bin'))).toEqual(beforeNextPluginAsset);
   });
 
+  it('requires an exact current managed-source path for plugin-only promotion', async () => {
+    const root = await createRoot('skillindex-canonicalize-plugin-choice-');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, 'plugin-version-choice-skill');
+    await seedRepresentativeFixtures({ paths });
+
+    await expect(makeSkillCanonical({
+      skillName: 'plugin-version-choice-skill',
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/select a current plugin candidate/i);
+
+    await expect(makeSkillCanonical({
+      skillName: 'plugin-version-choice-skill',
+      selectedVariantPath: path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'deleted', 'skills', 'plugin-version-choice-skill'),
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+    })).rejects.toThrow(/select a current plugin candidate/i);
+
+    await expect(lstat(universalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('rolls back the Universal package and every earlier link when a later link transaction fails', async () => {
     const root = await createRoot('skillindex-canonicalize-link-rollback-');
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });

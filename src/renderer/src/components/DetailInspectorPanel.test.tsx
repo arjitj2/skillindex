@@ -59,6 +59,53 @@ function createPluginBoundMcp(): McpRecord {
 }
 
 describe('DetailInspectorPanel', () => {
+  it('shows evidence hints on managed-source version choices', () => {
+    const model: InspectorModel = {
+      header: { title: 'plugin-choice', description: null, updatedLabel: 'Updated now', metadata: [] },
+      definition: { listTitle: 'Detected Versions', variants: [], selectedVariant: null, selectedVariantPath: null, files: [], emptySummary: '' },
+      locations: [],
+      problemCountLabel: '1 problem',
+      problems: [{
+        key: 'missing-canonical',
+        label: 'Missing Universal',
+        detail: 'Choose a plugin source',
+        summary: '2 versions',
+        isActive: true,
+      }],
+      problemSections: [{ title: 'Variant resolution', problemKeys: ['missing-canonical'] }],
+      activeProblem: {
+        kind: 'variant-resolution',
+        key: 'missing-canonical',
+        title: 'Missing Universal',
+        listTitle: 'Detected Versions',
+        variants: [{
+          id: 'one',
+          path: '/cache/tools/1.0.0/skills/plugin-choice',
+          label: 'Codex Plugin tools',
+          secondaryLabel: '/cache/tools/1.0.0/skills/plugin-choice',
+          isBaseline: false,
+          locations: [],
+          updatedLabel: 'Updated now',
+          evidenceLabel: 'Currently enabled in Codex',
+        }],
+        changedFiles: [],
+        selectedVariant: null,
+        baselineVariant: null,
+        diffTitle: 'Selected Version Preview',
+        diffLines: [],
+        diffPath: null,
+        primaryActionLabel: null,
+      },
+      selectedVariantPath: null,
+      provenanceRows: [],
+      provenanceSummary: [],
+    };
+
+    render(<DetailInspectorPanel model={model} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Currently enabled in Codex')).toBeVisible();
+  });
+
   it('shows selected plugin MCP dependency warnings without disabling promotion', () => {
     const mcp = createPluginBoundMcp();
     const model = buildMcpInspectorModel(mcp, {

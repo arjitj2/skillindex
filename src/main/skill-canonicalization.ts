@@ -61,6 +61,11 @@ export async function makeSkillCanonical(
   }
 
   const requestedVariantPath = request.selectedSourcePath ?? request.selectedVariantPath;
+  if (isPluginOnlySkillPromotion(skill)
+    && (!requestedVariantPath || !skill.managedSourceCandidates?.some((candidate) =>
+      candidate.relationship === 'universal-missing' && candidate.path === requestedVariantPath))) {
+    throw new Error('Select a current plugin candidate before promoting it to Universal.');
+  }
   const requestedPluginSource = requestedVariantPath
     ? skill.locations.find((location) => location.path === requestedVariantPath)?.provenance?.kind === 'plugin'
     : false;
@@ -201,6 +206,12 @@ export async function makeSkillCanonical(
     ...scanOptions,
     paths,
   });
+}
+
+function isPluginOnlySkillPromotion(skill: SkillInventorySnapshot['skills'][number]): boolean {
+  return (skill.managedSourceCandidates?.some((candidate) => candidate.relationship === 'universal-missing') ?? false)
+    && !skill.locations.some((location) =>
+      location.fileType === 'real-file' && location.canonicalRole !== 'managed-source');
 }
 
 function pickSelectedSource({

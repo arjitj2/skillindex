@@ -1,4 +1,13 @@
-import type { AgentRecord, SkillRecord, SkillScanSource, SubagentRecord } from '@shared/contracts';
+import type {
+  AgentRecord,
+  McpRecord,
+  PluginManagedSourceCandidate,
+  SkillLocationRecord,
+  SkillRecord,
+  SkillScanSource,
+  SubagentLocationRecord,
+  SubagentRecord,
+} from '@shared/contracts';
 
 import { describe, expect, it } from 'vitest';
 
@@ -17,6 +26,34 @@ const sourceIndex = new Map(representativeInventorySnapshot.sources.map((source)
 const agentIndex = new Map((representativeInventorySnapshot.agents ?? []).map((agent) => [agent.id, agent]));
 const packagePath = (value: string) => value.replace(/\.md$/, '');
 type RepresentativeMcp = NonNullable<typeof representativeInventorySnapshot.mcps>[number];
+
+function buildManagedCandidate({
+  path,
+  version,
+  evidence,
+  warnings = [],
+}: {
+  path: string;
+  version: string;
+  evidence: PluginManagedSourceCandidate['evidence'];
+  warnings?: PluginManagedSourceCandidate['dependencyWarnings'];
+}): PluginManagedSourceCandidate {
+  const rootPath = path.split('/skills/')[0]?.split('/agents/')[0]?.split('/.mcp.json')[0] ?? path;
+  return {
+    path,
+    plugin: {
+      host: 'codex',
+      pluginId: 'tools@official',
+      pluginName: 'tools',
+      version,
+      rootPath,
+      enabled: evidence === 'enabled-installation',
+    },
+    evidence,
+    relationship: 'universal-missing',
+    dependencyWarnings: warnings,
+  };
+}
 
 function arrayContaining(values: Parameters<typeof expect.arrayContaining>[0]): unknown {
   return expect.arrayContaining(values);
@@ -54,6 +91,85 @@ function expectFirstTwoLocations(skill: SkillRecord): [SkillRecord['locations'][
 }
 
 describe('buildSkillInspectorModel', () => {
+  it('requires an explicit choice between multiple plugin-only skill candidates and shows evidence-based hints', () => {
+    const firstPath = '/Users/tester/.codex/plugins/cache/tools/1.0.0/skills/plugin-choice';
+    const secondPath = '/Users/tester/.codex/plugins/cache/tools/1.1.0/skills/plugin-choice';
+    const locations: SkillLocationRecord[] = [
+      {
+        path: firstPath,
+        entrypointPath: `${firstPath}/SKILL.md`,
+        sourceId: 'plugin-tools-1.0.0',
+        sourceLabel: 'Codex Plugin tools 1.0.0',
+        sourceScope: 'live',
+        fileType: 'real-file',
+        installKind: 'directory',
+        modifiedAt: '2026-08-31T23:59:00.000Z',
+        canonical: false,
+        canonicalRole: 'managed-source',
+        mutability: 'read-only-managed',
+        contentHash: 'first',
+        definitionText: '# First plugin version',
+      },
+      {
+        path: secondPath,
+        entrypointPath: `${secondPath}/SKILL.md`,
+        sourceId: 'plugin-tools-1.1.0',
+        sourceLabel: 'Codex Plugin tools 1.1.0',
+        sourceScope: 'live',
+        fileType: 'real-file',
+        installKind: 'directory',
+        modifiedAt: '2026-01-01T00:00:00.000Z',
+        canonical: false,
+        canonicalRole: 'managed-source',
+        mutability: 'read-only-managed',
+        contentHash: 'second',
+        definitionText: '# Second plugin version\n$CODEX_PLUGIN_ROOT/bin/run',
+      },
+    ];
+    const skill: SkillRecord = {
+      name: 'plugin-choice',
+      structuralState: 'single-source-noncanonical',
+      isDrifted: true,
+      driftPresentation: 'active',
+      issueReasons: ['missing-canonical'],
+      locations,
+      detailDiagnostics: { duplicateCandidates: [], installSources: [] },
+      managedSourceCandidates: [
+        buildManagedCandidate({ path: firstPath, version: '1.0.0', evidence: 'cached-unknown' }),
+        buildManagedCandidate({
+          path: secondPath,
+          version: '1.1.0',
+          evidence: 'newer-comparable-version',
+          warnings: [{ kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' }],
+        }),
+      ],
+    };
+
+    const unselected = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: 'missing-canonical',
+      selectedVariantPath: null,
+    }, agentIndex);
+    const unselectedProblem = expectVariantResolution(unselected.activeProblem);
+    expect(unselected.selectedVariantPath).toBeNull();
+    expect(unselectedProblem.selectedVariant).toBeNull();
+    expect(unselectedProblem.primaryActionLabel).toBe('Use as Universal');
+    expect(unselectedProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
+      'Cached copy—usage unknown',
+      'Newer comparable plugin version',
+    ]);
+
+    const selected = buildSkillInspectorModel(skill, sourceIndex, {
+      selectedProblemKey: 'missing-canonical',
+      selectedVariantPath: secondPath,
+    }, agentIndex);
+    const selectedProblem = expectVariantResolution(selected.activeProblem);
+    expect(selectedProblem.primaryActionLabel).toBe('Use as Universal');
+    expect(selectedProblem.selectedVariant?.path).toBe(secondPath);
+    expect(selectedProblem.selectedVariant?.dependencyWarnings).toEqual([
+      { kind: 'plugin-root-variable', detail: 'References a plugin-root environment variable.' },
+    ]);
+  });
+
   it('shows a non-problem plugin update advisory for a healthy skill', () => {
     const skill: SkillRecord = {
       ...findRepresentativeSkill('healthy-skill'),
@@ -1858,6 +1974,69 @@ describe('buildSkillInspectorModel', () => {
     ]));
   });
 
+  it('requires an explicit choice between multiple plugin-only subagent candidates and shows dependency warnings after selection', () => {
+    const firstPath = '/Users/tester/.codex/plugins/cache/tools/1.0.0/agents/reviewer.md';
+    const secondPath = '/Users/tester/.codex/plugins/cache/tools/d6169bef/agents/reviewer.md';
+    const locations: SubagentLocationRecord[] = [firstPath, secondPath].map((candidatePath, index) => ({
+      agentId: `plugin:codex:tools:${index}`,
+      agentLabel: `Codex Plugin tools ${index + 1}`,
+      scope: 'live',
+      path: candidatePath,
+      directoryPath: candidatePath.slice(0, candidatePath.lastIndexOf('/')),
+      fileType: 'real-file',
+      modifiedAt: index === 0 ? '2026-08-31T23:59:00.000Z' : '2026-01-01T00:00:00.000Z',
+      canonical: false,
+      canonicalRole: 'managed-source',
+      mutability: 'read-only-managed',
+      format: 'markdown-frontmatter',
+      definitionText: `---\nname: reviewer\ndescription: Plugin reviewer ${index + 1}.\n---\nReview ${index + 1}.`,
+      definitionComparisonKey: `reviewer-${index + 1}`,
+    }));
+    const subagent: SubagentRecord = {
+      name: 'tools:reviewer',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations,
+      managedSourceCandidates: [
+        buildManagedCandidate({ path: firstPath, version: '1.0.0', evidence: 'cached-unknown' }),
+        buildManagedCandidate({
+          path: secondPath,
+          version: 'd6169bef',
+          evidence: 'enabled-installation',
+          warnings: [
+            { kind: 'plugin-contained-path', detail: 'References a path inside the selected plugin.' },
+            { kind: 'provider-specific-field', detail: 'Uses provider-specific fields: tools.' },
+          ],
+        }),
+      ],
+    };
+
+    const unselected = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: null,
+    }, agentIndex);
+    const unselectedProblem = expectVariantResolution(unselected.activeProblem);
+    expect(unselected.selectedVariantPath).toBeNull();
+    expect(unselectedProblem.selectedVariant).toBeNull();
+    expect(unselectedProblem.primaryActionLabel).toBe('Add to Universal');
+    expect(unselectedProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
+      'Cached copy—usage unknown',
+      'Currently enabled in Codex',
+    ]);
+
+    const selected = buildSubagentInspectorModel(subagent, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: secondPath,
+    }, agentIndex);
+    const selectedProblem = expectVariantResolution(selected.activeProblem);
+    expect(selectedProblem.primaryActionLabel).toBe('Add to Universal');
+    expect(selectedProblem.selectedVariant?.dependencyWarnings).toEqual([
+      { kind: 'plugin-contained-path', detail: 'References a path inside the selected plugin.' },
+      { kind: 'provider-specific-field', detail: 'Uses provider-specific fields: tools.' },
+    ]);
+  });
+
   it('shows the current wrong symlink target underneath the affected path', () => {
     const baseSkill = findRepresentativeSkill('missing-symlink-skill');
     const [canonicalLocation, claudeLocation] = expectFirstTwoLocations(baseSkill);
@@ -3085,6 +3264,49 @@ describe('buildMcpInspectorModel', () => {
         label: 'Disabled',
         sources: ['Factory'],
       }),
+    ]);
+  });
+
+  it('requires an explicit choice between multiple plugin-only MCP candidates', () => {
+    const firstPath = '/Users/tester/.codex/plugins/cache/tools/1.0.0/.mcp.json';
+    const secondPath = '/Users/tester/.codex/plugins/cache/tools/1.1.0/.mcp.json';
+    const mcp: McpRecord = {
+      name: 'tools:server',
+      status: 'needs-attention',
+      presentation: 'active',
+      issueReasons: ['missing-universal'],
+      locations: [firstPath, secondPath].map((configPath, index) => ({
+        agentId: `plugin:codex:tools:${index}`,
+        agentLabel: `Codex Plugin tools ${index + 1}`,
+        scope: 'live' as const,
+        configPath,
+        configName: 'server',
+        transport: 'stdio' as const,
+        command: 'node',
+        args: [`server-${index + 1}.js`],
+        definitionText: JSON.stringify({ command: 'node', args: [`server-${index + 1}.js`] }),
+        definitionComparisonKey: `server-${index + 1}`,
+        canonicalRole: 'managed-source' as const,
+        mutability: 'read-only-managed' as const,
+      })),
+      managedSourceCandidates: [
+        buildManagedCandidate({ path: firstPath, version: '1.0.0', evidence: 'cached-unknown' }),
+        buildManagedCandidate({ path: secondPath, version: '1.1.0', evidence: 'newer-comparable-version' }),
+      ],
+    };
+
+    const model = buildMcpInspectorModel(mcp, {
+      selectedProblemKey: 'missing-universal',
+      selectedVariantPath: null,
+    }, agentIndex, sourceIndex);
+    const activeProblem = expectVariantResolution(model.activeProblem);
+
+    expect(model.selectedVariantPath).toBeNull();
+    expect(activeProblem.selectedVariant).toBeNull();
+    expect(activeProblem.primaryActionLabel).toBe('Promote to Universal');
+    expect(activeProblem.variants.map((variant) => variant.evidenceLabel)).toEqual([
+      'Cached copy—usage unknown',
+      'Newer comparable plugin version',
     ]);
   });
 

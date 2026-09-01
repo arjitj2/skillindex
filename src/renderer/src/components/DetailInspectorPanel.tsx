@@ -302,8 +302,8 @@ export function DetailInspectorPanel({
                     const variantPrimaryLabel = entityKind === 'mcp' ? variant.label : formatPath(variant.path, 62);
                     const variantSecondaryLabel = entityKind === 'mcp' ? variant.secondaryLabel : null;
                     const ariaLabel = entityKind === 'mcp'
-                      ? `${variant.label} ${variant.secondaryLabel} ${variant.path}`
-                      : `${variant.label} ${variant.path}`;
+                      ? `${variant.label} ${variant.secondaryLabel} ${variant.evidenceLabel ?? ''} ${variant.path}`
+                      : `${variant.label} ${variant.evidenceLabel ?? ''} ${variant.path}`;
 
                     return (
                       <div key={variant.id} role="listitem">
@@ -329,16 +329,21 @@ export function DetailInspectorPanel({
                             ) : (
                               <span className="detail-inspector-panel__variant-path">{variantPrimaryLabel}</span>
                             )}
-                            {isCanonical ? (
+                            {isCanonical || variant.evidenceLabel ? (
                               <span className="detail-inspector-panel__variant-badges">
-                                <span
-                                  className={[
-                                    'detail-inspector-panel__badge',
-                                    isCanonicalComparison ? 'detail-inspector-panel__badge--canonical-compare' : 'detail-inspector-panel__badge--canonical',
-                                  ].filter(Boolean).join(' ')}
-                                >
-                                  Universal
-                                </span>
+                                {variant.evidenceLabel ? (
+                                  <span className="detail-inspector-panel__badge">{variant.evidenceLabel}</span>
+                                ) : null}
+                                {isCanonical ? (
+                                  <span
+                                    className={[
+                                      'detail-inspector-panel__badge',
+                                      isCanonicalComparison ? 'detail-inspector-panel__badge--canonical-compare' : 'detail-inspector-panel__badge--canonical',
+                                    ].filter(Boolean).join(' ')}
+                                  >
+                                    Universal
+                                  </span>
+                                ) : null}
                               </span>
                             ) : null}
                           </>
