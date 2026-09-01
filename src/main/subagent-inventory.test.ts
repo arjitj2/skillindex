@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -606,6 +606,26 @@ describe('subagent inventory', () => {
 
     await expect(lstat(universalPath)).rejects.toThrow();
     expect(await readFile(codexPath, 'utf8')).toBe(codexBefore);
+  });
+
+  it('cleans a partially created stage file before any plugin promotion mutation', async () => {
+    const { homeDir, scanOptions } = await createSubagentTestPaths();
+    const root = path.join(homeDir, '.claude', 'plugins', 'cache', 'official', 'alpha', '1.0.0');
+    const pluginPath = path.join(root, 'agents', 'reviewer.md');
+    const universalPath = path.join(homeDir, '.agents', 'agents', 'alpha-reviewer.md');
+    const canonicalDirectory = path.dirname(universalPath);
+
+    await writeMarkdownSubagent(pluginPath, 'reviewer', 'Plugin reviewer.', 'Use alpha rules.');
+    await writeRawFile(path.join(root, '.claude-plugin', 'plugin.json'), '{"name":"alpha","version":"1.0.0"}\n');
+    await expect(resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-universal',
+      selectedVariantPath: pluginPath,
+      subagentName: 'alpha:reviewer',
+    }, { ...scanOptions, testFailSubagentStageAfterCreateAt: 1 })).rejects.toThrow(/post-create stage failure/i);
+
+    await expect(lstat(universalPath)).rejects.toThrow();
+    expect((await readdir(canonicalDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
   });
 
   it('treats differing plugin subagent versions as managed source candidates instead of a mismatch', async () => {

@@ -78,6 +78,8 @@ export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   testFailSubagentRenderAt?: number;
   /** Test-only deterministic failure point while staging subagent mutations. */
   testFailSubagentStageAt?: number;
+  /** Test-only failure after a subagent stage entry has been created. */
+  testFailSubagentStageAfterCreateAt?: number;
 }
 
 export interface McpMutationTarget {
@@ -1124,8 +1126,15 @@ async function assertSafeSubagentMutationDestination(
     throw new Error('Subagent mutation destination escapes its writable root through a path alias.');
   }
   const pluginRoots = (snapshot.plugins ?? []).map((plugin) => plugin.rootPath);
-  const resolvedPluginRoots = await Promise.all(pluginRoots.map(resolveSubagentNearestExistingParent));
-  if (pluginRoots.concat(resolvedPluginRoots).some((root) => isSubagentPathContainedBy(root, destinationPath)
+  const workspaceRoot = path.dirname(path.dirname(path.dirname(canonicalPath)));
+  const pluginCacheRoots = [
+    path.join(workspaceRoot, '.codex', 'plugins'),
+    path.join(workspaceRoot, '.codex', 'plugins', 'cache'),
+    path.join(workspaceRoot, '.claude', 'plugins'),
+  ];
+  const allPluginRoots = [...new Set([...pluginRoots, ...pluginCacheRoots])];
+  const resolvedPluginRoots = await Promise.all(allPluginRoots.map(resolveSubagentNearestExistingParent));
+  if (allPluginRoots.concat(resolvedPluginRoots).some((root) => isSubagentPathContainedBy(root, destinationPath)
     || isSubagentPathContainedBy(root, resolvedParent))) {
     throw new Error('Subagent mutations cannot write into a plugin-managed cache path.');
   }
@@ -1167,12 +1176,16 @@ async function applyStagedSubagentMutations(
       const parent = path.dirname(mutation.path);
       await mkdir(parent, { recursive: true });
       const stagePath = path.join(parent, `.${path.basename(mutation.path)}.stage-${randomUUID()}`);
+      const stagedMutation = { ...mutation, stagePath, backupPath: path.join(parent, `.${path.basename(mutation.path)}.backup-${randomUUID()}`), installed: false, backedUp: false };
+      staged.push(stagedMutation);
       if (options.testFailSubagentStageAt === index + 1) {
         throw new Error(`Injected subagent stage failure at ${index + 1}.`);
       }
       if (mutation.symlinkTarget) await symlink(mutation.symlinkTarget, stagePath);
       else await writeFile(stagePath, mutation.rendered ?? '', 'utf8');
-      staged.push({ ...mutation, stagePath, backupPath: path.join(parent, `.${path.basename(mutation.path)}.backup-${randomUUID()}`), installed: false, backedUp: false });
+      if (options.testFailSubagentStageAfterCreateAt === index + 1) {
+        throw new Error(`Injected subagent post-create stage failure at ${index + 1}.`);
+      }
     }
   } catch (error) {
     await Promise.all(staged.map((mutation) => rm(mutation.stagePath, { recursive: true, force: true }).catch(() => undefined)));
