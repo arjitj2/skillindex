@@ -3739,6 +3739,52 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
   });
 
+  it('rejects ambiguous plugin MCP promotion before writing Universal', async () => {
+    const paths = await createPaths('skillindex-promote-ambiguous-plugin-mcp-');
+    const alphaRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'alpha-tools', '1.0.0');
+    const betaRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'beta-tools', '1.0.0');
+    const alphaConfigPath = path.join(alphaRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const sharedDefinition = { type: 'http', url: 'https://mcp.example.test/shared' };
+    const universalBefore = `${JSON.stringify({ servers: {} }, null, 2)}\n`;
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+    } as const;
+
+    await writeSkillFile(
+      path.join(alphaRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'alpha-tools', version: '1.0.0' }),
+    );
+    await writeSkillFile(
+      path.join(betaRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'beta-tools', version: '1.0.0' }),
+    );
+    await writeSkillFile(alphaConfigPath, `${JSON.stringify({ mcpServers: { shared: sharedDefinition } }, null, 2)}\n`);
+    await writeSkillFile(
+      path.join(betaRoot, '.mcp.json'),
+      `${JSON.stringify({ mcpServers: { shared: sharedDefinition } }, null, 2)}\n`,
+    );
+    await writeSkillFile(universalConfigPath, universalBefore);
+
+    const before = await scanInventory(scanOptions);
+    expect(before.mcps?.find((mcp) => mcp.name === 'alpha-tools:shared')?.issueReasons)
+      .toContain('missing-universal');
+    expect(before.mcps?.find((mcp) => mcp.name === 'beta-tools:shared')?.issueReasons)
+      .toContain('missing-universal');
+
+    await expect(resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: 'alpha-tools:shared',
+      selectedVariantPath: alphaConfigPath,
+    }, scanOptions)).rejects.toThrow(/multiple plugin MCP identities.*shared/i);
+
+    expect(await readFile(universalConfigPath, 'utf8')).toBe(universalBefore);
+  });
+
   it('classifies and resolves native plugin MCP delivery only for the matching enabled plugin host', async () => {
     const paths = await createPaths('skillindex-native-plugin-mcp-matrix-');
     const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');

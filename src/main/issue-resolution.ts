@@ -712,6 +712,9 @@ async function applyMcpResolution(
   const selectedVariant = pickMcpSelection(mcp.locations, selectedVariantPath, {
     preferUniversal: issue === 'missing-from-agents',
   });
+  if (issue === 'missing-universal') {
+    assertMcpPromotionIdentityIsUnambiguous(snapshot, selectedVariant);
+  }
   const selectedDefinition = parseSelectedMcpDefinition(selectedVariant);
   const agentLocalDefinitions = collectAgentLocalDefinitionsForMcp(mcp, selectedDefinition);
   const mutationTargets = await coalesceMcpMutationTargets(
@@ -742,6 +745,38 @@ async function applyMcpResolution(
     );
   }
   await writeMcpResolutionTransaction(updates, options);
+}
+
+function assertMcpPromotionIdentityIsUnambiguous(
+  snapshot: SkillInventorySnapshot,
+  selectedVariant: McpLocationRecord,
+): void {
+  if (selectedVariant.canonicalRole !== 'managed-source' || !selectedVariant.configName) {
+    return;
+  }
+
+  const selectedCoreKey = getMcpPromotionCoreComparisonKey(selectedVariant);
+  const matchingLogicalIdentities = new Set(
+    (snapshot.mcps ?? [])
+      .filter((candidate) => candidate.locations.some((location) =>
+        location.canonicalRole === 'managed-source'
+        && location.configName === selectedVariant.configName
+        && getMcpPromotionCoreComparisonKey(location) === selectedCoreKey))
+      .map((candidate) => candidate.name),
+  );
+
+  if (matchingLogicalIdentities.size > 1) {
+    throw new Error(
+      `Cannot promote MCP "${selectedVariant.configName}" because multiple plugin MCP identities expose the same definition: ${[...matchingLogicalIdentities].join(', ')}.`,
+    );
+  }
+}
+
+function getMcpPromotionCoreComparisonKey(location: McpLocationRecord): string {
+  return location.coreDefinitionComparisonKey
+    ?? location.definitionComparisonKey
+    ?? location.definitionText
+    ?? `path:${location.configPath}`;
 }
 
 function collectMcpResolutionTargets(
