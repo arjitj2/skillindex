@@ -63,6 +63,101 @@ describe('resolveInventoryIssue', () => {
     )).rejects.toThrow('MCP "missing-mcp" was not found in the current inventory.');
   });
 
+  it('rejects ordinary subagent repairs whose writable or canonical directory aliases an unindexed plugin cache', async () => {
+    const scenarios = [
+      { issue: 'missing-from-agents' as const, name: 'guarded-missing', target: 'missing' as const },
+      { issue: 'definition-mismatch' as const, name: 'guarded-mismatch', target: 'mismatch' as const },
+      { issue: 'broken-symlink' as const, name: 'guarded-broken', target: 'broken' as const },
+    ];
+
+    for (const scenario of scenarios) {
+      const paths = await createPaths(`skillindex-subagent-${scenario.target}-plugin-alias-`);
+      const canonicalPath = path.join(paths.sandboxRoot, '.agents', 'agents', `${scenario.name}.md`);
+      const cacheAgentsDir = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'unindexed', scenario.name, '1.0.0', 'agents');
+      const agentDirectory = path.join(paths.sandboxRoot, '.claude', 'agents');
+      const agentPath = path.join(agentDirectory, `${scenario.name}.md`);
+      await writeSkillFile(canonicalPath, [
+        '---',
+        `name: ${scenario.name}`,
+        'description: Universal definition',
+        '---',
+        '',
+        '# Universal',
+      ].join('\n'));
+      await mkdir(cacheAgentsDir, { recursive: true });
+      await mkdir(path.dirname(agentDirectory), { recursive: true });
+      await symlink(cacheAgentsDir, agentDirectory);
+      await writeSkillFile(path.join(paths.sandboxRoot, '.claude', 'settings.json'), '{}\n');
+      if (scenario.target === 'mismatch') {
+        await writeSkillFile(agentPath, [
+          '---',
+          `name: ${scenario.name}`,
+          'description: Cache definition',
+          '---',
+          '',
+          '# Cache',
+        ].join('\n'));
+      } else if (scenario.target === 'broken') {
+        await symlink(path.join(cacheAgentsDir, 'deleted.md'), agentPath);
+      }
+
+      const before = scenario.target === 'missing'
+        ? undefined
+        : scenario.target === 'broken'
+          ? await readlink(agentPath)
+          : await readFile(agentPath, 'utf8');
+      await expect(resolveInventoryIssue({
+        entity: 'subagent',
+        issue: scenario.issue,
+        subagentName: scenario.name,
+        ...(scenario.issue === 'definition-mismatch' ? { selectedVariantPath: canonicalPath } : {}),
+      }, {
+        paths,
+        includeSandboxSources: true,
+        includeLiveSources: false,
+        env: { SKILL_INDEX_AGENT_SUBSET: 'claude' },
+      })).rejects.toThrow(/plugin-managed cache path/i);
+
+      if (scenario.target === 'missing') {
+        await expect(lstat(agentPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else if (scenario.target === 'broken') {
+        expect(await readlink(agentPath)).toBe(before);
+      } else {
+        expect(await readFile(agentPath, 'utf8')).toBe(before);
+      }
+    }
+
+    const paths = await createPaths('skillindex-subagent-canonical-plugin-alias-');
+    const cacheAgentsDir = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'unindexed', 'canonical-alias', '1.0.0', 'agents');
+    const canonicalAgentsDir = path.join(paths.sandboxRoot, '.agents', 'agents');
+    const canonicalPath = path.join(canonicalAgentsDir, 'guarded-canonical.md');
+    await mkdir(cacheAgentsDir, { recursive: true });
+    await mkdir(path.dirname(canonicalAgentsDir), { recursive: true });
+    await symlink(cacheAgentsDir, canonicalAgentsDir);
+    await writeSkillFile(canonicalPath, [
+      '---',
+      'name: guarded-canonical',
+      'description: Cache-backed canonical alias',
+      '---',
+      '',
+      '# Cache-backed canonical alias',
+    ].join('\n'));
+    await writeSkillFile(path.join(paths.sandboxRoot, '.claude', 'settings.json'), '{}\n');
+    const cacheBefore = await readFile(canonicalPath, 'utf8');
+
+    await expect(resolveInventoryIssue({
+      entity: 'subagent',
+      issue: 'missing-from-agents',
+      subagentName: 'guarded-canonical',
+    }, {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'claude' },
+    })).rejects.toThrow(/plugin-managed cache path/i);
+    expect(await readFile(canonicalPath, 'utf8')).toBe(cacheBefore);
+  });
+
   it('writes missing MCP definitions into Codex config.toml while preserving existing settings', async () => {
     const paths = await createPaths('skillindex-resolve-codex-mcp-');
     const agentsConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');

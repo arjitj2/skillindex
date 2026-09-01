@@ -6,7 +6,11 @@ import { addSkill as addSkillToInventory } from '@main/add-skill';
 import { addSubagent as addSubagentToInventory, resolveAddSubagentName } from '@main/add-subagent';
 import { createAuditLogService, type AuditOperationRequest } from '@main/audit-log';
 import { applyCapabilityAction as applyCapabilityActionToInventory, assertCapabilityActionRequest } from '@main/capability-actions';
-import { removeInventoryItem as removeInventoryItemFromInventory, type RemoveInventoryItemOptions } from '@main/remove-inventory-item';
+import {
+  isPluginManagedRemovalLocation,
+  removeInventoryItem as removeInventoryItemFromInventory,
+  type RemoveInventoryItemOptions,
+} from '@main/remove-inventory-item';
 import {
   dismissDrift,
   readCachedInventory,
@@ -811,16 +815,27 @@ function getRemoveInventoryItemAffectedPaths(
 ): string[] {
   if (request.entity === 'skill') {
     const skill = snapshot.skills.find((entry) => entry.name === request.skillName);
-    return dedupePaths(skill?.locations.map((location) => location.path) ?? []);
+    return dedupePaths(skill?.locations
+      .filter((location) => !isPluginManagedRemovalLocation(location))
+      .map((location) => location.path) ?? []);
   }
 
   if (request.entity === 'mcp') {
     const mcp = (snapshot.mcps ?? []).find((entry) => entry.name === request.mcpName);
-    return dedupePaths(mcp?.locations.map((location) => location.configPath) ?? []);
+    return dedupePaths(mcp?.locations
+      .filter((location) => !isPluginManagedRemovalLocation({
+        canonicalRole: location.canonicalRole,
+        mutability: location.mutability,
+        path: location.configPath,
+        provenance: location.provenance,
+      }))
+      .map((location) => location.configPath) ?? []);
   }
 
   const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === request.subagentName);
-  return dedupePaths(subagent?.locations.map((location) => location.path) ?? []);
+  return dedupePaths(subagent?.locations
+    .filter((location) => !isPluginManagedRemovalLocation(location))
+    .map((location) => location.path) ?? []);
 }
 
 function buildAddSkillAuditRequest(

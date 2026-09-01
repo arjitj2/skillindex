@@ -27,7 +27,7 @@ Skill Index treats `~/.agents` as the user-owned Universal knowledge directory a
   mcp.json
 ```
 
-Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved.
+Skills and subagents are mirrored into compatible agent locations, while MCPs are translated into each agent's config format with agent-specific settings preserved. The one exclusion is the exact host family already satisfied by an enabled native plugin for that capability; Skill Index does not create a duplicate local materialization there.
 
 Skill Index still respects agent-native folders, config files, and plugin caches. They just should not silently fork what you know. Skill Index also supports alternate canonical paths for people who maintain their own skills repos: add a custom path in Settings, then mark it as the preferred canonical source.
 

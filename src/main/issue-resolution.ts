@@ -133,6 +133,12 @@ interface SubagentWriteTarget {
   path: string;
 }
 
+interface SubagentMutationSafetyContext {
+  canonicalPath: string;
+  scope: SubagentLocationRecord['scope'];
+  snapshot: SkillInventorySnapshot;
+}
+
 interface StagedSubagentMutation {
   path: string;
   rendered?: string;
@@ -938,6 +944,7 @@ async function resolveSubagentIssueIfCurrent(
   }
 
   assertSubagentResolutionScopeAllowed(subagent);
+  const scope = getSubagentMutationScope(subagent);
 
   switch (request.issue) {
     case 'missing-universal': {
@@ -948,13 +955,13 @@ async function resolveSubagentIssueIfCurrent(
         await promoteManagedSubagentToUniversal(snapshot, subagent, selectedLocation, options);
       } else {
         const canonicalPath = isInvalidSubagentLocation(selectedLocation)
-          ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, options.paths)
+          ? await copySubagentLocationToCanonicalPath(subagent, selectedLocation, snapshot, scope, options.paths)
           : (await ensureCanonicalSubagentPackage(subagent, snapshot, request.selectedVariantPath, options, {
             preferExisting: false,
           })).path;
         const duplicateTargets = collectIdenticalMarkdownSubagentCopyTargets(subagent, snapshot, selectedLocation.definitionComparisonKey);
         await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
-          replaceWithCanonicalSymlink(target.path, canonicalPath)));
+          replaceWithCanonicalSymlink(target.path, canonicalPath, { canonicalPath, scope, snapshot })));
       }
       return;
     }
@@ -965,7 +972,7 @@ async function resolveSubagentIssueIfCurrent(
       });
       const targets = collectWritableMissingSubagentTargets(snapshot, subagent.missingLocations ?? []);
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot, scope)));
       return;
     }
     case 'identical-copies': {
@@ -980,7 +987,7 @@ async function resolveSubagentIssueIfCurrent(
         canonicalLocation?.definitionComparisonKey,
       );
       await Promise.all(dedupeSubagentTargets(duplicateTargets).map((target) =>
-        replaceWithCanonicalSymlink(target.path, canonicalPath)));
+        replaceWithCanonicalSymlink(target.path, canonicalPath, { canonicalPath, scope, snapshot })));
       return;
     }
     case 'broken-symlink':
@@ -999,7 +1006,7 @@ async function resolveSubagentIssueIfCurrent(
             : location.resolvedPath !== undefined && path.normalize(location.resolvedPath) !== path.normalize(canonicalPackage.path)))
         .map((location) => locationToSubagentWriteTarget(location, snapshot));
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot)));
+        writeSubagentTarget(target, canonicalPackage, canonicalPackage.definition, snapshot, scope)));
       return;
     }
     case 'definition-mismatch': {
@@ -1028,7 +1035,7 @@ async function resolveSubagentIssueIfCurrent(
           .map((location) => locationToSubagentWriteTarget(location, snapshot)),
       ];
       await Promise.all(dedupeSubagentTargets(targets).map((target) =>
-        writeSubagentTarget(target, canonicalPackage, selectedDefinition, snapshot)));
+        writeSubagentTarget(target, canonicalPackage, selectedDefinition, snapshot, scope)));
       return;
     }
   }
@@ -1086,6 +1093,10 @@ function assertSubagentResolutionScopeAllowed(subagent: SubagentRecord): void {
   }
 }
 
+function getSubagentMutationScope(subagent: SubagentRecord): SubagentLocationRecord['scope'] {
+  return subagent.locations[0]?.scope ?? subagent.missingLocations?.[0]?.scope ?? 'live';
+}
+
 async function ensureCanonicalSubagentPackage(
   subagent: SubagentRecord,
   snapshot: SkillInventorySnapshot,
@@ -1100,6 +1111,7 @@ async function ensureCanonicalSubagentPackage(
     ? findCanonicalSubagentLocation(subagent, { allowInvalid: behavior.allowInvalid })
     : null;
   if (canonicalLocation) {
+    await assertSafeSubagentMutationDestination(canonicalLocation.path, canonicalLocation.scope, snapshot, canonicalLocation.path);
     const definition = stripSubagentLocalExtras(
       readPortableDefinitionForSubagentLocation(snapshot, subagent.name, canonicalLocation, {
         allowInvalid: behavior.allowInvalid,
@@ -1121,9 +1133,10 @@ async function ensureCanonicalSubagentPackage(
     }),
   );
   const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, options.paths);
+  const safety = { canonicalPath, scope: selectedLocation.scope, snapshot };
   await writeSubagentDefinitionFile(canonicalPath, 'markdown-frontmatter', definition, {
     allowInvalid: behavior.allowInvalid && isInvalidSubagentLocation(selectedLocation),
-  });
+  }, safety);
   return {
     allowInvalid: isInvalidSubagentLocation(selectedLocation),
     path: canonicalPath,
@@ -1285,8 +1298,11 @@ async function assertSafeSubagentMutationDestination(
   ];
   const allPluginRoots = [...new Set([...pluginRoots, ...pluginCacheRoots])];
   const resolvedPluginRoots = await Promise.all(allPluginRoots.map(resolveSubagentNearestExistingParent));
+  const resolvedCanonicalPath = await resolveSubagentNearestExistingParent(canonicalPath);
   if (allPluginRoots.concat(resolvedPluginRoots).some((root) => isSubagentPathContainedBy(root, destinationPath)
-    || isSubagentPathContainedBy(root, resolvedParent))) {
+    || isSubagentPathContainedBy(root, resolvedParent)
+    || isSubagentPathContainedBy(root, canonicalPath)
+    || isSubagentPathContainedBy(root, resolvedCanonicalPath))) {
     throw new Error('Subagent mutations cannot write into a plugin-managed cache path.');
   }
 }
@@ -1384,6 +1400,8 @@ function findCanonicalSubagentLocation(
 async function copySubagentLocationToCanonicalPath(
   subagent: SubagentRecord,
   selectedLocation: SubagentLocationRecord,
+  snapshot: SkillInventorySnapshot,
+  scope: SubagentLocationRecord['scope'],
   paths: SkillIndexPaths,
 ): Promise<string> {
   const canonicalPath = resolveCanonicalSubagentPath(subagent, selectedLocation, paths);
@@ -1391,6 +1409,7 @@ async function copySubagentLocationToCanonicalPath(
     return canonicalPath;
   }
 
+  await assertSafeSubagentMutationDestination(canonicalPath, scope, snapshot, canonicalPath);
   await mkdir(path.dirname(canonicalPath), { recursive: true });
   await rm(canonicalPath, { recursive: true, force: true });
   await cp(selectedLocation.path, canonicalPath);
@@ -1636,11 +1655,13 @@ async function writeSubagentTarget(
   canonicalPackage: CanonicalSubagentPackage,
   definition: PortableSubagentDefinition,
   snapshot: SkillInventorySnapshot,
+  scope: SubagentLocationRecord['scope'],
 ): Promise<void> {
+  const safety = { canonicalPath: canonicalPackage.path, scope, snapshot };
   if (path.normalize(target.path) === path.normalize(canonicalPackage.path)) {
     await writeSubagentDefinitionFile(target.path, 'markdown-frontmatter', stripSubagentLocalExtras(definition), {
       allowInvalid: canonicalPackage.allowInvalid,
-    });
+    }, safety);
     return;
   }
 
@@ -1650,7 +1671,7 @@ async function writeSubagentTarget(
     && isMarkdownSubagentSymlinkCompatible(family)
     && !hasSubagentLocalExtras(target)
   ) {
-    await replaceWithCanonicalSymlink(target.path, canonicalPackage.path);
+    await replaceWithCanonicalSymlink(target.path, canonicalPackage.path, safety);
     return;
   }
 
@@ -1659,6 +1680,7 @@ async function writeSubagentTarget(
     target.format,
     mergeExistingSubagentTargetExtras(target, stripSubagentLocalExtras(definition)),
     { allowInvalid: canonicalPackage.allowInvalid, family },
+    safety,
   );
 }
 
@@ -1667,7 +1689,9 @@ async function writeSubagentDefinitionFile(
   format: AgentSubagentParserKind,
   definition: PortableSubagentDefinition,
   options: { allowInvalid?: boolean; family?: string } = {},
+  safety: SubagentMutationSafetyContext,
 ): Promise<void> {
+  await assertSafeSubagentMutationDestination(filePath, safety.scope, safety.snapshot, safety.canonicalPath);
   await mkdir(path.dirname(filePath), { recursive: true });
   await rm(filePath, { recursive: true, force: true });
   await writeFile(filePath, renderPortableSubagentDefinition(definition, format, options), 'utf8');
@@ -2470,7 +2494,12 @@ function setNestedRecordValue(target: Record<string, unknown>, pathSegments: str
   }
 }
 
-async function replaceWithCanonicalSymlink(locationPath: string, canonicalPath: string): Promise<void> {
+async function replaceWithCanonicalSymlink(
+  locationPath: string,
+  canonicalPath: string,
+  safety: SubagentMutationSafetyContext,
+): Promise<void> {
+  await assertSafeSubagentMutationDestination(locationPath, safety.scope, safety.snapshot, canonicalPath);
   await mkdir(path.dirname(locationPath), { recursive: true });
   await rm(locationPath, { recursive: true, force: true });
   await symlink(canonicalPath, locationPath);

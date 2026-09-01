@@ -990,6 +990,39 @@ describe('inventory runtime', () => {
     expect(undoResult.inventorySnapshot?.skills.some((skill) => skill.name === skillName)).toBe(true);
   });
 
+  it('excludes managed plugin cache candidates from mixed removal audit actions', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-remove-plugin-audit-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const skillName = 'audit-plugin:shared-skill';
+    const universalPath = path.join(paths.sandboxAgentsSkillsDir, skillName);
+    const pluginPath = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'audit-plugin', '1.0.0', 'skills', 'shared-skill');
+    const trashedPaths: string[] = [];
+
+    await Promise.all([
+      writeSkillFile(paths.sandboxAgentsSkillsDir, skillName, '# Universal shared skill\n', '2026-08-31T00:00:00.000Z'),
+      writeRuntimeFile(path.join(pluginPath, 'SKILL.md'), '# Plugin shared skill\n'),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'audit-plugin', '1.0.0', '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'audit-plugin', version: '1.0.0' })),
+    ]);
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    await runtime.scanInventory(scanOptions);
+    const pluginBefore = await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8');
+
+    await runtime.removeInventoryItem({ entity: 'skill', skillName }, {
+      ...scanOptions,
+      trashItem: async (targetPath) => {
+        trashedPaths.push(targetPath);
+        await rm(targetPath, { recursive: true, force: true });
+      },
+    });
+
+    expect(trashedPaths).toEqual([universalPath]);
+    expect(await readFile(path.join(pluginPath, 'SKILL.md'), 'utf8')).toBe(pluginBefore);
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual([universalPath]);
+  });
+
   it('audits and undoes plugin Universal skill updates without capturing plugin caches', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-audit-'));
     const paths = resolveSkillIndexPaths({

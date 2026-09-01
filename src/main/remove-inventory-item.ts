@@ -1,7 +1,8 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
+  CanonicalRole,
   McpLocationRecord,
   RemoveInventoryItemRequest,
   SkillInventorySnapshot,
@@ -49,11 +50,11 @@ export async function removeInventoryItem(
   });
 
   if (request.entity === 'skill') {
-    await removeSkillFromAllLocations(snapshot, request.skillName, options.trashItem ?? trashPathWithElectron);
+    await removeSkillFromAllLocations(snapshot, request.skillName, paths, options.trashItem ?? trashPathWithElectron);
   } else if (request.entity === 'mcp') {
     await removeMcpFromAllLocations(snapshot, request.mcpName, options);
   } else {
-    await removeSubagentFromAllLocations(snapshot, request.subagentName, options.trashItem ?? trashPathWithElectron);
+    await removeSubagentFromAllLocations(snapshot, request.subagentName, paths, options.trashItem ?? trashPathWithElectron);
   }
 
   return scanInventory({
@@ -65,6 +66,7 @@ export async function removeInventoryItem(
 async function removeSkillFromAllLocations(
   snapshot: SkillInventorySnapshot,
   skillName: string,
+  paths: SkillIndexPaths,
   trashItem: TrashItem,
 ): Promise<void> {
   const skill = snapshot.skills.find((entry) => entry.name === skillName);
@@ -72,12 +74,13 @@ async function removeSkillFromAllLocations(
     throw new Error(`Skill "${skillName}" was not found in the current inventory.`);
   }
 
-  await removePaths(skill.locations.map((location) => location.path), `Skill "${skillName}"`, trashItem);
+  await removePaths(snapshot, paths, skill.locations, `Skill "${skillName}"`, trashItem);
 }
 
 async function removeSubagentFromAllLocations(
   snapshot: SkillInventorySnapshot,
   subagentName: string,
+  paths: SkillIndexPaths,
   trashItem: TrashItem,
 ): Promise<void> {
   const subagent = (snapshot.subagents ?? []).find((entry) => entry.name === subagentName);
@@ -85,16 +88,99 @@ async function removeSubagentFromAllLocations(
     throw new Error(`Subagent "${subagentName}" was not found in the current inventory.`);
   }
 
-  await removePaths(subagent.locations.map((location) => location.path), `Subagent "${subagentName}"`, trashItem);
+  await removePaths(snapshot, paths, subagent.locations, `Subagent "${subagentName}"`, trashItem);
 }
 
-async function removePaths(paths: string[], entityLabel: string, trashItem: TrashItem): Promise<void> {
-  const uniquePaths = dedupePaths(paths);
+interface RemovablePathLocation {
+  canonicalRole?: CanonicalRole;
+  mutability?: string;
+  path: string;
+  provenance?: { kind?: string };
+}
+
+export function isPluginManagedRemovalLocation(location: RemovablePathLocation): boolean {
+  return location.canonicalRole === 'managed-source'
+    || location.provenance?.kind === 'plugin'
+    || location.mutability === 'read-only-managed'
+    || isConventionalPluginCachePath(location.path);
+}
+
+async function removePaths(
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+  locations: RemovablePathLocation[],
+  entityLabel: string,
+  trashItem: TrashItem,
+): Promise<void> {
+  const uniquePaths = dedupePaths(locations
+    .filter((location) => !isPluginManagedRemovalLocation(location))
+    .map((location) => location.path));
   if (uniquePaths.length === 0) {
     throw new Error(`${entityLabel} has no removable locations.`);
   }
 
-  await Promise.all(uniquePaths.map((targetPath) => trashExistingPath(targetPath, trashItem)));
+  const removablePaths = (await Promise.all(uniquePaths.map(async (targetPath) =>
+    await isSafeRemovalTarget(targetPath, snapshot, paths) ? targetPath : null))).filter((targetPath): targetPath is string => targetPath !== null);
+  if (removablePaths.length === 0) {
+    throw new Error(`${entityLabel} has no removable locations.`);
+  }
+
+  await Promise.all(removablePaths.map((targetPath) => trashExistingPath(targetPath, trashItem)));
+}
+
+async function isSafeRemovalTarget(
+  targetPath: string,
+  snapshot: SkillInventorySnapshot,
+  paths: SkillIndexPaths,
+): Promise<boolean> {
+  const lexicalPath = path.normalize(targetPath);
+  const pluginRoots = getPluginRemovalRoots(snapshot, paths);
+  if (pluginRoots.some((root) => isPathWithin(root, lexicalPath)) || isConventionalPluginCachePath(lexicalPath)) {
+    return false;
+  }
+
+  const resolvedPath = await resolvePathThroughNearestExistingParent(lexicalPath);
+  const resolvedPluginRoots = await Promise.all(pluginRoots.map(resolvePathThroughNearestExistingParent));
+  return !isConventionalPluginCachePath(resolvedPath)
+    && !pluginRoots.concat(resolvedPluginRoots).some((root) => isPathWithin(root, resolvedPath));
+}
+
+function getPluginRemovalRoots(snapshot: SkillInventorySnapshot, paths: SkillIndexPaths): string[] {
+  return [...new Set([
+    ...(snapshot.plugins ?? []).map((plugin) => plugin.rootPath),
+    ...snapshot.sources.filter((source) => source.kind === 'plugin').map((source) => source.skillsDir),
+    path.join(paths.sandboxRoot, '.codex', 'plugins'),
+    path.join(paths.sandboxRoot, '.claude', 'plugins'),
+    path.join(paths.liveAgentsDir, '..', '.codex', 'plugins'),
+    path.join(paths.liveAgentsDir, '..', '.claude', 'plugins'),
+  ].map(path.normalize))];
+}
+
+function isConventionalPluginCachePath(targetPath: string): boolean {
+  const segments = path.normalize(targetPath).split(path.sep).map((segment) => segment.toLowerCase());
+  return segments.some((segment, index) =>
+    (segment === '.codex' || segment === '.claude') && segments[index + 1] === 'plugins');
+}
+
+function isPathWithin(rootPath: string, targetPath: string): boolean {
+  const relative = path.relative(path.normalize(rootPath), path.normalize(targetPath));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function resolvePathThroughNearestExistingParent(targetPath: string): Promise<string> {
+  let candidate = path.normalize(targetPath);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return path.join(await realpath(candidate), ...missing.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return candidate;
+    missing.push(path.basename(candidate));
+    candidate = parent;
+  }
 }
 
 async function trashExistingPath(targetPath: string, trashItem: TrashItem): Promise<void> {

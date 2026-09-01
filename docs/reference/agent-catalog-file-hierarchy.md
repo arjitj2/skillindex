@@ -68,7 +68,8 @@ healthy state expects compatible copies to be symlinks to Universal.
 Resolution can manage writable compatibility directories that already contain
 affected skills. For example, resolving a skill found only in `~/.claude/skills`
 can copy the selected package into `~/.agents/skills` and replace the Claude copy
-with a symlink back to Universal.
+with a symlink back to Universal, unless that exact Claude capability is already
+satisfied by an enabled native Claude plugin.
 
 Adding a new skill does not proactively write to every compatibility directory.
 New skills are written to Universal first, then linked into installed agents'

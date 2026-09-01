@@ -170,6 +170,9 @@ Current managed-source fixture IDs include:
 - MCPs: `plugin-remote-mcp:plugin-remote-mcp`,
   `plugin-bound-mcp:plugin-bound-mcp`, and
   `plugin-update-mcp:plugin-update-mcp`.
+- Enabled-native delivery: `native-plugin-delivery:native-plugin-skill`,
+  `native-plugin-delivery:native-plugin-subagent`, and
+  `native-plugin-delivery:native-plugin-mcp`.
 
 ## Shared Rules
 
