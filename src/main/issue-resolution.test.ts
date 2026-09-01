@@ -3739,6 +3739,73 @@ describe('resolveInventoryIssue', () => {
     expect(await readFile(updatedPluginConfigPath, 'utf8')).toBe(updatedPluginConfig);
   });
 
+  it('resolves Missing Universal when duplicate physical sources share one logical MCP identity', async () => {
+    const paths = await createPaths('skillindex-promote-duplicate-plugin-mcp-');
+    const curatedRoot = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated',
+      'linear',
+      '0.0.3',
+    );
+    const remoteRoot = path.join(
+      paths.sandboxRoot,
+      '.codex',
+      'plugins',
+      'cache',
+      'openai-curated-remote',
+      'linear',
+      '5.0.1',
+    );
+    const curatedConfigPath = path.join(curatedRoot, '.mcp.json');
+    const universalConfigPath = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const linearDefinition = { type: 'http', url: 'https://mcp.linear.app/mcp' };
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex' },
+    } as const;
+
+    await writeSkillFile(
+      path.join(curatedRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'linear', version: '0.0.3' }),
+    );
+    await writeSkillFile(
+      path.join(remoteRoot, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'linear', version: '5.0.1' }),
+    );
+    await writeSkillFile(
+      curatedConfigPath,
+      `${JSON.stringify({ mcpServers: { linear: linearDefinition } }, null, 2)}\n`,
+    );
+    await writeSkillFile(
+      path.join(remoteRoot, '.mcp.json'),
+      `${JSON.stringify({ mcpServers: { linear: linearDefinition } }, null, 2)}\n`,
+    );
+    await writeSkillFile(universalConfigPath, `${JSON.stringify({ servers: {} }, null, 2)}\n`);
+
+    const before = await scanInventory(scanOptions);
+    expect(before.mcps?.find((mcp) => mcp.name === 'linear:linear')).toMatchObject({
+      issueReasons: ['missing-universal'],
+    });
+
+    const resolved = await resolveInventoryIssue({
+      entity: 'mcp',
+      issue: 'missing-universal',
+      mcpName: 'linear:linear',
+      selectedVariantPath: curatedConfigPath,
+    }, scanOptions);
+    const resolvedLinear = resolved.mcps?.find((mcp) => mcp.name === 'linear:linear');
+
+    expect(resolved.mcps?.some((mcp) => mcp.name === 'linear')).toBe(false);
+    expect(resolvedLinear?.locations.filter((location) => location.canonicalRole === 'managed-source')).toHaveLength(2);
+    expect(resolvedLinear?.issueReasons).not.toContain('missing-universal');
+    expect(await readFile(universalConfigPath, 'utf8')).toContain('"linear"');
+  });
+
   it('rejects ambiguous plugin MCP promotion before writing Universal', async () => {
     const paths = await createPaths('skillindex-promote-ambiguous-plugin-mcp-');
     const alphaRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'openai-curated', 'alpha-tools', '1.0.0');
