@@ -1006,6 +1006,14 @@ function getMcpResolutionAffectedPaths(
   const selectedLocation = request.selectedVariantPath
     ? mcp.locations.find((location) => location.configPath === request.selectedVariantPath)
     : mcp.locations[0];
+  if (request.issue === 'missing-universal' && selectedLocation?.canonicalRole === 'managed-source') {
+    return getPluginUpdateAffectedPaths({
+      entity: 'mcp',
+      action: 'update-universal-from-plugin',
+      capabilityName: mcp.name,
+      selectedVariantPath: selectedLocation.configPath,
+    }, snapshot, options);
+  }
   const universalConfigPaths = getWritableUniversalMcpConfigPaths(snapshot, selectedLocation?.scope, options);
 
   const locations = request.issue === 'missing-universal'
@@ -1058,9 +1066,20 @@ function getSubagentResolutionAffectedPaths(
   options: ScanSkillInventoryOptions,
 ): string[] {
   const canonicalPath = resolveCanonicalSubagentPathForAudit(subagent, request.selectedVariantPath, options);
+  const selectedLocation = request.selectedVariantPath
+    ? subagent.locations.find((location) => location.path === request.selectedVariantPath)
+    : undefined;
 
   switch (request.issue) {
     case 'missing-universal':
+      if (selectedLocation?.canonicalRole === 'managed-source') {
+        return getPluginUpdateAffectedPaths({
+          entity: 'subagent',
+          action: 'update-universal-from-plugin',
+          capabilityName: subagent.name,
+          selectedVariantPath: selectedLocation.path,
+        }, snapshot, options);
+      }
       return dedupePaths([canonicalPath]);
     case 'missing-from-agents':
       return dedupePaths((subagent.missingLocations ?? [])

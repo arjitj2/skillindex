@@ -248,7 +248,11 @@ export function annotateComparableVersionEvidence<T extends { evidence: PluginSo
     return typeof value === 'string' ? value : undefined;
   },
 ): T[] {
-  if (candidates.some((candidate) => candidate.evidence === 'enabled-installation')) return candidates;
+  const enabledCandidateCount = candidates.filter((candidate) => candidate.evidence === 'enabled-installation').length;
+  if (enabledCandidateCount > 1) {
+    return candidates.map((candidate) => ({ ...candidate, evidence: 'cached-unknown' }));
+  }
+  if (enabledCandidateCount === 1) return candidates;
 
   const parsed = candidates.map((candidate) => ({
     candidate,

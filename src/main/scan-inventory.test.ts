@@ -4199,6 +4199,49 @@ describe('representative-agent scan foundation', () => {
       .toBe('newer-comparable-version');
   });
 
+  it('does not claim that every cached version is current when only the plugin id is enabled', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-ambiguous-enabled-plugin-'));
+    const homeDir = path.join(root, 'home');
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: path.join(root, 'data') }, homeDir });
+
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(path.join(homeDir, '.codex', 'config.toml'), [
+      '[plugins."tools@official"]',
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8');
+    for (const version of ['1.0.0', '1.1.0']) {
+      const pluginRoot = path.join(homeDir, '.codex', 'plugins', 'cache', 'official', 'tools', version);
+      await mkdir(path.join(pluginRoot, '.codex-plugin'), { recursive: true });
+      await writeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'tools', version }), 'utf8');
+      await writeSkillFile(path.join(pluginRoot, 'skills'), 'foo', [
+        '---',
+        'name: foo',
+        `description: Tools ${version}.`,
+        '---',
+        '',
+        '# Foo',
+        '',
+      ].join('\n'), '2026-01-08T00:00:00.000Z');
+    }
+
+    const candidates = (await scanInventory({
+      paths,
+      homeDir,
+      includeLiveSources: true,
+      includeSandboxSources: false,
+    })).skills.find((skill) => skill.name === 'tools:foo')?.managedSourceCandidates;
+
+    expect(candidates?.map((candidate) => ({
+      version: candidate.plugin.version,
+      enabled: candidate.plugin.enabled,
+      evidence: candidate.evidence,
+    }))).toEqual([
+      { version: '1.0.0', enabled: true, evidence: 'cached-unknown' },
+      { version: '1.1.0', enabled: true, evidence: 'cached-unknown' },
+    ]);
+  });
+
   it('clears cached managed candidates after their plugin source disappears', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-plugin-cache-removal-'));
     const homeDir = path.join(root, 'home');

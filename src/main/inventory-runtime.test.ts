@@ -39,6 +39,74 @@ describe('inventory runtime', () => {
     expect(await runtime.readAuditLog({}, { paths, includeSandboxSources: true, includeLiveSources: false })).toEqual([]);
   });
 
+  it.each([
+    { entity: 'skill' as const, issue: 'missing-canonical' as const, capabilityName: 'runtime-ambiguous:foo', selection: undefined },
+    { entity: 'skill' as const, issue: 'missing-canonical' as const, capabilityName: 'runtime-ambiguous:foo', selection: '/stale/plugin/skill' },
+    { entity: 'mcp' as const, issue: 'missing-universal' as const, capabilityName: 'runtime-ambiguous:service', selection: undefined },
+    { entity: 'mcp' as const, issue: 'missing-universal' as const, capabilityName: 'runtime-ambiguous:service', selection: '/stale/plugin/.mcp.json' },
+    { entity: 'subagent' as const, issue: 'missing-universal' as const, capabilityName: 'runtime-ambiguous:reviewer', selection: undefined },
+    { entity: 'subagent' as const, issue: 'missing-universal' as const, capabilityName: 'runtime-ambiguous:reviewer', selection: '/stale/plugin/reviewer.md' },
+  ])('requires an explicit current candidate for ambiguous plugin-only $entity promotion ($selection)', async ({
+    entity,
+    issue,
+    capabilityName,
+    selection,
+  }) => {
+    const root = await mkdtemp(path.join(tmpdir(), `skillindex-runtime-ambiguous-${entity}-`));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoots = ['1.0.0', '1.1.0'].map((version) =>
+      path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-ambiguous', version));
+    const pluginFiles: string[] = [];
+    await Promise.all([
+      mkdir(paths.sandboxAgentsSkillsDir, { recursive: true }),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.codex', 'config.toml'), 'model = "gpt-5"\n'),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+      ...pluginRoots.flatMap((pluginRoot, index) => {
+        const version = index === 0 ? '1.0.0' : '1.1.0';
+        const skillPath = path.join(pluginRoot, 'skills', 'foo', 'SKILL.md');
+        const subagentPath = path.join(pluginRoot, 'agents', 'reviewer.md');
+        const mcpPath = path.join(pluginRoot, '.mcp.json');
+        pluginFiles.push(skillPath, subagentPath, mcpPath);
+        return [
+          writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-ambiguous', version })),
+          writeRuntimeFile(skillPath, `---\nname: foo\ndescription: Plugin foo ${version}\n---\nSkill ${version}.\n`),
+          writeRuntimeFile(subagentPath, `---\nname: reviewer\ndescription: Plugin reviewer ${version}\n---\nReview ${version}.\n`),
+          writeRuntimeFile(mcpPath, `${JSON.stringify({ mcpServers: { service: { command: 'node', args: [`service-${version}.js`] } } }, null, 2)}\n`),
+        ];
+      }),
+    ]);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+    } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    const cacheBytesBefore = await Promise.all(pluginFiles.map((filePath) => readFile(filePath)));
+    expect(entity === 'skill'
+      ? before.skills.find((record) => record.name === capabilityName)?.managedSourceCandidates
+      : entity === 'mcp'
+        ? before.mcps?.find((record) => record.name === capabilityName)?.managedSourceCandidates
+        : before.subagents?.find((record) => record.name === capabilityName)?.managedSourceCandidates).toHaveLength(2);
+
+    const request = entity === 'skill'
+      ? { entity, issue, skillName: capabilityName, ...(selection ? { selectedVariantPath: selection } : {}) }
+      : entity === 'mcp'
+        ? { entity, issue, mcpName: capabilityName, ...(selection ? { selectedVariantPath: selection } : {}) }
+        : { entity, issue, subagentName: capabilityName, ...(selection ? { selectedVariantPath: selection } : {}) };
+    await expect(runtime.resolveIssue(request)).rejects.toThrow(/select|selected|candidate/i);
+
+    expect((await runtime.readAuditLog()).every((operation) => operation.status === 'failed')).toBe(true);
+    await expect(pathExists(path.join(paths.sandboxRoot, '.agents', 'skills', capabilityName))).resolves.toBe(false);
+    await expect(pathExists(path.join(paths.sandboxRoot, '.agents', 'agents', 'runtime-ambiguous-reviewer.md'))).resolves.toBe(false);
+    await expect(pathExists(path.join(paths.sandboxRoot, '.agents', 'mcp.json'))).resolves.toBe(false);
+    for (const [index, filePath] of pluginFiles.entries()) {
+      expect(await readFile(filePath)).toEqual(cacheBytesBefore[index]);
+    }
+  });
+
   it('does not create an audit operation or mutate files when the fresh action scan fails', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-action-scan-failure-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
@@ -1383,6 +1451,59 @@ describe('inventory runtime', () => {
     expect((await lstat(codexConfig)).mode).toBe(codexMode);
   });
 
+  it('audits and undoes an initial plugin MCP promotion across Universal and derived configs', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-mcp-plugin-promotion-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-promotion-mcp', '1.0.0');
+    const pluginConfig = path.join(pluginRoot, '.mcp.json');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'mcp.json');
+    const codexConfig = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const factoryConfig = path.join(paths.sandboxRoot, '.factory', 'mcp.json');
+    const codexBefore = 'model = "gpt-5"\n';
+    const pluginBefore = `${JSON.stringify({ mcpServers: { service: { command: 'node', args: ['plugin.js'] } } }, null, 2)}\n`;
+    await Promise.all([
+      mkdir(paths.sandboxAgentsSkillsDir, { recursive: true }),
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-promotion-mcp', version: '1.0.0' })),
+      writeRuntimeFile(pluginConfig, pluginBefore),
+      writeRuntimeFile(codexConfig, codexBefore),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+    ]);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+    } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    const mcpName = 'runtime-promotion-mcp:service';
+    expect(before.mcps?.find((mcp) => mcp.name === mcpName)?.issueReasons).toContain('missing-universal');
+
+    const promoted = await runtime.resolveIssue({
+      entity: 'mcp', issue: 'missing-universal', mcpName, selectedVariantPath: pluginConfig,
+    });
+    expect(promoted.mcps?.find((mcp) => mcp.name === mcpName)).toMatchObject({ status: 'healthy', issueReasons: [] });
+    await expect(readFile(universal, 'utf8')).resolves.toContain('plugin.js');
+    await expect(readFile(codexConfig, 'utf8')).resolves.toContain('plugin.js');
+    await expect(readFile(factoryConfig, 'utf8')).resolves.toContain('plugin.js');
+    await expect(readFile(pluginConfig, 'utf8')).resolves.toBe(pluginBefore);
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      universal,
+      codexConfig,
+      factoryConfig,
+    ]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+
+    await runtime.undoAuditOperation(operation.id);
+    await expect(pathExists(universal)).resolves.toBe(false);
+    await expect(readFile(codexConfig, 'utf8')).resolves.toBe(codexBefore);
+    await expect(pathExists(factoryConfig)).resolves.toBe(false);
+    await expect(readFile(pluginConfig, 'utf8')).resolves.toBe(pluginBefore);
+  });
+
   it('audits and undoes a subagent plugin update without touching either plugin cache', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-subagent-plugin-update-'));
     const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
@@ -1426,6 +1547,60 @@ describe('inventory runtime', () => {
     expect((await lstat(universal)).isSymbolicLink()).toBe(false);
     expect(await pathExists(factory)).toBe(false);
     expect(await pathExists(codexDerived)).toBe(false);
+  });
+
+  it('audits and undoes an initial plugin subagent promotion across Universal and derived definitions', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-subagent-plugin-promotion-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const pluginRoot = path.join(paths.sandboxRoot, '.codex', 'plugins', 'cache', 'official', 'runtime-promotion-agents', '1.0.0');
+    const pluginDefinition = path.join(pluginRoot, 'agents', 'reviewer.md');
+    const universal = path.join(paths.sandboxRoot, '.agents', 'agents', 'runtime-promotion-agents-reviewer.md');
+    const codexConfig = path.join(paths.sandboxRoot, '.codex', 'config.toml');
+    const codexDerived = path.join(paths.sandboxRoot, '.codex', 'agents', 'runtime-promotion-agents-reviewer.toml');
+    const factoryDerived = path.join(paths.sandboxRoot, '.factory', 'droids', 'runtime-promotion-agents-reviewer.md');
+    const codexBefore = 'model = "gpt-5"\n';
+    const pluginBefore = '---\nname: reviewer\ndescription: Plugin reviewer\n---\nPromoted rules.\n';
+    await Promise.all([
+      mkdir(paths.sandboxAgentsSkillsDir, { recursive: true }),
+      writeRuntimeFile(path.join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'runtime-promotion-agents', version: '1.0.0' })),
+      writeRuntimeFile(pluginDefinition, pluginBefore),
+      writeRuntimeFile(codexConfig, codexBefore),
+      writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n'),
+    ]);
+    const scanOptions = {
+      paths,
+      includeSandboxSources: true,
+      includeLiveSources: false,
+      env: { SKILL_INDEX_AGENT_SUBSET: 'codex,factory' },
+    } as const;
+    const before = await runtime.scanInventory(scanOptions);
+    const subagentName = 'runtime-promotion-agents:reviewer';
+    expect(before.subagents?.find((subagent) => subagent.name === subagentName)?.issueReasons).toContain('missing-universal');
+
+    const promoted = await runtime.resolveIssue({
+      entity: 'subagent', issue: 'missing-universal', subagentName, selectedVariantPath: pluginDefinition,
+    });
+    expect(promoted.subagents?.find((subagent) => subagent.name === subagentName)).toMatchObject({ status: 'healthy', issueReasons: [] });
+    await expect(readFile(universal, 'utf8')).resolves.toContain('Promoted rules.');
+    await expect(readFile(codexDerived, 'utf8')).resolves.toContain('Promoted rules.');
+    expect(await readlink(factoryDerived)).toBe(universal);
+    await expect(readFile(pluginDefinition, 'utf8')).resolves.toBe(pluginBefore);
+
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toEqual(expect.arrayContaining([
+      universal,
+      codexDerived,
+      factoryDerived,
+    ]));
+    expect(operation.actions.some((action) => action.path?.startsWith(pluginRoot))).toBe(false);
+
+    await runtime.undoAuditOperation(operation.id);
+    await expect(pathExists(universal)).resolves.toBe(false);
+    await expect(pathExists(codexDerived)).resolves.toBe(false);
+    await expect(pathExists(factoryDerived)).resolves.toBe(false);
+    await expect(readFile(pluginDefinition, 'utf8')).resolves.toBe(pluginBefore);
   });
 
   it('refreshes a stale snapshot before auditing a plugin skill update', async () => {

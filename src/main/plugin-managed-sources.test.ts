@@ -271,6 +271,22 @@ describe('plugin managed sources', () => {
     expect(annotateComparableVersionEvidence(enabled)).toEqual(enabled);
   });
 
+  it('downgrades ambiguous plugin-id enablement when multiple cached versions look enabled', () => {
+    const ambiguous = [
+      { version: '1.0.0', evidence: 'enabled-installation' as const },
+      { version: '1.1.0', evidence: 'enabled-installation' as const },
+    ];
+    const unambiguous = [
+      { version: '1.0.0', evidence: 'enabled-installation' as const },
+    ];
+
+    expect(annotateComparableVersionEvidence(ambiguous)).toEqual([
+      { version: '1.0.0', evidence: 'cached-unknown' },
+      { version: '1.1.0', evidence: 'cached-unknown' },
+    ]);
+    expect(annotateComparableVersionEvidence(unambiguous)).toEqual(unambiguous);
+  });
+
   it('requires strict core semver, handles huge values safely, and does not label ties or singletons', () => {
     const singleton = [{ version: '1.0.0', evidence: 'cached-unknown' as const }];
     const leadingZero = [
