@@ -468,12 +468,17 @@ export function createInventoryRuntime(options: CreateInventoryRuntimeOptions = 
         await refreshInFlight;
       }
 
-      const beforeSnapshot = currentSnapshot ?? await scanInventory(lastScanOptions);
+      // Plan audit and mutation from the same fresh inventory. A newly installed
+      // writable agent must never receive a link that Undo did not snapshot.
+      const beforeSnapshot = await scanInventory(lastScanOptions);
       const auditRequest = buildResolveIssueAuditRequest(request, beforeSnapshot, lastScanOptions);
       try {
         const { result: nextSnapshot } = await getAuditService(lastScanOptions).runOperation(
           auditRequest,
-          () => resolveInventoryIssue(request, lastScanOptions),
+          () => resolveInventoryIssue(request, {
+            ...lastScanOptions,
+            preparedSnapshot: beforeSnapshot,
+          }),
         );
         commitSnapshot(nextSnapshot);
         await emitAudit(lastScanOptions);

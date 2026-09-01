@@ -68,6 +68,8 @@ import { replaceSkillLinksTransaction } from '@main/skill-link-transaction';
 
 export interface ResolveIssueOptions extends ScanSkillInventoryOptions {
   paths?: SkillIndexPaths;
+  /** Snapshot freshly prepared by the runtime for audit and mutation planning. */
+  preparedSnapshot?: SkillInventorySnapshot;
   /** Test-only deterministic failure point for skill link transactions. */
   testFailSkillLinkAt?: number;
   /** Test-only deterministic failure point for skill Universal decision persistence. */
@@ -149,11 +151,12 @@ export async function resolveInventoryIssue(
   request: ResolveIssueRequest,
   options: ResolveIssueOptions = {},
 ): Promise<SkillInventorySnapshot> {
-  const paths = options.paths ?? resolveSkillIndexPaths(options);
+  const { preparedSnapshot, ...scanOptions } = options;
+  const paths = scanOptions.paths ?? resolveSkillIndexPaths(scanOptions);
   await ensureSkillIndexLayout(paths);
 
-  const snapshot = await scanInventory({
-    ...options,
+  const snapshot = preparedSnapshot ?? await scanInventory({
+    ...scanOptions,
     paths,
   });
 
@@ -161,23 +164,23 @@ export async function resolveInventoryIssue(
 
   if (request.entity === 'skill') {
     await resolveSkillIssueIfCurrent(snapshot, request, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   } else if (request.entity === 'mcp') {
     await resolveMcpIssueIfCurrent(snapshot, request, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   } else {
     await resolveSubagentIssueIfCurrent(snapshot, request, {
-      ...options,
+      ...scanOptions,
       paths,
     });
   }
 
   const nextSnapshot = await scanInventory({
-    ...options,
+    ...scanOptions,
     paths,
   });
   assertResolutionIssueWasResolved(nextSnapshot, request);
@@ -368,7 +371,7 @@ async function resolveSkillIssueIfCurrent(
     await makeSkillCanonical({
       skillName: request.skillName,
       selectedSourcePath: selectedManagedPluginSource.path,
-    }, options);
+    }, { ...options, preparedSnapshot: snapshot });
     return;
   }
 
@@ -385,6 +388,7 @@ async function resolveSkillIssueIfCurrent(
         },
         {
           ...options,
+          preparedSnapshot: snapshot,
           // Non-plugin canonicalization keeps the existing two-step behavior.
           // Promoting a managed plugin source is one explicit export operation:
           // create Universal and distribute it to every compatible writable host.

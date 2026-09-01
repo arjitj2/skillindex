@@ -1139,6 +1139,33 @@ describe('inventory runtime', () => {
     }
   });
 
+  it('freshens plugin promotion planning so a newly writable agent is included in Undo', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillindex-runtime-plugin-promotion-race-'));
+    const paths = resolveSkillIndexPaths({ env: { SKILL_INDEX_DATA_DIR: root } });
+    const runtime = createInventoryRuntime();
+    runtimes.push(runtime);
+    const scanOptions = { paths, includeSandboxSources: true, includeLiveSources: false } as const;
+    const skillName = 'plugin-single-source-skill';
+    const factoryPath = path.join(paths.sandboxRoot, '.factory', 'skills', skillName);
+
+    await seedRepresentativeFixtures({ paths });
+    await rm(path.join(paths.sandboxRoot, '.factory'), { recursive: true, force: true });
+    const stale = await runtime.scanInventory(scanOptions);
+    const candidate = stale.skills.find((entry) => entry.name === skillName)?.managedSourceCandidates?.[0];
+    expect(stale.agents?.find((agent) => agent.id === 'sandbox-factory')?.installState).toBe('not-installed');
+    await writeRuntimeFile(path.join(paths.sandboxRoot, '.factory', 'settings.json'), '{}\n');
+
+    await runtime.resolveIssue({
+      entity: 'skill', issue: 'missing-canonical', skillName, selectedVariantPath: candidate!.path,
+    });
+    expect(await readlink(factoryPath)).toBe(path.join(paths.sandboxAgentsSkillsDir, skillName));
+    const [operation] = await runtime.readAuditLog();
+    expect(operation.actions.map((action) => action.path)).toContain(factoryPath);
+
+    await runtime.undoAuditOperation(operation.id);
+    await expect(pathExists(factoryPath)).resolves.toBe(false);
+  });
+
   it.each([
     { skillName: 'plugin-single-source-skill', issue: 'missing-canonical' as const },
     { skillName: 'legacy-plugin-link-skill', issue: 'broken-symlink' as const },
