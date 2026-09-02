@@ -19,6 +19,15 @@ interface CascadedValue {
 const stylesPath = path.resolve(process.cwd(), 'src/renderer/src/styles.css');
 
 describe('renderer stylesheet layout regressions', () => {
+  it('uses the shared panel border for inventory skeleton dividers', () => {
+    const rules = collectCssRules(readFileSync(stylesPath, 'utf8'));
+    const metricStatusStyles = computeStyles(rules, 1440, ['inventory-skeleton__metric-status'], []);
+    const rowRule = rules.find((rule) => rule.selectors.includes('.inventory-skeleton__row'));
+
+    expect(metricStatusStyles['border-top']).toBe('1px solid var(--panel-border)');
+    expect(rowRule?.declarations['border-bottom']).toBe('1px solid var(--panel-border)');
+  });
+
   it('keeps a vertical divider when the split workspace remains side by side below the legacy stacking breakpoint', () => {
     const rules = collectCssRules(readFileSync(stylesPath, 'utf8'));
     const viewportWidth = 1239;

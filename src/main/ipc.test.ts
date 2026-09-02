@@ -120,9 +120,9 @@ vi.mock('@main/scan-inventory', () => ({
 }));
 
 describe('registerIpcHandlers', () => {
-  it('enables MCP connectivity verification for app-driven full scans', () => {
+  it('keeps app-driven full scans structural so connectivity cannot block inventory', () => {
     expect(createInventoryRuntime).toHaveBeenCalledWith({
-      verifyMcpConnectivityOnFullScan: true,
+      verifyMcpConnectivityOnFullScan: false,
     });
   });
 

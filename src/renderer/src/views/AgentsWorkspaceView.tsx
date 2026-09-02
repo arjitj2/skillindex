@@ -4,6 +4,7 @@ import type { AgentInstallState, AgentRecord, SkillInventorySnapshot } from '@sh
 
 import { hasSearchQuery } from '../inventory-view-model';
 import { AgentStatusRow, EmptyStatePanel, HeaderSearch, InventorySectionBlock, PageTopBar, RescanToolbarButton, WorkspaceFilterBar } from '../components/ui';
+import { InventoryListLoadingSkeleton } from '../components/InventoryLoadingSkeleton';
 
 type AgentStatusFilter = 'all' | AgentInstallState;
 
@@ -119,7 +120,7 @@ export function AgentsWorkspaceView({
               />
             )
           ) : (
-            <EmptyStatePanel message="Scanning your supported agents…" />
+            <InventoryListLoadingSkeleton />
           )}
         </section>
       </div>

@@ -17,6 +17,7 @@ import {
   RescanToolbarButton,
 } from '../components/ui';
 import { formatInspectorDisplayPath } from '../lib/inventory-presentation';
+import { InventoryListLoadingSkeleton } from '../components/InventoryLoadingSkeleton';
 
 export function PluginsWorkspaceView({
   addActionControl,
@@ -112,7 +113,7 @@ export function PluginsWorkspaceView({
                 />
               )
             ) : (
-              <EmptyStatePanel message="Scanning your plugin inventory…" />
+              <InventoryListLoadingSkeleton />
             )}
           </section>
 

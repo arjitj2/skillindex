@@ -491,8 +491,11 @@ export default function App() {
     };
 
     const hydrateInventory = async () => {
+      let startupInventorySourceMode: InventorySourceMode = 'live';
+
       try {
         const [nextShellState, nextSettingsState] = await startupStatePromise;
+        startupInventorySourceMode = nextShellState.devTools?.inventoryMode ?? 'live';
         if (nextSettingsState.onboardingCompletedAt === null) {
           return;
         }
@@ -525,6 +528,9 @@ export default function App() {
         }
 
         applyInventorySnapshot(nextInventorySnapshot);
+        if (startupInventorySourceMode === 'live') {
+          startMcpConnectivityTest();
+        }
       } catch (error) {
         if (!isMounted) {
           return;
@@ -540,7 +546,7 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, [applyInventorySnapshot, desktopApi, devApi, showErrorToast]);
+  }, [applyInventorySnapshot, desktopApi, devApi, showErrorToast, startMcpConnectivityTest]);
 
   useEffect(() => {
     return desktopApi.onInventoryUpdated((nextInventorySnapshot) => {
@@ -1463,6 +1469,7 @@ export default function App() {
     };
   }, [blurActiveSearch, focusActiveSearch, navigateActiveInventoryList]);
 
+  const hasInventorySnapshot = inventorySnapshot !== null;
   const navItems = useMemo(
     () => [
       { tab: 'home' as const, label: 'Home', icon: 'home' as const },
@@ -1471,7 +1478,7 @@ export default function App() {
         label: 'Skills',
         icon: 'skills' as const,
         badge: inventorySnapshot?.counts.driftedSkills ?? 0,
-        meta: inventorySnapshot?.counts.totalSkills ?? 0,
+        meta: hasInventorySnapshot ? inventorySnapshot.counts.totalSkills : undefined,
         tone: 'attention' as const,
       },
       {
@@ -1479,7 +1486,7 @@ export default function App() {
         label: 'MCPs',
         icon: 'mcps' as const,
         badge: inventorySnapshot?.mcpCounts?.attentionMcps ?? 0,
-        meta: inventorySnapshot?.mcpCounts?.totalMcps ?? 0,
+        meta: hasInventorySnapshot ? inventorySnapshot.mcpCounts?.totalMcps ?? 0 : undefined,
         tone: 'attention' as const,
       },
       {
@@ -1487,17 +1494,18 @@ export default function App() {
         label: 'Subagents',
         icon: 'subagents' as const,
         badge: inventorySnapshot?.subagentCounts?.attentionSubagents ?? 0,
-        meta: inventorySnapshot?.subagentCounts?.totalSubagents ?? 0,
+        meta: hasInventorySnapshot ? inventorySnapshot.subagentCounts?.totalSubagents ?? 0 : undefined,
         tone: 'attention' as const,
       },
       {
         tab: 'plugins' as const,
         label: 'Plugins',
         icon: 'plugins' as const,
-        meta: inventorySnapshot?.plugins?.length ?? 0,
+        meta: hasInventorySnapshot ? inventorySnapshot.plugins?.length ?? 0 : undefined,
       },
     ],
     [
+      hasInventorySnapshot,
       inventorySnapshot?.counts.driftedSkills,
       inventorySnapshot?.counts.totalSkills,
       inventorySnapshot?.mcpCounts?.attentionMcps,

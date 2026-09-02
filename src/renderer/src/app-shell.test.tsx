@@ -971,15 +971,44 @@ describe('App shell inventory views', () => {
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: /^Home$/i, level: 2 })).toBeInTheDocument();
-    expect(screen.getByText(/Loading your inventory summary/i)).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Scanning local inventory' })).toBeInTheDocument();
+    expect(screen.queryByText(/Loading your inventory summary/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Home inventory metrics/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Scanning...')).toBeInTheDocument();
+    expect(within(getPrimaryNav()).getByRole('button', { name: /^Skills/i })).not.toHaveTextContent(/^Skills0$/);
 
     cachedInventoryDeferred.resolve(null);
     liveInventoryDeferred.resolve(createOperationalBaselineInventorySnapshot());
 
     await screen.findByLabelText(/Home inventory metrics/i);
+    expect(screen.queryByRole('status', { name: 'Scanning local inventory' })).not.toBeInTheDocument();
     expect(getHomeStatValue('Skills', 'on disk')).toBe('7');
     expect(getHomeAttentionSection()).toBeInTheDocument();
+  });
+
+  it('starts live MCP connectivity only after structural inventory is visible', async () => {
+    const structuralInventoryDeferred = createDeferred<SkillInventorySnapshot>();
+    const connectivityDeferred = createDeferred<SkillInventorySnapshot>();
+    getShellStateMock.mockResolvedValue(createShellState({ devTools: undefined }));
+    readCachedInventoryMock.mockResolvedValue(null);
+    scanInventoryMock.mockReturnValue(structuralInventoryDeferred.promise);
+    testMcpConnectivityMock.mockReturnValue(connectivityDeferred.promise);
+
+    render(<App />);
+
+    expect(await screen.findByRole('status', { name: 'Scanning local inventory' })).toBeInTheDocument();
+    expect(testMcpConnectivityMock).not.toHaveBeenCalled();
+
+    structuralInventoryDeferred.resolve(createOperationalBaselineInventorySnapshot());
+
+    await screen.findByLabelText(/Home inventory metrics/i);
+    await waitFor(() => {
+      expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByText('Testing MCP connectivity…')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Scanning local inventory' })).not.toBeInTheDocument();
+    expect(getHomeStatValue('Skills', 'on disk')).toBe('7');
+    expect(screen.getByRole('button', { name: /Cancel MCP connectivity test/i })).toBeEnabled();
   });
 
   it('hydrates Home metrics and shell badges from the bootstrapped cached snapshot before live reconciliation resolves', async () => {
@@ -1196,11 +1225,18 @@ describe('App shell inventory views', () => {
     const connectivityDeferred = createDeferred<SkillInventorySnapshot>();
     getShellStateMock.mockResolvedValue(liveShellState);
     rescanInventoryMock.mockReturnValueOnce(rescanDeferred.promise);
-    testMcpConnectivityMock.mockReturnValueOnce(connectivityDeferred.promise);
+    testMcpConnectivityMock
+      .mockResolvedValueOnce(createInventorySnapshot())
+      .mockReturnValueOnce(connectivityDeferred.promise);
 
     render(<App />);
 
     await screen.findByLabelText(/Home inventory metrics/i);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Rescan$/i })).toBeEnabled();
+      expect(testMcpConnectivityMock).toHaveBeenCalledTimes(1);
+    });
+    testMcpConnectivityMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Rescan$/i }));
 
     await waitFor(() => {

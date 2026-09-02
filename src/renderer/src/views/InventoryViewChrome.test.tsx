@@ -23,7 +23,7 @@ function renderSkillsWorkspaceView({
   statusFilter = 'all',
 }: {
   autoResolvableRequests?: ResolveIssueRequest[];
-  inventorySnapshot?: typeof representativeInventorySnapshot;
+  inventorySnapshot?: typeof representativeInventorySnapshot | null;
   isAutoResolving?: boolean;
   isRescanning?: boolean;
   onAutoResolve?: () => void;
@@ -60,7 +60,7 @@ function renderSkillsWorkspaceView({
       setSelectedSkillVariantPath={vi.fn()}
       setSelectionOverrideSkillName={vi.fn()}
       setStatusFilter={vi.fn()}
-      sourceIndex={new Map(inventorySnapshot.sources.map((source) => [source.id, source]))}
+      sourceIndex={new Map(inventorySnapshot?.sources.map((source) => [source.id, source]) ?? [])}
       statusFilter={statusFilter}
     />,
   );
@@ -222,6 +222,13 @@ function renderPluginsWorkspaceView({
 }
 
 describe('inventory view chrome', () => {
+  it('shows a layout-shaped skeleton while the Skills snapshot is loading', () => {
+    renderSkillsWorkspaceView({ inventorySnapshot: null, rows: [] });
+
+    expect(screen.getByRole('status', { name: 'Scanning local inventory' })).toBeInTheDocument();
+    expect(screen.queryByText(/Scanning your skill inventory/i)).not.toBeInTheDocument();
+  });
+
   it('shows only the status filter pills for the Skills workspace', () => {
     renderSkillsWorkspaceView();
 

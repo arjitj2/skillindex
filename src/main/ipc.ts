@@ -50,7 +50,7 @@ import {
 } from '@shared/skill-index-paths';
 
 const inventoryRuntime = createInventoryRuntime({
-  verifyMcpConnectivityOnFullScan: true,
+  verifyMcpConnectivityOnFullScan: false,
 });
 let hasRegisteredInventoryBroadcast = false;
 let hasRegisteredAuditBroadcast = false;
