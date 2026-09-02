@@ -7040,7 +7040,7 @@ body {
   gap: 7px;
   margin-top: 13px;
   padding-top: 11px;
-  border-top: 1px solid #ededea;
+  border-top: 1px solid var(--panel-border);
 }
 
 .inventory-skeleton__dot {
@@ -7119,7 +7119,7 @@ body {
   gap: 16px;
   min-height: 59px;
   padding: 11px 16px;
-  border-bottom: 1px solid #ededea;
+  border-bottom: 1px solid var(--panel-border);
 }
 
 .inventory-skeleton__row:last-child {
